@@ -27,6 +27,7 @@ import org.hyperledger.besu.ethereum.mainnet.PoWSolver;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.util.Subscribers;
 
+import java.math.BigInteger;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
@@ -35,7 +36,7 @@ public class PoWMinerExecutor extends AbstractMinerExecutor<PoWBlockMiner> {
 
   protected volatile Optional<Address> coinbase;
   protected boolean stratumMiningEnabled;
-  protected final Iterable<Long> nonceGenerator;
+  protected final Iterable<BigInteger> nonceGenerator;
   protected final EpochCalculator epochCalculator;
   protected final long powJobTimeToLive;
   protected final int maxOmmerDepth;

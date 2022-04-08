@@ -184,7 +184,7 @@ public class TransactionSimulator {
     }
 
     final Account sender = updater.get(senderAddress);
-    final long nonce = sender != null ? sender.getNonce() : 0L;
+    final BigInteger nonce = sender != null ? sender.getNonce() : BigInteger.ZERO;
 
     final long gasLimit =
         callParams.getGasLimit() >= 0
@@ -258,7 +258,7 @@ public class TransactionSimulator {
       final TransactionValidationParams transactionValidationParams,
       final BlockHeader header,
       final Address senderAddress,
-      final long nonce,
+      final BigInteger nonce,
       final long gasLimit,
       final Wei value,
       final Bytes payload) {

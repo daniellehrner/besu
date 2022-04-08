@@ -36,6 +36,7 @@ import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.util.Subscribers;
 import org.hyperledger.besu.util.number.Percentage;
 
+import java.math.BigInteger;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -315,10 +316,10 @@ public abstract class AbstractPendingTransactionsSorter {
     transactionDroppedListeners.unsubscribe(id);
   }
 
-  public OptionalLong getNextNonceForSender(final Address sender) {
+  public Optional<BigInteger> getNextNonceForSender(final Address sender) {
     final TransactionsForSenderInfo transactionsForSenderInfo = transactionsBySender.get(sender);
     return transactionsForSenderInfo == null
-        ? OptionalLong.empty()
+        ? Optional.empty()
         : transactionsForSenderInfo.maybeNextNonce();
   }
 
@@ -365,7 +366,7 @@ public abstract class AbstractPendingTransactionsSorter {
       return sequence;
     }
 
-    public long getNonce() {
+    public BigInteger getNonce() {
       return transaction.getNonce();
     }
 

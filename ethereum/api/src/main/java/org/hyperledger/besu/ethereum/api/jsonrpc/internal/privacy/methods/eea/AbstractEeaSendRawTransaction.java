@@ -39,6 +39,7 @@ import org.hyperledger.besu.ethereum.util.NonceProvider;
 import org.hyperledger.besu.plugin.data.TransactionType;
 import org.hyperledger.besu.plugin.services.privacy.PrivateMarkerTransactionFactory;
 
+import java.math.BigInteger;
 import java.util.Optional;
 
 import io.vertx.ext.auth.User;
@@ -130,7 +131,7 @@ public abstract class AbstractEeaSendRawTransaction implements JsonRpcMethod {
       final PrivateTransaction privateTransaction,
       final String privacyUserId) {
 
-    final long nonce = publicNonceProvider.getNonce(sender);
+    final BigInteger nonce = publicNonceProvider.getNonce(sender);
 
     final Transaction unsignedPrivateMarkerTransaction =
         new Transaction.Builder()

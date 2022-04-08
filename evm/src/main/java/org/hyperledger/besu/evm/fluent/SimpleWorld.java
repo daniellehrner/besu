@@ -21,6 +21,7 @@ import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.account.EvmAccount;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
+import java.math.BigInteger;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -57,7 +58,7 @@ public class SimpleWorld implements WorldUpdater {
   }
 
   @Override
-  public EvmAccount createAccount(final Address address, final long nonce, final Wei balance) {
+  public EvmAccount createAccount(final Address address, final BigInteger nonce, final Wei balance) {
     SimpleAccount account = new SimpleAccount(address, nonce, balance);
     accounts.put(address, account);
     return account;

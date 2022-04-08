@@ -22,6 +22,7 @@ import org.hyperledger.besu.ethereum.processing.TransactionProcessingResult;
 import org.hyperledger.besu.ethereum.transaction.CallParameter;
 import org.hyperledger.besu.ethereum.transaction.TransactionInvalidReason;
 
+import java.math.BigInteger;
 import java.util.List;
 import java.util.Optional;
 
@@ -49,7 +50,7 @@ public interface PrivacyController {
   ValidationResult<TransactionInvalidReason> validatePrivateTransaction(
       PrivateTransaction privateTransaction, String privacyUserId);
 
-  long determineNonce(Address sender, String privacyGroupId, String privacyUserId);
+  BigInteger determineNonce(Address sender, String privacyGroupId, String privacyUserId);
 
   Optional<TransactionProcessingResult> simulatePrivateTransaction(
       final String privacyGroupId,

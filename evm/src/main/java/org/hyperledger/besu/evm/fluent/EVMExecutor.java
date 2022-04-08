@@ -35,6 +35,7 @@ import org.hyperledger.besu.evm.processor.MessageCallProcessor;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
+import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Deque;
@@ -65,7 +66,7 @@ public class EVMExecutor {
   private boolean requireDeposit = true;
   private List<ContractValidationRule> contractValidationRules =
       List.of(MaxCodeSizeRule.of(0x6000), PrefixCodeRule.of());
-  private long initialNonce = 0;
+  private BigInteger initialNonce = BigInteger.ZERO;
   private Collection<Address> forceCommitAddresses = List.of(Address.fromHexString("0x03"));
   private Set<Address> accessListWarmAddresses = Set.of();
   private Multimap<Address, Bytes32> accessListWarmStorage = HashMultimap.create();
@@ -321,7 +322,7 @@ public class EVMExecutor {
     return this;
   }
 
-  public EVMExecutor initialNonce(final long initialNonce) {
+  public EVMExecutor initialNonce(final BigInteger initialNonce) {
     this.initialNonce = initialNonce;
     return this;
   }

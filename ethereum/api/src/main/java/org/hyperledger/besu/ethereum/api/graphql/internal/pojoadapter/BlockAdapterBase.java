@@ -34,6 +34,7 @@ import org.hyperledger.besu.evm.log.LogTopic;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
 import org.hyperledger.besu.evm.worldstate.WorldState;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -68,9 +69,7 @@ public class BlockAdapterBase extends AdapterBase {
   }
 
   public Optional<Bytes> getNonce() {
-    final long nonce = header.getNonce();
-    final byte[] bytes = Longs.toByteArray(nonce);
-    return Optional.of(Bytes.wrap(bytes));
+    return Optional.of(Bytes.wrap(header.getNonce().toByteArray()));
   }
 
   public Optional<Bytes32> getTransactionsRoot() {

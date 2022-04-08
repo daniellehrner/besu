@@ -33,6 +33,7 @@ import org.hyperledger.besu.ethereum.eth.transactions.sorter.AbstractPendingTran
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ScheduleBasedBlockHeaderFunctions;
 
+import java.math.BigInteger;
 import java.util.Optional;
 import java.util.function.Supplier;
 
@@ -88,7 +89,7 @@ public class IbftBlockCreator extends AbstractBlockCreator {
         BlockHeaderBuilder.create()
             .populateFrom(sealableBlockHeader)
             .mixHash(IbftHelpers.EXPECTED_MIX_HASH)
-            .nonce(0)
+            .nonce(BigInteger.ZERO)
             .blockHeaderFunctions(blockHeaderFunctions);
 
     final IbftExtraData sealedExtraData = constructSignedExtraData(builder.buildBlockHeader());

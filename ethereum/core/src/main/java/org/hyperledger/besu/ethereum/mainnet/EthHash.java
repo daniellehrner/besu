@@ -24,13 +24,15 @@ import java.nio.ByteOrder;
 import java.security.DigestException;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.function.BiConsumer;
 
 import com.google.common.primitives.Ints;
-import com.google.common.primitives.Longs;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.bouncycastle.jcajce.provider.digest.Keccak;
+
+import static com.google.common.primitives.Bytes.asList;
 
 /** Implementation of EthHash. */
 public final class EthHash {
@@ -75,19 +77,20 @@ public final class EthHash {
    *     bytes 32 to 63
    */
   public static PoWSolution hashimotoLight(
-      final long size, final int[] cache, final Bytes header, final long nonce) {
+      final long size, final int[] cache, final Bytes header, final BigInteger nonce) {
     return hashimoto(header, size, nonce, (target, ind) -> calcDatasetItem(target, cache, ind));
   }
 
   public static PoWSolution hashimoto(
       final Bytes header,
       final long size,
-      final long nonce,
+      final BigInteger nonce,
       final BiConsumer<byte[], Integer> datasetLookup) {
     final int n = (int) Long.divideUnsigned(size, MIX_BYTES);
     final MessageDigest keccak512 = KECCAK_512.get();
     keccak512.update(header.toArrayUnsafe());
-    keccak512.update(Longs.toByteArray(Long.reverseBytes(nonce)));
+    keccak512.update(reverse(nonce));
+    keccak512.update(nonce.negate().toByteArray());
     final byte[] seed = keccak512.digest();
     final ByteBuffer mixBuffer = ByteBuffer.allocate(MIX_BYTES).order(ByteOrder.LITTLE_ENDIAN);
     for (int i = 0; i < MIX_BYTES / HASH_BYTES; ++i) {
@@ -315,5 +318,11 @@ public final class EthHash {
 
   private static int fnv(final int a, final int b) {
     return a * 0x01000193 ^ b;
+  }
+
+  private static byte[] reverse(final BigInteger a) {
+    byte[] res = a.toByteArray();
+    Collections.reverse(asList(res));
+    return res;
   }
 }

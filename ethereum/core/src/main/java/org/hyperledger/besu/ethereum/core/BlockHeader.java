@@ -21,6 +21,7 @@ import org.hyperledger.besu.ethereum.rlp.RLPInput;
 import org.hyperledger.besu.ethereum.rlp.RLPOutput;
 import org.hyperledger.besu.evm.log.LogsBloomFilter;
 
+import java.math.BigInteger;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -37,7 +38,7 @@ public class BlockHeader extends SealableBlockHeader
 
   public static final long GENESIS_BLOCK_NUMBER = 0L;
 
-  private final long nonce;
+  private final BigInteger nonce;
 
   private final Supplier<Hash> hash;
 
@@ -61,7 +62,7 @@ public class BlockHeader extends SealableBlockHeader
       final Bytes extraData,
       final Wei baseFee,
       final Bytes32 mixHashOrPrevRandao,
-      final long nonce,
+      final BigInteger nonce,
       final BlockHeaderFunctions blockHeaderFunctions,
       final Optional<LogsBloomFilter> privateLogsBloom) {
     super(
@@ -102,7 +103,7 @@ public class BlockHeader extends SealableBlockHeader
       final Bytes extraData,
       final Wei baseFee,
       final Bytes32 mixHashOrPrevRandao,
-      final long nonce,
+      final BigInteger nonce,
       final BlockHeaderFunctions blockHeaderFunctions) {
     super(
         parentHash,
@@ -147,7 +148,7 @@ public class BlockHeader extends SealableBlockHeader
    * @return the block nonce
    */
   @Override
-  public long getNonce() {
+  public BigInteger getNonce() {
     return nonce;
   }
 
@@ -221,7 +222,7 @@ public class BlockHeader extends SealableBlockHeader
     out.writeLongScalar(timestamp);
     out.writeBytes(extraData);
     out.writeBytes(mixHashOrPrevRandao);
-    out.writeLong(nonce);
+    out.writeBigIntegerScalar(nonce);
     if (baseFee != null) {
       out.writeUInt256Scalar(baseFee);
     }
@@ -245,7 +246,7 @@ public class BlockHeader extends SealableBlockHeader
     final long timestamp = input.readLongScalar();
     final Bytes extraData = input.readBytes();
     final Bytes32 mixHashOrPrevRandao = input.readBytes32();
-    final long nonce = input.readLong();
+    final BigInteger nonce = input.readBigIntegerScalar();
     final Wei baseFee = !input.isEndOfCurrentList() ? Wei.of(input.readUInt256Scalar()) : null;
     input.leaveList();
     return new BlockHeader(

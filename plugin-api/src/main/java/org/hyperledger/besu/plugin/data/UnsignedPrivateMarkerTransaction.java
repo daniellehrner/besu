@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.plugin.data;
 
+import java.math.BigInteger;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -22,7 +23,7 @@ public interface UnsignedPrivateMarkerTransaction {
 
   TransactionType getType();
 
-  long getNonce();
+  BigInteger getNonce();
 
   Optional<? extends Quantity> getGasPrice();
 

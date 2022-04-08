@@ -34,6 +34,7 @@ import org.hyperledger.besu.ethereum.privacy.PrivateTransactionReceipt;
 import org.hyperledger.besu.ethereum.privacy.storage.PrivateStateStorage;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 
+import java.math.BigInteger;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -134,7 +135,7 @@ public class PrivGetTransactionReceipt implements JsonRpcMethod {
   private String calculateContractAddress(final ExecutedPrivateTransaction privateTransaction) {
     if (privateTransaction.getTo().isEmpty()) {
       final Address sender = privateTransaction.getSender();
-      final long nonce = privateTransaction.getNonce();
+      final BigInteger nonce = privateTransaction.getNonce();
       final Bytes privacyGroupId =
           privateTransaction
               .getPrivacyGroupId()

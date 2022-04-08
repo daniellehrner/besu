@@ -16,6 +16,8 @@ package org.hyperledger.besu.ethereum.mainnet;
 
 import org.apache.tuweni.bytes.Bytes;
 
+import java.math.BigInteger;
+
 public interface PoWHasher {
 
   PoWHasher ETHASH_LIGHT = new EthashLight();
@@ -30,7 +32,7 @@ public interface PoWHasher {
    * @param prePowHash Block Header (without mix digest and nonce) Hash
    * @return the PoW solution computed by the hashing function
    */
-  PoWSolution hash(long nonce, long number, EpochCalculator epochCalc, Bytes prePowHash);
+  PoWSolution hash(BigInteger nonce, long number, EpochCalculator epochCalc, Bytes prePowHash);
 
   /** Implementation of Ethash Hashimoto Light Implementation. */
   final class EthashLight implements PoWHasher {
@@ -41,15 +43,13 @@ public interface PoWHasher {
 
     @Override
     public PoWSolution hash(
-        final long nonce,
+        final BigInteger nonce,
         final long number,
         final EpochCalculator epochCalc,
         final Bytes prePowHash) {
       final EthHashCacheFactory.EthHashDescriptor cache =
           cacheFactory.ethHashCacheFor(number, epochCalc);
-      final PoWSolution solution =
-          EthHash.hashimotoLight(cache.getDatasetSize(), cache.getCache(), prePowHash, nonce);
-      return solution;
+      return EthHash.hashimotoLight(cache.getDatasetSize(), cache.getCache(), prePowHash, nonce);
     }
   }
 
@@ -60,7 +60,7 @@ public interface PoWHasher {
 
     @Override
     public PoWSolution hash(
-        final long nonce,
+        final BigInteger nonce,
         final long number,
         final EpochCalculator epochCalc,
         final Bytes prePowHash) {

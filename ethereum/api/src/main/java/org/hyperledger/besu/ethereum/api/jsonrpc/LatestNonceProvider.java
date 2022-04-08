@@ -19,6 +19,8 @@ import org.hyperledger.besu.ethereum.api.query.BlockchainQueries;
 import org.hyperledger.besu.ethereum.eth.transactions.sorter.AbstractPendingTransactionsSorter;
 import org.hyperledger.besu.ethereum.util.NonceProvider;
 
+import java.math.BigInteger;
+import java.util.Optional;
 import java.util.OptionalLong;
 
 public class LatestNonceProvider implements NonceProvider {
@@ -34,8 +36,8 @@ public class LatestNonceProvider implements NonceProvider {
   }
 
   @Override
-  public long getNonce(final Address address) {
-    final OptionalLong pendingNonce = pendingTransactions.getNextNonceForSender(address);
+  public BigInteger getNonce(final Address address) {
+    final Optional<BigInteger> pendingNonce = pendingTransactions.getNextNonceForSender(address);
     return pendingNonce.orElseGet(
         () -> blockchainQueries.getTransactionCount(address, blockchainQueries.headBlockNumber()));
   }

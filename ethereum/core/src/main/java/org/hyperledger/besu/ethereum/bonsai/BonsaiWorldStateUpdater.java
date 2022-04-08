@@ -27,6 +27,7 @@ import org.hyperledger.besu.evm.worldstate.AbstractWorldUpdater;
 import org.hyperledger.besu.evm.worldstate.UpdateTrackingAccount;
 import org.hyperledger.besu.evm.worldstate.WrappedEvmAccount;
 
+import java.math.BigInteger;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -88,7 +89,7 @@ public class BonsaiWorldStateUpdater extends AbstractWorldUpdater<BonsaiWorldVie
   }
 
   @Override
-  public EvmAccount createAccount(final Address address, final long nonce, final Wei balance) {
+  public EvmAccount createAccount(final Address address, final BigInteger nonce, final Wei balance) {
     BonsaiValue<BonsaiAccount> bonsaiValue = accountsToUpdate.get(address);
     if (bonsaiValue == null) {
       bonsaiValue = new BonsaiValue<>(null, null);

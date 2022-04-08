@@ -21,6 +21,7 @@ import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.worldstate.WorldState;
 
+import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Optional;
@@ -78,7 +79,7 @@ public class BlockData {
   }
 
   public NonceProvider getNonceProvider(final WorldState worldState) {
-    final HashMap<Address, Long> currentNonceValues = new HashMap<>();
+    final HashMap<Address, BigInteger> currentNonceValues = new HashMap<>();
     return (Address address) ->
         currentNonceValues.compute(
             address,
@@ -86,9 +87,9 @@ public class BlockData {
               if (currentValue == null) {
                 return Optional.ofNullable(worldState.get(address))
                     .map(Account::getNonce)
-                    .orElse(0L);
+                    .orElse(BigInteger.ZERO);
               }
-              return currentValue + 1;
+              return currentValue.add(BigInteger.ONE);
             });
   }
 }

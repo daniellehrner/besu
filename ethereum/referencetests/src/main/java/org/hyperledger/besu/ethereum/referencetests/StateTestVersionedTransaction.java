@@ -58,7 +58,7 @@ import org.apache.tuweni.bytes.Bytes32;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class StateTestVersionedTransaction {
 
-  private final long nonce;
+  private final BigInteger nonce;
   @Nullable private final Wei maxFeePerGas;
   @Nullable private final Wei maxPriorityFeePerGas;
   @Nullable private final Wei gasPrice;
@@ -99,7 +99,7 @@ public class StateTestVersionedTransaction {
       @JsonDeserialize(using = StateTestAccessListDeserializer.class) @JsonProperty("accessLists")
           final List<List<AccessListEntry>> maybeAccessLists) {
 
-    this.nonce = Long.decode(nonce);
+    this.nonce = new BigInteger(nonce, 16);
     this.gasPrice = Optional.ofNullable(gasPrice).map(Wei::fromHexString).orElse(null);
     this.maxFeePerGas = Optional.ofNullable(maxFeePerGas).map(Wei::fromHexString).orElse(null);
     this.maxPriorityFeePerGas =

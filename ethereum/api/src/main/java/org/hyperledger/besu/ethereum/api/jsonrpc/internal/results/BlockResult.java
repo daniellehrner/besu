@@ -94,7 +94,7 @@ public class BlockResult implements JsonRpcResult {
     this.hash = header.getHash().toString();
     this.mixHash = header.getMixHash().toString();
     this.parentHash = header.getParentHash().toString();
-    this.nonce = Quantity.longToPaddedHex(header.getNonce(), 8);
+    this.nonce = Quantity.bigIntegerToPaddedHex(header.getNonce(), 8);
     this.sha3Uncles = header.getOmmersHash().toString();
     this.logsBloom = header.getLogsBloom().toString();
     this.transactionsRoot = header.getTransactionsRoot().toString();

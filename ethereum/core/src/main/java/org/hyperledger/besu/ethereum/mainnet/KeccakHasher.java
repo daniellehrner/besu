@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.mainnet;
 
 import org.hyperledger.besu.datatypes.Hash;
 
+import java.math.BigInteger;
 import java.security.MessageDigest;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -41,14 +42,14 @@ public class KeccakHasher implements PoWHasher {
 
   @Override
   public PoWSolution hash(
-      final long nonce,
+      final BigInteger nonce,
       final long number,
       final EpochCalculator epochCalc,
       final Bytes prePowHash) {
 
     MessageDigest digest = KECCAK_256.get();
     digest.update(prePowHash.toArrayUnsafe());
-    digest.update(Bytes.ofUnsignedLong(nonce).toArrayUnsafe());
+    digest.update(nonce.toByteArray());
     Bytes32 solution = Bytes32.wrap(digest.digest());
     Hash mixHash = Hash.wrap(solution);
 

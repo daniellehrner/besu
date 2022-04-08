@@ -104,7 +104,7 @@ public class TransactionDecoder {
     final Transaction.Builder builder =
         Transaction.builder()
             .type(TransactionType.FRONTIER)
-            .nonce(input.readLongScalar())
+            .nonce(input.readBigIntegerScalar())
             .gasPrice(Wei.of(input.readUInt256Scalar()))
             .gasLimit(input.readLongScalar())
             .to(input.readBytes(v -> v.size() == 0 ? null : Address.wrap(v)))
@@ -143,7 +143,7 @@ public class TransactionDecoder {
         Transaction.builder()
             .type(TransactionType.ACCESS_LIST)
             .chainId(BigInteger.valueOf(rlpInput.readLongScalar()))
-            .nonce(rlpInput.readLongScalar())
+            .nonce(rlpInput.readBigIntegerScalar())
             .gasPrice(Wei.of(rlpInput.readUInt256Scalar()))
             .gasLimit(rlpInput.readLongScalar())
             .to(
@@ -184,7 +184,7 @@ public class TransactionDecoder {
         Transaction.builder()
             .type(TransactionType.EIP1559)
             .chainId(chainId)
-            .nonce(input.readLongScalar())
+            .nonce(input.readBigIntegerScalar())
             .maxPriorityFeePerGas(Wei.of(input.readUInt256Scalar()))
             .maxFeePerGas(Wei.of(input.readUInt256Scalar()))
             .gasLimit(input.readLongScalar())

@@ -36,6 +36,7 @@ import org.hyperledger.besu.evm.processor.AbstractMessageProcessor;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
+import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Map;
@@ -101,7 +102,7 @@ public class PrivateTransactionProcessor {
       final MutableAccount sender =
           maybePrivateSender != null
               ? maybePrivateSender.getMutable()
-              : privateWorldState.createAccount(senderAddress, 0, Wei.ZERO).getMutable();
+              : privateWorldState.createAccount(senderAddress, BigInteger.ZERO, Wei.ZERO).getMutable();
 
       final ValidationResult<TransactionInvalidReason> validationResult =
           privateTransactionValidator.validate(transaction, sender.getNonce(), false);
@@ -109,7 +110,7 @@ public class PrivateTransactionProcessor {
         return TransactionProcessingResult.invalid(validationResult);
       }
 
-      final long previousNonce = sender.incrementNonce();
+      final BigInteger previousNonce = sender.incrementNonce();
       LOG.trace(
           "Incremented private sender {} nonce ({} -> {})",
           senderAddress,

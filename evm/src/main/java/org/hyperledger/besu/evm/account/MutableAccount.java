@@ -16,6 +16,7 @@ package org.hyperledger.besu.evm.account;
 
 import org.hyperledger.besu.datatypes.Wei;
 
+import java.math.BigInteger;
 import java.util.Map;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -29,9 +30,9 @@ public interface MutableAccount extends Account {
    *
    * @return the previous value of the nonce.
    */
-  default long incrementNonce() {
-    final long current = getNonce();
-    setNonce(current + 1);
+  default BigInteger incrementNonce() {
+    final BigInteger current = getNonce();
+    setNonce(current.add(BigInteger.ONE));
     return current;
   }
 
@@ -40,7 +41,7 @@ public interface MutableAccount extends Account {
    *
    * @param value the value to set the nonce to.
    */
-  void setNonce(long value);
+  void setNonce(BigInteger value);
 
   /**
    * Increments the account balance by the provided amount.

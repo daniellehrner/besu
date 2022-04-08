@@ -22,6 +22,7 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.Transaction;
 
+import java.math.BigInteger;
 import java.util.Optional;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
@@ -66,7 +67,7 @@ public class TransactionData {
     final KeyPair keyPair = SIGNATURE_ALGORITHM.get().createKeyPair(privateKey);
 
     final Address fromAddress = Address.extract(keyPair.getPublicKey());
-    final long nonce = nonceProvider.get(fromAddress);
+    final BigInteger nonce = nonceProvider.get(fromAddress);
     return Transaction.builder()
         .gasLimit(gasLimit)
         .gasPrice(gasPrice)
@@ -80,6 +81,6 @@ public class TransactionData {
 
   @FunctionalInterface
   public interface NonceProvider {
-    long get(final Address address);
+    BigInteger get(final Address address);
   }
 }

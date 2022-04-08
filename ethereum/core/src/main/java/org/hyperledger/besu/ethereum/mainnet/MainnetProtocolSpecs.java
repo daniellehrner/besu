@@ -118,7 +118,7 @@ public abstract class MainnetProtocolSpecs {
                     evm,
                     false,
                     Collections.singletonList(MaxCodeSizeRule.of(contractSizeLimit)),
-                    0))
+                    BigInteger.ZERO))
         .transactionValidatorBuilder(
             gasCalculator ->
                 new MainnetTransactionValidator(
@@ -225,7 +225,7 @@ public abstract class MainnetProtocolSpecs {
                     evm,
                     true,
                     Collections.singletonList(MaxCodeSizeRule.of(contractSizeLimit)),
-                    0))
+                    BigInteger.ZERO))
         .transactionValidatorBuilder(
             gasCalculator ->
                 new MainnetTransactionValidator(
@@ -309,7 +309,7 @@ public abstract class MainnetProtocolSpecs {
                     evm,
                     true,
                     Collections.singletonList(MaxCodeSizeRule.of(contractSizeLimit)),
-                    1,
+                    BigInteger.ONE,
                     SPURIOUS_DRAGON_FORCE_DELETE_WHEN_EMPTY_ADDRESSES))
         .transactionValidatorBuilder(
             gasCalculator ->
@@ -441,7 +441,7 @@ public abstract class MainnetProtocolSpecs {
                     evm,
                     true,
                     Collections.singletonList(MaxCodeSizeRule.of(contractSizeLimit)),
-                    1,
+                    BigInteger.ONE,
                     SPURIOUS_DRAGON_FORCE_DELETE_WHEN_EMPTY_ADDRESSES))
         .name("Istanbul");
   }
@@ -552,7 +552,7 @@ public abstract class MainnetProtocolSpecs {
                     evm,
                     true,
                     List.of(MaxCodeSizeRule.of(contractSizeLimit), PrefixCodeRule.of()),
-                    1,
+                    BigInteger.ONE,
                     SPURIOUS_DRAGON_FORCE_DELETE_WHEN_EMPTY_ADDRESSES))
         .evmBuilder(
             (gasCalculator, jdCacheConfig) ->

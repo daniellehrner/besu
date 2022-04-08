@@ -21,6 +21,7 @@ import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 
+import java.math.BigInteger;
 import java.util.Optional;
 
 import org.slf4j.Logger;
@@ -41,7 +42,7 @@ public class NoNonceRule extends MergeConsensusRule {
     }
     if (super.shouldUsePostMergeRules(header, protocolContext)
         && !isTerminalProofOfWorkBlock(header, protocolContext)) { // past TDD, invalid if has nonce
-      return header.getNonce() == 0L;
+      return header.getNonce().equals(BigInteger.ZERO);
     } else {
       return true;
     }

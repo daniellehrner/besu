@@ -18,40 +18,42 @@ package org.hyperledger.besu.ethereum.eth.transactions;
 import org.hyperledger.besu.ethereum.eth.transactions.sorter.AbstractPendingTransactionsSorter;
 import org.hyperledger.besu.ethereum.eth.transactions.sorter.AbstractPendingTransactionsSorter.TransactionInfo;
 
+import java.math.BigInteger;
 import java.util.NavigableMap;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.TreeMap;
 import java.util.stream.Stream;
 
 public class TransactionsForSenderInfo {
-  private final NavigableMap<Long, AbstractPendingTransactionsSorter.TransactionInfo>
+  private final NavigableMap<BigInteger, AbstractPendingTransactionsSorter.TransactionInfo>
       transactionsInfos;
-  private OptionalLong nextGap = OptionalLong.empty();
+  private Optional<BigInteger> nextGap = Optional.empty();
 
   public TransactionsForSenderInfo() {
     transactionsInfos = new TreeMap<>();
   }
 
   public void addTransactionToTrack(
-      final long nonce, final AbstractPendingTransactionsSorter.TransactionInfo transactionInfo) {
+      final BigInteger nonce, final AbstractPendingTransactionsSorter.TransactionInfo transactionInfo) {
     synchronized (transactionsInfos) {
       if (!transactionsInfos.isEmpty()) {
-        final long expectedNext = transactionsInfos.lastKey() + 1;
-        if (nonce > (expectedNext) && nextGap.isEmpty()) {
-          nextGap = OptionalLong.of(expectedNext);
+        final BigInteger expectedNext = transactionsInfos.lastKey().add(BigInteger.ONE);
+        if (nonce.compareTo(expectedNext) > 0 && nextGap.isEmpty()) {
+          nextGap = Optional.of(expectedNext);
         }
       }
       transactionsInfos.put(nonce, transactionInfo);
-      if (nonce == nextGap.orElse(-1)) {
+      if (nonce.equals(nextGap.orElse(BigInteger.valueOf(-1)))) {
         findGap();
       }
     }
   }
 
-  public void removeTrackedTransaction(final long nonce) {
+  public void removeTrackedTransaction(final BigInteger nonce) {
     transactionsInfos.remove(nonce);
     synchronized (transactionsInfos) {
-      if (!transactionsInfos.isEmpty() && nonce != transactionsInfos.firstKey()) {
+      if (!transactionsInfos.isEmpty() && !nonce.equals(transactionsInfos.firstKey())) {
         findGap();
       }
     }
@@ -59,24 +61,24 @@ public class TransactionsForSenderInfo {
 
   private void findGap() {
     // find first gap
-    long expectedValue = transactionsInfos.firstKey();
-    for (final Long nonce : transactionsInfos.keySet()) {
-      if (expectedValue == nonce) {
+    BigInteger expectedValue = transactionsInfos.firstKey();
+    for (final BigInteger nonce : transactionsInfos.keySet()) {
+      if (expectedValue.equals(nonce)) {
         // no gap, keep moving
-        expectedValue++;
+        expectedValue = expectedValue.add(BigInteger.ONE);
       } else {
-        nextGap = OptionalLong.of(expectedValue);
+        nextGap = Optional.of(expectedValue);
         return;
       }
     }
-    nextGap = OptionalLong.empty();
+    nextGap = Optional.empty();
   }
 
-  public OptionalLong maybeNextNonce() {
+  public Optional<BigInteger> maybeNextNonce() {
     if (transactionsInfos.isEmpty()) {
-      return OptionalLong.empty();
+      return Optional.empty();
     } else {
-      return nextGap.isEmpty() ? OptionalLong.of(transactionsInfos.lastKey() + 1) : nextGap;
+      return nextGap.isEmpty() ? Optional.of(transactionsInfos.lastKey().add(BigInteger.ONE)) : nextGap;
     }
   }
 
@@ -84,7 +86,7 @@ public class TransactionsForSenderInfo {
     return transactionsInfos.values().stream();
   }
 
-  public TransactionInfo getTransactionInfoForNonce(final long nonce) {
+  public TransactionInfo getTransactionInfoForNonce(final BigInteger nonce) {
     return transactionsInfos.get(nonce);
   }
 }

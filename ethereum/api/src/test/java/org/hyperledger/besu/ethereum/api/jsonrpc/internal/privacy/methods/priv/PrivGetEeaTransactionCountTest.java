@@ -36,6 +36,8 @@ import org.hyperledger.besu.ethereum.privacy.PrivacyController;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.math.BigInteger;
+
 public class PrivGetEeaTransactionCountTest {
   private static final String ENCLAVE_PUBLIC_KEY = "A1aVtMxLCUHmBVHXoZzzBgPbW/wj5axDpW9X8l91SGo=";
   private static final String[] PRIVATE_FOR = {
@@ -63,7 +65,7 @@ public class PrivGetEeaTransactionCountTest {
 
   @Test
   public void validRequestProducesExpectedNonce() {
-    final long reportedNonce = 8L;
+    final BigInteger reportedNonce = BigInteger.valueOf(8);
     final PrivGetEeaTransactionCount method =
         new PrivGetEeaTransactionCount(privacyController, privacyIdProvider);
 
@@ -74,7 +76,7 @@ public class PrivGetEeaTransactionCountTest {
     assertThat(response).isInstanceOf(JsonRpcSuccessResponse.class);
 
     final JsonRpcSuccessResponse successResponse = (JsonRpcSuccessResponse) response;
-    final int returnedValue = Integer.decode((String) successResponse.getResult());
+    final BigInteger returnedValue = new BigInteger((String) successResponse.getResult(), 16);
     assertThat(returnedValue).isEqualTo(reportedNonce);
   }
 

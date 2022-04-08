@@ -26,6 +26,7 @@ import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.evm.worldstate.WorldState;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -45,8 +46,8 @@ public class TransactionAdapter extends AdapterBase {
     return Optional.of(transactionWithMetadata.getTransaction().getHash());
   }
 
-  public Optional<Long> getNonce() {
-    final long nonce = transactionWithMetadata.getTransaction().getNonce();
+  public Optional<BigInteger> getNonce() {
+    final BigInteger nonce = transactionWithMetadata.getTransaction().getNonce();
     return Optional.of(nonce);
   }
 

@@ -16,6 +16,7 @@ package org.hyperledger.besu.plugin.data;
 
 import org.hyperledger.besu.plugin.Unstable;
 
+import java.math.BigInteger;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -151,7 +152,7 @@ public interface BlockHeader {
    * @return A 64-bit value which, combined with the mixhash, proves that a sufficient amount of
    *     computation has been carried out on this block.
    */
-  long getNonce();
+  BigInteger getNonce();
 
   /**
    * The Keccak 256-bit hash of this header.

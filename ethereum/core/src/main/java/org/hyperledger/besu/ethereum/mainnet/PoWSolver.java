@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.mainnet;
 import org.hyperledger.besu.ethereum.chain.PoWObserver;
 import org.hyperledger.besu.util.Subscribers;
 
+import java.math.BigInteger;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -76,7 +77,7 @@ public class PoWSolver {
 
   private final long NO_MINING_CONDUCTED = -1;
 
-  private final Iterable<Long> nonceGenerator;
+  private final Iterable<BigInteger> nonceGenerator;
   private final PoWHasher poWHasher;
   private volatile long hashesPerSecond = NO_MINING_CONDUCTED;
   private final Boolean stratumMiningEnabled;
@@ -86,7 +87,7 @@ public class PoWSolver {
   private final ExpiringMap<Bytes, PoWSolverJob> currentJobs = new ExpiringMap<>();
 
   public PoWSolver(
-      final Iterable<Long> nonceGenerator,
+      final Iterable<BigInteger> nonceGenerator,
       final PoWHasher poWHasher,
       final Boolean stratumMiningEnabled,
       final Subscribers<PoWObserver> ethHashObservers,
@@ -123,7 +124,7 @@ public class PoWSolver {
     final Stopwatch operationTimer = Stopwatch.createStarted();
     final PoWSolverJob job = currentJob.get();
     long hashesExecuted = 0;
-    for (final Long n : nonceGenerator) {
+    for (final BigInteger n : nonceGenerator) {
 
       if (job.isDone()) {
         return;
@@ -139,7 +140,7 @@ public class PoWSolver {
     job.failed(new IllegalStateException("No valid nonce found."));
   }
 
-  private Optional<PoWSolution> testNonce(final PoWSolverInputs inputs, final long nonce) {
+  private Optional<PoWSolution> testNonce(final PoWSolverInputs inputs, final BigInteger nonce) {
     return Optional.ofNullable(
             poWHasher.hash(nonce, inputs.getBlockNumber(), epochCalculator, inputs.getPrePowHash()))
         .filter(sol -> UInt256.fromBytes(sol.getSolution()).compareTo(inputs.getTarget()) <= 0);
@@ -210,9 +211,5 @@ public class PoWSolver {
     }
     LOG.debug("Rejecting a solution from a miner");
     return false;
-  }
-
-  public Iterable<Long> getNonceGenerator() {
-    return nonceGenerator;
   }
 }

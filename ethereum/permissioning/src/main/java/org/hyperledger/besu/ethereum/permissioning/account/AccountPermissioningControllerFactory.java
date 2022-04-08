@@ -31,6 +31,7 @@ import org.hyperledger.besu.ethereum.transaction.TransactionSimulator;
 import org.hyperledger.besu.plugin.data.TransactionType;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 
+import java.math.BigInteger;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -158,7 +159,7 @@ public class AccountPermissioningControllerFactory {
               .gasPrice(Wei.ZERO)
               .value(Wei.ZERO)
               .payload(Bytes.EMPTY)
-              .nonce(0)
+              .nonce(BigInteger.ZERO)
               .signature(FAKE_SIGNATURE)
               .build();
 

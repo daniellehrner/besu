@@ -16,25 +16,26 @@ package org.hyperledger.besu.ethereum.mainnet;
 
 import org.hyperledger.besu.datatypes.Hash;
 
+import java.math.BigInteger;
 import java.util.Objects;
 
 import org.apache.tuweni.bytes.Bytes;
 
 public class PoWSolution {
-  private final long nonce;
+  private final BigInteger nonce;
   private final Hash mixHash;
   private final Bytes powHash;
   private final Bytes solution;
 
   public PoWSolution(
-      final long nonce, final Hash mixHash, final Bytes solution, final Bytes powHash) {
+          final BigInteger nonce, final Hash mixHash, final Bytes solution, final Bytes powHash) {
     this.nonce = nonce;
     this.mixHash = mixHash;
     this.solution = solution;
     this.powHash = powHash;
   }
 
-  public long getNonce() {
+  public BigInteger getNonce() {
     return nonce;
   }
 
@@ -55,7 +56,7 @@ public class PoWSolution {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
     PoWSolution that = (PoWSolution) o;
-    return nonce == that.nonce
+    return nonce.equals(that.nonce)
         && Objects.equals(mixHash, that.mixHash)
         && Objects.equals(solution, that.solution)
         && Objects.equals(powHash, that.powHash);

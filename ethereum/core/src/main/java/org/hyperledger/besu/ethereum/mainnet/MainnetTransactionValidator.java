@@ -178,7 +178,7 @@ public class MainnetTransactionValidator {
       final Account sender,
       final TransactionValidationParams validationParams) {
     Wei senderBalance = Account.DEFAULT_BALANCE;
-    long senderNonce = Account.DEFAULT_NONCE;
+    BigInteger senderNonce = Account.DEFAULT_NONCE;
     Hash codeHash = Hash.EMPTY;
 
     if (sender != null) {
@@ -195,7 +195,8 @@ public class MainnetTransactionValidator {
               transaction.getUpfrontCost(), senderBalance));
     }
 
-    if (transaction.getNonce() < senderNonce) {
+    // invalid if the nonce of the transaction is less than the nonce of the sender
+    if (transaction.getNonce().compareTo(senderNonce) < 0) {
       return ValidationResult.invalid(
           TransactionInvalidReason.NONCE_TOO_LOW,
           String.format(
@@ -203,7 +204,7 @@ public class MainnetTransactionValidator {
               transaction.getNonce(), senderNonce));
     }
 
-    if (!validationParams.isAllowFutureNonce() && senderNonce != transaction.getNonce()) {
+    if (!validationParams.isAllowFutureNonce() && !senderNonce.equals(transaction.getNonce())) {
       return ValidationResult.invalid(
           TransactionInvalidReason.INCORRECT_NONCE,
           String.format(

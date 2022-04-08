@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.core;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
 
+import java.math.BigInteger;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
@@ -43,7 +44,7 @@ public class MiningParameters {
   private final String stratumNetworkInterface;
   private final int stratumPort;
   private final String stratumExtranonce;
-  private final Optional<Iterable<Long>> maybeNonceGenerator;
+  private final Optional<Iterable<BigInteger>> maybeNonceGenerator;
   private final Double minBlockOccupancyRatio;
   private final int remoteSealersLimit;
   private final long remoteSealersTimeToLive;
@@ -60,7 +61,7 @@ public class MiningParameters {
       final String stratumNetworkInterface,
       final int stratumPort,
       final String stratumExtranonce,
-      final Optional<Iterable<Long>> maybeNonceGenerator,
+      final Optional<Iterable<BigInteger>> maybeNonceGenerator,
       final Double minBlockOccupancyRatio,
       final int remoteSealersLimit,
       final long remoteSealersTimeToLive,
@@ -119,7 +120,7 @@ public class MiningParameters {
     return stratumExtranonce;
   }
 
-  public Optional<Iterable<Long>> getNonceGenerator() {
+  public Optional<Iterable<BigInteger>> getNonceGenerator() {
     return maybeNonceGenerator;
   }
 
@@ -228,7 +229,7 @@ public class MiningParameters {
     private String stratumNetworkInterface = "0.0.0.0";
     private int stratumPort = 8008;
     private String stratumExtranonce = "080c";
-    private Iterable<Long> maybeNonceGenerator;
+    private Iterable<BigInteger> maybeNonceGenerator;
     private Double minBlockOccupancyRatio = 0.8;
     private int remoteSealersLimit = DEFAULT_REMOTE_SEALERS_LIMIT;
     private long remoteSealersTimeToLive = DEFAULT_REMOTE_SEALERS_TTL;
@@ -305,7 +306,7 @@ public class MiningParameters {
       return this;
     }
 
-    public Builder maybeNonceGenerator(final Iterable<Long> maybeNonceGenerator) {
+    public Builder maybeNonceGenerator(final Iterable<BigInteger> maybeNonceGenerator) {
       this.maybeNonceGenerator = maybeNonceGenerator;
       return this;
     }

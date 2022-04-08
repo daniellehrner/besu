@@ -19,6 +19,8 @@ import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 
+import java.math.BigInteger;
+
 public class CreateOperation extends AbstractCreateOperation {
 
   public CreateOperation(final GasCalculator gasCalculator) {
@@ -35,7 +37,7 @@ public class CreateOperation extends AbstractCreateOperation {
     final Account sender = frame.getWorldUpdater().get(frame.getRecipientAddress());
     // Decrement nonce by 1 to normalize the effect of transaction execution
     final Address address =
-        Address.contractAddress(frame.getRecipientAddress(), sender.getNonce() - 1L);
+        Address.contractAddress(frame.getRecipientAddress(), sender.getNonce().subtract(BigInteger.ONE));
     frame.warmUpAddress(address);
     return address;
   }

@@ -64,6 +64,7 @@ import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 import org.hyperledger.besu.util.Subscribers;
 
+import java.math.BigInteger;
 import java.util.Optional;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -77,7 +78,7 @@ public class RetestethContext {
 
   private static final Logger LOG = LoggerFactory.getLogger(RetestethContext.class);
   private static final PoWHasher NO_WORK_HASHER =
-      (final long nonce, final long number, EpochCalculator epochCalc, final Bytes headerHash) ->
+      (final BigInteger nonce, final long number, EpochCalculator epochCalc, final Bytes headerHash) ->
           new PoWSolution(nonce, Hash.ZERO, UInt256.ZERO, Hash.ZERO);
 
   private final ReentrantLock contextLock = new ReentrantLock();
@@ -162,7 +163,7 @@ public class RetestethContext {
             ? HeaderValidationMode.LIGHT
             : HeaderValidationMode.FULL;
 
-    final Iterable<Long> nonceGenerator = new IncrementingNonceGenerator(0);
+    final Iterable<BigInteger> nonceGenerator = new IncrementingNonceGenerator(0);
     poWSolver =
         ("NoProof".equals(sealengine) || "NoReward".equals(sealEngine))
             ? new PoWSolver(

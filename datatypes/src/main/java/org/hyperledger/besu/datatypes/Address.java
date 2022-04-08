@@ -27,6 +27,8 @@ import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.bytes.DelegatingBytes;
 
+import java.math.BigInteger;
+
 /** A 160-bits account address. */
 public class Address extends DelegatingBytes implements org.hyperledger.besu.plugin.data.Address {
 
@@ -154,14 +156,14 @@ public class Address extends DelegatingBytes implements org.hyperledger.besu.plu
    * @param nonce the nonce of this transaction.
    * @return The generated address of the created contract.
    */
-  public static Address contractAddress(final Address senderAddress, final long nonce) {
+  public static Address contractAddress(final Address senderAddress, final BigInteger nonce) {
     return Address.extract(
         keccak256(
             RLP.encode(
                 out -> {
                   out.startList();
                   out.writeBytes(senderAddress);
-                  out.writeLongScalar(nonce);
+                  out.writeBigIntegerScalar(nonce);
                   out.endList();
                 })));
   }
@@ -175,14 +177,14 @@ public class Address extends DelegatingBytes implements org.hyperledger.besu.plu
    * @return The generated address of the created private contract.
    */
   public static Address privateContractAddress(
-      final Address senderAddress, final long nonce, final Bytes privacyGroupId) {
+      final Address senderAddress, final BigInteger nonce, final Bytes privacyGroupId) {
     return Address.extract(
         keccak256(
             RLP.encode(
                 out -> {
                   out.startList();
                   out.writeBytes(senderAddress);
-                  out.writeLongScalar(nonce);
+                  out.writeBigIntegerScalar(nonce);
                   out.writeBytes(privacyGroupId);
                   out.endList();
                 })));

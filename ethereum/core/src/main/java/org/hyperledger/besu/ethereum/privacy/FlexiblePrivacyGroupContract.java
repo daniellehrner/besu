@@ -39,6 +39,7 @@ import org.hyperledger.besu.evm.tracing.OperationTracer;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.plugin.data.Restriction;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -213,7 +214,7 @@ public class FlexiblePrivacyGroupContract {
         .nonce(
             privateWorldStateUpdater.getAccount(Address.ZERO) != null
                 ? privateWorldStateUpdater.getAccount(Address.ZERO).getNonce()
-                : 0)
+                : BigInteger.ZERO)
         .gasPrice(Wei.of(1000))
         .gasLimit(3000000)
         .to(FLEXIBLE_PRIVACY_PROXY)

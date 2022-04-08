@@ -30,6 +30,7 @@ import org.hyperledger.besu.evm.account.EvmAccount;
 import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.worldstate.UpdateTrackingAccount;
 
+import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -46,7 +47,7 @@ public class BonsaiAccount implements MutableAccount, EvmAccount {
   private final Address address;
   private final Hash addressHash;
   private Hash codeHash;
-  private long nonce;
+  private BigInteger nonce;
   private Wei balance;
   private Hash storageRoot;
   private Bytes code;
@@ -57,7 +58,7 @@ public class BonsaiAccount implements MutableAccount, EvmAccount {
       final BonsaiWorldView context,
       final Address address,
       final Hash addressHash,
-      final long nonce,
+      final BigInteger nonce,
       final Wei balance,
       final Hash storageRoot,
       final Hash codeHash,
@@ -130,7 +131,7 @@ public class BonsaiAccount implements MutableAccount, EvmAccount {
     final RLPInput in = RLP.input(encoded);
     in.enterList();
 
-    final long nonce = in.readLongScalar();
+    final BigInteger nonce = in.readBigIntegerScalar();
     final Wei balance = Wei.of(in.readUInt256Scalar());
     final Hash storageRoot = Hash.wrap(in.readBytes32());
     final Hash codeHash = Hash.wrap(in.readBytes32());
@@ -152,12 +153,12 @@ public class BonsaiAccount implements MutableAccount, EvmAccount {
   }
 
   @Override
-  public long getNonce() {
+  public BigInteger getNonce() {
     return nonce;
   }
 
   @Override
-  public void setNonce(final long value) {
+  public void setNonce(final BigInteger value) {
     if (!mutable) {
       throw new UnsupportedOperationException("Account is immutable");
     }
@@ -223,7 +224,7 @@ public class BonsaiAccount implements MutableAccount, EvmAccount {
     final BytesValueRLPOutput out = new BytesValueRLPOutput();
     out.startList();
 
-    out.writeLongScalar(nonce);
+    out.writeBigIntegerScalar(nonce);
     out.writeUInt256Scalar(balance);
     out.writeBytes(storageRoot);
     out.writeBytes(codeHash);
@@ -299,7 +300,7 @@ public class BonsaiAccount implements MutableAccount, EvmAccount {
     if (source == null) {
       throw new IllegalStateException(context + ": source is null but target isn't");
     } else {
-      if (source.nonce != account.getNonce()) {
+      if (!source.nonce.equals(account.getNonce())) {
         throw new IllegalStateException(context + ": nonces differ");
       }
       if (!Objects.equals(source.balance, account.getBalance())) {

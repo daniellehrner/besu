@@ -134,7 +134,7 @@ public class Stratum1EthProxyProtocol implements StratumProtocol {
     boolean result = false;
     final PoWSolution solution =
         new PoWSolution(
-            Bytes.fromHexString(req.getRequiredParameter(0, String.class)).getLong(0),
+            Bytes.fromHexString(req.getRequiredParameter(0, String.class)).toBigInteger(),
             req.getRequiredParameter(2, Hash.class),
             null,
             Bytes.fromHexString(req.getRequiredParameter(1, String.class)));

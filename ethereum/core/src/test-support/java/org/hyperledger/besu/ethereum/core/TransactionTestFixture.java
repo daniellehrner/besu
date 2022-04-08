@@ -28,7 +28,7 @@ public class TransactionTestFixture {
 
   private TransactionType transactionType = TransactionType.FRONTIER;
 
-  private long nonce = 0;
+  private BigInteger nonce = BigInteger.ZERO;
 
   private Wei gasPrice = Wei.of(5000);
 
@@ -71,7 +71,7 @@ public class TransactionTestFixture {
     return this;
   }
 
-  public TransactionTestFixture nonce(final long nonce) {
+  public TransactionTestFixture nonce(final BigInteger nonce) {
     this.nonce = nonce;
     return this;
   }

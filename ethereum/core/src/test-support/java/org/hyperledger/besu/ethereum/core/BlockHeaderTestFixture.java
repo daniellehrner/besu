@@ -20,6 +20,7 @@ import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.evm.log.LogsBloomFilter;
 
+import java.math.BigInteger;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -47,7 +48,7 @@ public class BlockHeaderTestFixture {
   private Bytes extraData = Bytes.EMPTY;
 
   private Hash mixHash = Hash.EMPTY;
-  private long nonce = 0;
+  private BigInteger nonce = BigInteger.ZERO;
   private BlockHeaderFunctions blockHeaderFunctions = new MainnetBlockHeaderFunctions();
 
   public BlockHeader buildHeader() {
@@ -154,7 +155,7 @@ public class BlockHeaderTestFixture {
     return this;
   }
 
-  public BlockHeaderTestFixture nonce(final long nonce) {
+  public BlockHeaderTestFixture nonce(final BigInteger nonce) {
     this.nonce = nonce;
     return this;
   }

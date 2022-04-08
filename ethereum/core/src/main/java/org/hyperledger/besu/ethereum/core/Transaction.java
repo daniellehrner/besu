@@ -71,7 +71,7 @@ public class Transaction
 
   public static final BigInteger TWO = BigInteger.valueOf(2);
 
-  private final long nonce;
+  private final BigInteger nonce;
 
   private final Optional<Wei> gasPrice;
 
@@ -149,7 +149,7 @@ public class Transaction
    */
   public Transaction(
       final TransactionType transactionType,
-      final long nonce,
+      final BigInteger nonce,
       final Optional<Wei> gasPrice,
       final Optional<Wei> maxPriorityFeePerGas,
       final Optional<Wei> maxFeePerGas,
@@ -200,7 +200,7 @@ public class Transaction
   }
 
   public Transaction(
-      final long nonce,
+      final BigInteger nonce,
       final Optional<Wei> gasPrice,
       final Optional<Wei> maxPriorityFeePerGas,
       final Optional<Wei> maxFeePerGas,
@@ -230,7 +230,7 @@ public class Transaction
   }
 
   public Transaction(
-      final long nonce,
+      final BigInteger nonce,
       final Wei gasPrice,
       final long gasLimit,
       final Address to,
@@ -274,7 +274,7 @@ public class Transaction
    *     it will default to any chain.
    */
   public Transaction(
-      final long nonce,
+      final BigInteger nonce,
       final Wei gasPrice,
       final long gasLimit,
       final Optional<Address> to,
@@ -317,7 +317,7 @@ public class Transaction
    *     it will default to any chain.
    */
   public Transaction(
-      final long nonce,
+      final BigInteger nonce,
       final Wei gasPrice,
       final long gasLimit,
       final Optional<Address> to,
@@ -348,7 +348,7 @@ public class Transaction
    * @return the transaction nonce
    */
   @Override
-  public long getNonce() {
+  public BigInteger getNonce() {
     return nonce;
   }
 
@@ -695,7 +695,7 @@ public class Transaction
 
   private static Bytes32 computeSenderRecoveryHash(
       final TransactionType transactionType,
-      final long nonce,
+      final BigInteger nonce,
       final Wei gasPrice,
       final Wei maxPriorityFeePerGas,
       final Wei maxFeePerGas,
@@ -749,7 +749,7 @@ public class Transaction
   }
 
   private static Bytes frontierPreimage(
-      final long nonce,
+      final BigInteger nonce,
       final Wei gasPrice,
       final long gasLimit,
       final Optional<Address> to,
@@ -759,7 +759,7 @@ public class Transaction
     return RLP.encode(
         rlpOutput -> {
           rlpOutput.startList();
-          rlpOutput.writeLongScalar(nonce);
+          rlpOutput.writeBigIntegerScalar(nonce);
           rlpOutput.writeUInt256Scalar(gasPrice);
           rlpOutput.writeLongScalar(gasLimit);
           rlpOutput.writeBytes(to.map(Bytes::copy).orElse(Bytes.EMPTY));
@@ -775,7 +775,7 @@ public class Transaction
   }
 
   private static Bytes eip1559Preimage(
-      final long nonce,
+      final BigInteger nonce,
       final Wei maxPriorityFeePerGas,
       final Wei maxFeePerGas,
       final long gasLimit,
@@ -789,7 +789,7 @@ public class Transaction
             rlpOutput -> {
               rlpOutput.startList();
               rlpOutput.writeBigIntegerScalar(chainId.orElseThrow());
-              rlpOutput.writeLongScalar(nonce);
+              rlpOutput.writeBigIntegerScalar(nonce);
               rlpOutput.writeUInt256Scalar(maxPriorityFeePerGas);
               rlpOutput.writeUInt256Scalar(maxFeePerGas);
               rlpOutput.writeLongScalar(gasLimit);
@@ -803,7 +803,7 @@ public class Transaction
   }
 
   private static Bytes accessListPreimage(
-      final long nonce,
+      final BigInteger nonce,
       final Wei gasPrice,
       final long gasLimit,
       final Optional<Address> to,
@@ -833,7 +833,7 @@ public class Transaction
         && Objects.equals(this.gasPrice, that.gasPrice)
         && Objects.equals(this.maxPriorityFeePerGas, that.maxPriorityFeePerGas)
         && Objects.equals(this.maxFeePerGas, that.maxFeePerGas)
-        && this.nonce == that.nonce
+        && this.nonce.equals(that.nonce)
         && Objects.equals(this.payload, that.payload)
         && Objects.equals(this.signature, that.signature)
         && Objects.equals(this.to, that.to)
@@ -898,7 +898,7 @@ public class Transaction
 
     protected TransactionType transactionType;
 
-    protected long nonce = -1L;
+    protected BigInteger nonce = BigInteger.valueOf(-1L);
 
     protected Wei gasPrice;
 
@@ -959,7 +959,7 @@ public class Transaction
       return this;
     }
 
-    public Builder nonce(final long nonce) {
+    public Builder nonce(final BigInteger nonce) {
       this.nonce = nonce;
       return this;
     }

@@ -38,6 +38,8 @@ import io.vertx.ext.auth.impl.UserImpl;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.math.BigInteger;
+
 public class PrivGetTransactionCountTest {
 
   private static final String ENCLAVE_PUBLIC_KEY = "A1aVtMxLCUHmBVHXoZzzBgPbW/wj5axDpW9X8l91SGo=";
@@ -48,7 +50,7 @@ public class PrivGetTransactionCountTest {
 
   private final Address senderAddress =
       Address.fromHexString("0x627306090abab3a6e1400e9345bc60c78a8bef57");
-  private final long NONCE = 5;
+  private final BigInteger NONCE = BigInteger.valueOf(5);
   private final User user =
       new UserImpl(new JsonObject().put("privacyPublicKey", ENCLAVE_PUBLIC_KEY)) {};
   private final PrivacyIdProvider privacyIdProvider = (user) -> ENCLAVE_PUBLIC_KEY;

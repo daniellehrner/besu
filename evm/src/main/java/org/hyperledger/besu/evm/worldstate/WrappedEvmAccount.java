@@ -22,6 +22,7 @@ import org.hyperledger.besu.evm.account.AccountStorageEntry;
 import org.hyperledger.besu.evm.account.EvmAccount;
 import org.hyperledger.besu.evm.account.MutableAccount;
 
+import java.math.BigInteger;
 import java.util.NavigableMap;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -66,7 +67,7 @@ public class WrappedEvmAccount implements EvmAccount {
   }
 
   @Override
-  public long getNonce() {
+  public BigInteger getNonce() {
     return mutableAccount.getNonce();
   }
 

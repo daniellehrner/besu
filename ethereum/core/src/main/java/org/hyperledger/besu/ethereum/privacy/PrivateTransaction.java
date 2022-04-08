@@ -67,7 +67,7 @@ public class PrivateTransaction implements org.hyperledger.besu.plugin.data.Priv
 
   private static final BigInteger TWO = BigInteger.valueOf(2);
 
-  private final long nonce;
+  private final BigInteger nonce;
 
   private final Wei gasPrice;
 
@@ -152,7 +152,7 @@ public class PrivateTransaction implements org.hyperledger.besu.plugin.data.Priv
 
     final Builder builder =
         builder()
-            .nonce(input.readLongScalar())
+            .nonce(input.readBigIntegerScalar())
             .gasPrice(Wei.of(input.readUInt256Scalar()))
             .gasLimit(input.readLongScalar())
             .to(input.readBytes(v -> v.size() == 0 ? null : Address.wrap(v)))
@@ -238,7 +238,7 @@ public class PrivateTransaction implements org.hyperledger.besu.plugin.data.Priv
    * @param restriction the restriction of this private transaction
    */
   protected PrivateTransaction(
-      final long nonce,
+      final BigInteger nonce,
       final Wei gasPrice,
       final long gasLimit,
       final Optional<Address> to,
@@ -289,7 +289,7 @@ public class PrivateTransaction implements org.hyperledger.besu.plugin.data.Priv
    * @return the transaction nonce
    */
   @Override
-  public long getNonce() {
+  public BigInteger getNonce() {
     return nonce;
   }
 
@@ -462,7 +462,7 @@ public class PrivateTransaction implements org.hyperledger.besu.plugin.data.Priv
     final BytesValueRLPOutput out = new BytesValueRLPOutput();
     out.startList();
 
-    out.writeLongScalar(t.getNonce());
+    out.writeBigIntegerScalar(t.getNonce());
     out.writeUInt256Scalar((Wei) t.getGasPrice());
     out.writeLongScalar(t.getGasLimit());
     out.writeBytes(t.getTo().isPresent() ? t.getTo().get() : Bytes.EMPTY);
@@ -550,7 +550,7 @@ public class PrivateTransaction implements org.hyperledger.besu.plugin.data.Priv
   }
 
   private static Bytes32 computeSenderRecoveryHash(
-      final long nonce,
+      final BigInteger nonce,
       final Wei gasPrice,
       final long gasLimit,
       final Address to,
@@ -565,7 +565,7 @@ public class PrivateTransaction implements org.hyperledger.besu.plugin.data.Priv
         RLP.encode(
             out -> {
               out.startList();
-              out.writeLongScalar(nonce);
+              out.writeBigIntegerScalar(nonce);
               out.writeUInt256Scalar(gasPrice);
               out.writeLongScalar(gasLimit);
               out.writeBytes(to == null ? Bytes.EMPTY : to);
@@ -593,7 +593,7 @@ public class PrivateTransaction implements org.hyperledger.besu.plugin.data.Priv
     return this.chainId.equals(that.chainId)
         && this.gasLimit == that.gasLimit
         && this.gasPrice.equals(that.gasPrice)
-        && this.nonce == that.nonce
+        && this.nonce.equals(that.nonce)
         && this.payload.equals(that.payload)
         && this.signature.equals(that.signature)
         && this.to.equals(that.to)
@@ -651,7 +651,7 @@ public class PrivateTransaction implements org.hyperledger.besu.plugin.data.Priv
 
   public static class Builder {
 
-    protected long nonce = -1L;
+    protected BigInteger nonce = BigInteger.valueOf(-1L);
 
     protected Wei gasPrice;
 
@@ -692,7 +692,7 @@ public class PrivateTransaction implements org.hyperledger.besu.plugin.data.Priv
       return this;
     }
 
-    public Builder nonce(final long nonce) {
+    public Builder nonce(final BigInteger nonce) {
       this.nonce = nonce;
       return this;
     }

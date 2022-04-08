@@ -27,6 +27,7 @@ import org.hyperledger.besu.evm.account.AccountStorageEntry;
 import org.hyperledger.besu.evm.account.EvmAccount;
 import org.hyperledger.besu.evm.account.MutableAccount;
 
+import java.math.BigInteger;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
@@ -51,7 +52,7 @@ public class UpdateTrackingAccount<A extends Account> implements MutableAccount,
 
   @Nullable private A account; // null if this is a new account.
 
-  private long nonce;
+  private BigInteger nonce;
   private Wei balance;
 
   @Nullable private Bytes updatedCode; // Null if the underlying code has not been updated.
@@ -69,7 +70,7 @@ public class UpdateTrackingAccount<A extends Account> implements MutableAccount,
     this.addressHash = Hash.hash(this.address);
     this.account = null;
 
-    this.nonce = 0;
+    this.nonce = BigInteger.ZERO;
     this.balance = Wei.ZERO;
 
     this.updatedCode = Bytes.EMPTY;
@@ -142,12 +143,12 @@ public class UpdateTrackingAccount<A extends Account> implements MutableAccount,
   }
 
   @Override
-  public long getNonce() {
+  public BigInteger getNonce() {
     return nonce;
   }
 
   @Override
-  public void setNonce(final long value) {
+  public void setNonce(final BigInteger value) {
     this.nonce = value;
   }
 

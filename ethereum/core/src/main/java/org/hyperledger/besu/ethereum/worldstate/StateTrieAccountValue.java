@@ -21,6 +21,7 @@ import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 import org.hyperledger.besu.ethereum.rlp.RLPOutput;
 
+import java.math.BigInteger;
 import java.util.Objects;
 
 import org.apache.tuweni.bytes.Bytes32;
@@ -28,13 +29,13 @@ import org.apache.tuweni.bytes.Bytes32;
 /** Represents the raw values associated with an account in the world state trie. */
 public class StateTrieAccountValue {
 
-  private final long nonce;
+  private final BigInteger nonce;
   private final Wei balance;
   private final Hash storageRoot;
   private final Hash codeHash;
 
   public StateTrieAccountValue(
-      final long nonce, final Wei balance, final Hash storageRoot, final Hash codeHash) {
+      final BigInteger nonce, final Wei balance, final Hash storageRoot, final Hash codeHash) {
     checkNotNull(balance, "balance cannot be null");
     checkNotNull(storageRoot, "storageRoot cannot be null");
     checkNotNull(codeHash, "codeHash cannot be null");
@@ -49,7 +50,7 @@ public class StateTrieAccountValue {
    *
    * @return the account nonce.
    */
-  public long getNonce() {
+  public BigInteger getNonce() {
     return nonce;
   }
 
@@ -85,7 +86,7 @@ public class StateTrieAccountValue {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
     final StateTrieAccountValue that = (StateTrieAccountValue) o;
-    return nonce == that.nonce
+    return nonce.equals(that.nonce)
         && balance.equals(that.balance)
         && storageRoot.equals(that.storageRoot)
         && codeHash.equals(that.codeHash);
@@ -99,7 +100,7 @@ public class StateTrieAccountValue {
   public void writeTo(final RLPOutput out) {
     out.startList();
 
-    out.writeLongScalar(nonce);
+    out.writeBigIntegerScalar(nonce);
     out.writeUInt256Scalar(balance);
     out.writeBytes(storageRoot);
     out.writeBytes(codeHash);
@@ -110,7 +111,7 @@ public class StateTrieAccountValue {
   public static StateTrieAccountValue readFrom(final RLPInput in) {
     in.enterList();
 
-    final long nonce = in.readLongScalar();
+    final BigInteger nonce = in.readBigIntegerScalar();
     final Wei balance = Wei.of(in.readUInt256Scalar());
     Bytes32 storageRoot;
     Bytes32 codeHash;

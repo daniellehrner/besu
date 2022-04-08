@@ -192,7 +192,7 @@ public class BlockDataGenerator {
           }
         }
       }
-      account.setNonce(random.nextInt(10));
+      account.setNonce(BigInteger.valueOf(random.nextInt(10)));
       account.setBalance(Wei.of(positiveLong()));
 
       accounts.add(account);
@@ -282,7 +282,7 @@ public class BlockDataGenerator {
   public BlockHeader header(final long number, final BlockBody body, final BlockOptions options) {
     final int gasLimit = random.nextInt() & Integer.MAX_VALUE;
     final int gasUsed = Math.max(0, gasLimit - 1);
-    final long blockNonce = random.nextLong();
+    final BigInteger blockNonce = BigInteger.valueOf(random.nextLong());
     final BlockHeaderBuilder blockHeaderBuilder =
         BlockHeaderBuilder.create()
             .parentHash(options.getParentHash(hash()))
@@ -382,7 +382,7 @@ public class BlockDataGenerator {
   private Transaction accessListTransaction(final Bytes payload, final Address to) {
     return Transaction.builder()
         .type(TransactionType.ACCESS_LIST)
-        .nonce(positiveLong())
+        .nonce(BigInteger.valueOf(positiveLong()))
         .gasPrice(Wei.wrap(bytesValue(4)))
         .gasLimit(positiveLong())
         .to(to)
@@ -409,7 +409,7 @@ public class BlockDataGenerator {
   private Transaction eip1559Transaction(final Bytes payload, final Address to) {
     return Transaction.builder()
         .type(TransactionType.EIP1559)
-        .nonce(positiveLong())
+        .nonce(BigInteger.valueOf(positiveLong()))
         .maxPriorityFeePerGas(Wei.wrap(bytesValue(4)))
         .maxFeePerGas(Wei.wrap(bytesValue(4)))
         .gasLimit(positiveLong())
@@ -423,7 +423,7 @@ public class BlockDataGenerator {
   private Transaction frontierTransaction(final Bytes payload, final Address to) {
     return Transaction.builder()
         .type(TransactionType.FRONTIER)
-        .nonce(positiveLong())
+        .nonce(BigInteger.valueOf(positiveLong()))
         .gasPrice(Wei.wrap(bytesValue(4)))
         .gasLimit(positiveLong())
         .to(to)

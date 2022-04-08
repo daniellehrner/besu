@@ -51,7 +51,7 @@ public class EthSubmitWork implements JsonRpcMethod {
     if (solver.isPresent()) {
       final PoWSolution solution =
           new PoWSolution(
-              Bytes.fromHexString(requestContext.getRequiredParameter(0, String.class)).getLong(0),
+              Bytes.fromHexString(requestContext.getRequiredParameter(0, String.class)).toBigInteger(),
               requestContext.getRequiredParameter(2, Hash.class),
               null,
               Bytes.fromHexString(requestContext.getRequiredParameter(1, String.class)));

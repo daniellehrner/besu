@@ -23,6 +23,8 @@ import org.hyperledger.besu.ethereum.api.jsonrpc.internal.results.Quantity;
 import org.hyperledger.besu.ethereum.api.query.BlockchainQueries;
 import org.hyperledger.besu.ethereum.eth.transactions.sorter.AbstractPendingTransactionsSorter;
 
+import java.math.BigInteger;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.function.Supplier;
 
@@ -61,19 +63,19 @@ public class EthGetTransactionCount extends AbstractBlockParameterOrBlockHashMet
   @Override
   protected Object pendingResult(final JsonRpcRequestContext request) {
     final Address address = request.getRequiredParameter(0, Address.class);
-    final OptionalLong pendingNonce = pendingTransactions.get().getNextNonceForSender(address);
-    final long latestNonce =
+    final Optional<BigInteger> pendingNonce = pendingTransactions.get().getNextNonceForSender(address);
+    final BigInteger latestNonce =
         getBlockchainQueries()
             .getTransactionCount(
                 address, getBlockchainQueries().getBlockchain().getChainHead().getHash());
-    return Quantity.create(Math.max(pendingNonce.orElse(0), latestNonce));
+    return Quantity.create(pendingNonce.orElse(BigInteger.ZERO).max(latestNonce));
   }
 
   @Override
   protected String resultByBlockHash(final JsonRpcRequestContext request, final Hash blockHash) {
     final Address address = request.getRequiredParameter(0, Address.class);
-    final long transactionCount = getBlockchainQueries().getTransactionCount(address, blockHash);
+    final BigInteger transactionCount = getBlockchainQueries().getTransactionCount(address, blockHash);
 
-    return resultAsDecimal ? Long.toString(transactionCount) : Quantity.create(transactionCount);
+    return resultAsDecimal ? transactionCount.toString() : Quantity.create(transactionCount);
   }
 }

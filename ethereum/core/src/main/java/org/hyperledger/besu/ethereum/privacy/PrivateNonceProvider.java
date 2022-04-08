@@ -18,6 +18,8 @@ import org.hyperledger.besu.datatypes.Address;
 
 import org.apache.tuweni.bytes.Bytes32;
 
+import java.math.BigInteger;
+
 public interface PrivateNonceProvider {
-  long getNonce(Address sender, Bytes32 privacyGroupId);
+  BigInteger getNonce(Address sender, Bytes32 privacyGroupId);
 }

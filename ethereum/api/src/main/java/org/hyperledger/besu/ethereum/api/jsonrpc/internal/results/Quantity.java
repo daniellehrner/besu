@@ -71,9 +71,11 @@ public class Quantity {
    * @return A zero-padded string containing byteLength * 2 characters, not including the 0x prefix
    */
   public static String longToPaddedHex(final long val, final int byteLength) {
-    final String formatted = Long.toHexString(val);
-    final String zeroPadding = "0".repeat(byteLength * 2 - formatted.length());
-    return String.format("%s%s%s", HEX_PREFIX, zeroPadding, formatted);
+    return toPaddedHex(Long.toHexString(val), byteLength);
+  }
+
+  public static String bigIntegerToPaddedHex(final BigInteger val, final int byteLength) {
+    return toPaddedHex(val.toString(16), byteLength);
   }
 
   /**
@@ -97,5 +99,10 @@ public class Quantity {
 
   private static String prefixHexNotation(final String hexValue) {
     return hexValue.startsWith(HEX_PREFIX) ? hexValue : HEX_PREFIX + hexValue;
+  }
+
+  private static String toPaddedHex(final String val, final int byteLength) {
+    final String zeroPadding = "0".repeat(byteLength * 2 - val.length());
+    return String.format("%s%s%s", HEX_PREFIX, zeroPadding, val);
   }
 }

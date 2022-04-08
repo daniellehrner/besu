@@ -24,6 +24,7 @@ import org.hyperledger.besu.evm.account.AccountStorageEntry;
 import org.hyperledger.besu.evm.account.EvmAccount;
 import org.hyperledger.besu.evm.account.MutableAccount;
 
+import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -41,21 +42,21 @@ public class SimpleAccount implements EvmAccount, MutableAccount {
   private Address address;
   private final Supplier<Hash> addressHash =
       Suppliers.memoize(() -> address == null ? Hash.ZERO : Hash.hash(address));
-  private long nonce;
+  private BigInteger nonce;
   private Wei balance;
   private Bytes code;
   private Supplier<Hash> codeHash =
       Suppliers.memoize(() -> code == null ? Hash.EMPTY : Hash.hash(code));
   private final Map<UInt256, UInt256> storage = new HashMap<>();
 
-  public SimpleAccount(final Address address, final long nonce, final Wei balance) {
+  public SimpleAccount(final Address address, final BigInteger nonce, final Wei balance) {
     this(null, address, nonce, balance, Bytes.EMPTY);
   }
 
   public SimpleAccount(
       final Account parent,
       final Address address,
-      final long nonce,
+      final BigInteger nonce,
       final Wei balance,
       final Bytes code) {
     this.parent = parent;
@@ -76,7 +77,7 @@ public class SimpleAccount implements EvmAccount, MutableAccount {
   }
 
   @Override
-  public long getNonce() {
+  public BigInteger getNonce() {
     return nonce;
   }
 
@@ -126,7 +127,7 @@ public class SimpleAccount implements EvmAccount, MutableAccount {
   }
 
   @Override
-  public void setNonce(final long value) {
+  public void setNonce(final BigInteger value) {
     nonce = value;
   }
 

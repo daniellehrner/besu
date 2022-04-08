@@ -40,6 +40,7 @@ import org.hyperledger.besu.evm.worldstate.WorldState;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -259,7 +260,7 @@ public class BlockchainQueries {
    * @param blockNumber The height of the block being queried.
    * @return The number of transactions sent from the given address.
    */
-  public long getTransactionCount(final Address address, final long blockNumber) {
+  public BigInteger getTransactionCount(final Address address, final long blockNumber) {
     final Hash blockHash =
         getBlockHeaderByNumber(blockNumber).map(BlockHeader::getHash).orElse(Hash.EMPTY);
 
@@ -273,11 +274,11 @@ public class BlockchainQueries {
    * @param blockHash The hash of the block being queried.
    * @return The number of transactions sent from the given address.
    */
-  public long getTransactionCount(final Address address, final Hash blockHash) {
+  public BigInteger getTransactionCount(final Address address, final Hash blockHash) {
     return getWorldState(blockHash)
         .map(worldState -> worldState.get(address))
         .map(Account::getNonce)
-        .orElse(0L);
+        .orElse(BigInteger.ZERO);
   }
 
   /**
@@ -286,7 +287,7 @@ public class BlockchainQueries {
    * @param address The address whose sent transactions we want to count.
    * @return The number of transactions sent from the given address.
    */
-  public long getTransactionCount(final Address address) {
+  public BigInteger getTransactionCount(final Address address) {
     return getTransactionCount(address, headBlockNumber());
   }
 

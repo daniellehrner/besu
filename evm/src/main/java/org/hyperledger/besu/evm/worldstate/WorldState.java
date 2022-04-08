@@ -20,6 +20,7 @@ import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.account.AccountState;
 import org.hyperledger.besu.evm.account.AccountStorageEntry;
 
+import java.math.BigInteger;
 import java.util.NavigableMap;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -81,7 +82,7 @@ public interface WorldState extends WorldView {
     }
 
     @Override
-    public long getNonce() {
+    public BigInteger getNonce() {
       return accountState.getNonce();
     }
 

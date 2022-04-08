@@ -26,6 +26,7 @@ import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.evm.log.LogsBloomFilter;
 
+import java.math.BigInteger;
 import java.util.Optional;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
@@ -71,7 +72,7 @@ public class ReferenceTestEnv extends BlockHeader {
         Bytes.EMPTY,
         Optional.ofNullable(baseFee).map(Wei::fromHexString).orElse(null),
         Hash.ZERO,
-        0L,
+        BigInteger.ZERO,
         new MainnetBlockHeaderFunctions());
   }
 

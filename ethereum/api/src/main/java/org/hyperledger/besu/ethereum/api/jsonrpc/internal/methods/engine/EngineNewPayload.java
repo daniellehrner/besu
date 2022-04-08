@@ -44,6 +44,7 @@ import org.hyperledger.besu.ethereum.mainnet.BodyValidation;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.rlp.RLPException;
 
+import java.math.BigInteger;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -122,7 +123,7 @@ public class EngineNewPayload extends ExecutionEngineJsonRpcMethod {
             Bytes.fromHexString(blockParam.getExtraData()),
             blockParam.getBaseFeePerGas(),
             blockParam.getPrevRandao(),
-            0,
+            BigInteger.ZERO,
             headerFunctions);
 
     // ensure the block hash matches the blockParam hash

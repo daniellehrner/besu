@@ -31,6 +31,7 @@ import org.hyperledger.besu.ethereum.processing.TransactionProcessingResult;
 import org.hyperledger.besu.ethereum.transaction.CallParameter;
 import org.hyperledger.besu.evm.log.Log;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -227,9 +228,9 @@ public class MultiTenancyPrivacyControllerTest {
   @Test
   public void determineBesuNonceWhenPrivacyUserIdInPrivacyGroup() {
     when(privacyController.determineNonce(Address.ZERO, PRIVACY_GROUP_ID, ENCLAVE_PUBLIC_KEY1))
-        .thenReturn(10L);
+        .thenReturn(BigInteger.valueOf(10));
 
-    final long nonce =
+    final BigInteger nonce =
         multiTenancyPrivacyController.determineNonce(
             Address.ZERO, PRIVACY_GROUP_ID, ENCLAVE_PUBLIC_KEY1);
     assertThat(nonce).isEqualTo(10);

@@ -76,7 +76,7 @@ public class TransactionEncoder {
 
   static void encodeFrontier(final Transaction transaction, final RLPOutput out) {
     out.startList();
-    out.writeLongScalar(transaction.getNonce());
+    out.writeBigIntegerScalar(transaction.getNonce());
     out.writeUInt256Scalar(transaction.getGasPrice().orElseThrow());
     out.writeLongScalar(transaction.getGasLimit());
     out.writeBytes(transaction.getTo().map(Bytes::copy).orElse(Bytes.EMPTY));
@@ -110,7 +110,7 @@ public class TransactionEncoder {
 
   public static void encodeAccessListInner(
       final Optional<BigInteger> chainId,
-      final long nonce,
+      final BigInteger nonce,
       final Wei gasPrice,
       final long gasLimit,
       final Optional<Address> to,
@@ -119,7 +119,7 @@ public class TransactionEncoder {
       final List<AccessListEntry> accessList,
       final RLPOutput rlpOutput) {
     rlpOutput.writeLongScalar(chainId.orElseThrow().longValue());
-    rlpOutput.writeLongScalar(nonce);
+    rlpOutput.writeBigIntegerScalar(nonce);
     rlpOutput.writeUInt256Scalar(gasPrice);
     rlpOutput.writeLongScalar(gasLimit);
     rlpOutput.writeBytes(to.map(Bytes::copy).orElse(Bytes.EMPTY));
@@ -147,7 +147,7 @@ public class TransactionEncoder {
   static void encodeEIP1559(final Transaction transaction, final RLPOutput out) {
     out.startList();
     out.writeLongScalar(transaction.getChainId().orElseThrow().longValue());
-    out.writeLongScalar(transaction.getNonce());
+    out.writeBigIntegerScalar(transaction.getNonce());
     out.writeUInt256Scalar(transaction.getMaxPriorityFeePerGas().orElseThrow());
     out.writeUInt256Scalar(transaction.getMaxFeePerGas().orElseThrow());
     out.writeLongScalar(transaction.getGasLimit());

@@ -21,6 +21,8 @@ import org.hyperledger.besu.ethereum.mainnet.DetachedBlockHeaderValidationRule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.math.BigInteger;
+
 public class VoteValidationRule implements DetachedBlockHeaderValidationRule {
 
   private static final Logger LOG = LoggerFactory.getLogger(VoteValidationRule.class);
@@ -34,7 +36,7 @@ public class VoteValidationRule implements DetachedBlockHeaderValidationRule {
    */
   @Override
   public boolean validate(final BlockHeader header, final BlockHeader parent) {
-    final long nonce = header.getNonce();
+    final BigInteger nonce = header.getNonce();
     if (!CliqueBlockInterface.isValidVoteValue(nonce)) {
       LOG.info("Invalid block header: Nonce value ({}) is neither auth or drop.", nonce);
       return false;

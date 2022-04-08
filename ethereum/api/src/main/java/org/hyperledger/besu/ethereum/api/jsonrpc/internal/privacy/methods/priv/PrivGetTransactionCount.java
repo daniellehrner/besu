@@ -32,6 +32,8 @@ import org.hyperledger.besu.ethereum.privacy.PrivacyController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.math.BigInteger;
+
 public class PrivGetTransactionCount implements JsonRpcMethod {
 
   private static final Logger LOG = LoggerFactory.getLogger(PrivGetTransactionCount.class);
@@ -60,7 +62,7 @@ public class PrivGetTransactionCount implements JsonRpcMethod {
     final String privacyGroupId = requestContext.getRequiredParameter(1, String.class);
 
     try {
-      final long nonce =
+      final BigInteger nonce =
           privacyController.determineNonce(
               address,
               privacyGroupId,

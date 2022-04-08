@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.api.graphql.internal.pojoadapter;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
 
+import java.math.BigInteger;
 import java.util.Optional;
 
 import graphql.schema.DataFetchingEnvironment;
@@ -42,8 +43,8 @@ public class EmptyAccountAdapter extends AccountAdapter {
   }
 
   @Override
-  public Optional<Long> getTransactionCount() {
-    return Optional.of(0L);
+  public Optional<BigInteger> getTransactionCount() {
+    return Optional.of(BigInteger.ZERO);
   }
 
   @Override

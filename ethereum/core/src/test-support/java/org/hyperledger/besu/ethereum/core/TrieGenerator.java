@@ -22,6 +22,7 @@ import org.hyperledger.besu.ethereum.trie.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.ethereum.worldstate.StateTrieAccountValue;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorage;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -54,7 +55,7 @@ public class TrieGenerator {
       final Bytes code = Bytes32.leftPad(Bytes.of(i + 10));
       final Hash codeHash = Hash.hash(code);
       final StateTrieAccountValue accountValue =
-          new StateTrieAccountValue(1L, Wei.of(2L), Hash.wrap(storageTrie.getRootHash()), codeHash);
+          new StateTrieAccountValue(BigInteger.ONE, Wei.of(2L), Hash.wrap(storageTrie.getRootHash()), codeHash);
       accountStateTrie.put(accountHash.get(i), RLP.encode(accountValue::writeTo));
       accountStateTrie.commit(updater::putAccountStateTrieNode);
       updater.putCode(codeHash, code);

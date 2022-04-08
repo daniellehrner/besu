@@ -24,6 +24,7 @@ import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 
+import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -38,7 +39,7 @@ import org.apache.tuweni.units.bigints.UInt256;
 public class ReferenceTestWorldState extends DefaultMutableWorldState {
 
   public static class AccountMock {
-    private final long nonce;
+    private final BigInteger nonce;
     private final Wei balance;
     private final Bytes code;
     private final Map<UInt256, UInt256> storage;
@@ -56,13 +57,13 @@ public class ReferenceTestWorldState extends DefaultMutableWorldState {
         @JsonProperty("balance") final String balance,
         @JsonProperty("storage") final Map<String, String> storage,
         @JsonProperty("code") final String code) {
-      this.nonce = Long.decode(nonce);
+      this.nonce = new BigInteger(nonce, 16);
       this.balance = Wei.fromHexString(balance);
       this.code = Bytes.fromHexString(code);
       this.storage = parseStorage(storage);
     }
 
-    public long getNonce() {
+    public BigInteger getNonce() {
       return nonce;
     }
 

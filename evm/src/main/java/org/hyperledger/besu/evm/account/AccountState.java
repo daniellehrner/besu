@@ -17,6 +17,7 @@ package org.hyperledger.besu.evm.account;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.Wei;
 
+import java.math.BigInteger;
 import java.util.NavigableMap;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -58,7 +59,7 @@ public interface AccountState {
    *
    * @return the account nonce.
    */
-  long getNonce();
+  BigInteger getNonce();
 
   /**
    * The available balance of that account.
@@ -127,7 +128,7 @@ public interface AccountState {
    *     otherwise.
    */
   default boolean isEmpty() {
-    return getNonce() == 0 && getBalance().isZero() && !hasCode();
+    return getNonce().equals(BigInteger.ZERO) && getBalance().isZero() && !hasCode();
   }
 
   /**

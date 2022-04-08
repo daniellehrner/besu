@@ -21,6 +21,8 @@ import org.hyperledger.besu.plugin.data.Quantity;
 
 import org.apache.tuweni.bytes.Bytes;
 
+import java.math.BigInteger;
+
 public class NonBesuBlockHeader implements BlockHeader {
 
   final Hash blockHash;
@@ -102,8 +104,8 @@ public class NonBesuBlockHeader implements BlockHeader {
   }
 
   @Override
-  public long getNonce() {
-    return 0;
+  public BigInteger getNonce() {
+    return BigInteger.ZERO;
   }
 
   @Override

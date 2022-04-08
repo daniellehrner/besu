@@ -132,7 +132,7 @@ public class GetWorkProtocol implements StratumProtocol {
       }
       final PoWSolution solution =
           new PoWSolution(
-              Bytes.fromHexString(paramsNode.get(0).textValue()).getLong(0),
+              Bytes.fromHexString(paramsNode.get(0).textValue()).toBigInteger(),
               Hash.fromHexString(paramsNode.get(2).textValue()),
               null,
               Bytes.fromHexString(paramsNode.get(1).textValue()));

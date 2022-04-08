@@ -34,6 +34,7 @@ import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
 import org.hyperledger.besu.plugin.data.Restriction;
 
+import java.math.BigInteger;
 import java.util.Optional;
 
 import com.google.common.base.Supplier;
@@ -154,7 +155,7 @@ public class PrivateTransactionSimulator {
     final Address senderAddress =
         callParams.getFrom() != null ? callParams.getFrom() : DEFAULT_FROM;
     final Account sender = disposablePrivateState.get(senderAddress);
-    final long nonce = sender != null ? sender.getNonce() : 0L;
+    final BigInteger nonce = sender != null ? sender.getNonce() : BigInteger.ZERO;
     final long gasLimit =
         callParams.getGasLimit() >= 0 ? callParams.getGasLimit() : header.getGasLimit();
     final Wei gasPrice = callParams.getGasPrice() != null ? callParams.getGasPrice() : Wei.ZERO;

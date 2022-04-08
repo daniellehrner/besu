@@ -27,6 +27,7 @@ import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.eth.transactions.sorter.AbstractPendingTransactionsSorter;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 
+import java.math.BigInteger;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -85,7 +86,7 @@ public class MergeBlockCreator extends AbstractBlockCreator {
     return BlockHeaderBuilder.create()
         .difficulty(Difficulty.ZERO)
         .populateFrom(sealableBlockHeader)
-        .nonce(0L)
+        .nonce(BigInteger.ZERO)
         .blockHeaderFunctions(blockHeaderFunctions)
         .buildBlockHeader();
   }

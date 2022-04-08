@@ -21,6 +21,7 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderBuilder;
 
+import java.math.BigInteger;
 import java.util.Collection;
 import java.util.Optional;
 
@@ -31,10 +32,10 @@ public class CliqueBlockInterface implements BlockInterface {
 
   public static final Address NO_VOTE_SUBJECT = Address.wrap(Bytes.wrap(new byte[Address.SIZE]));
 
-  public static final long ADD_NONCE = 0xFFFFFFFFFFFFFFFFL;
-  public static final long DROP_NONCE = 0x0L;
+  public static final BigInteger ADD_NONCE = new BigInteger("0xFFFFFFFFFFFFFFFF", 16);
+  public static final BigInteger DROP_NONCE = new BigInteger("0x0", 16);
 
-  private static final ImmutableBiMap<VoteType, Long> voteToValue =
+  private static final ImmutableBiMap<VoteType, BigInteger> voteToValue =
       ImmutableBiMap.of(
           VoteType.ADD, ADD_NONCE,
           VoteType.DROP, DROP_NONCE);
@@ -82,7 +83,7 @@ public class CliqueBlockInterface implements BlockInterface {
     return CliqueExtraData.decode(header).getValidators();
   }
 
-  public static boolean isValidVoteValue(final long value) {
+  public static boolean isValidVoteValue(final BigInteger value) {
     return voteToValue.values().contains(value);
   }
 }

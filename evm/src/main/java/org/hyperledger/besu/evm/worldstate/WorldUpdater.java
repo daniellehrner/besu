@@ -21,6 +21,7 @@ import org.hyperledger.besu.evm.account.EvmAccount;
 import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 
+import java.math.BigInteger;
 import java.util.Collection;
 import java.util.Optional;
 
@@ -47,13 +48,13 @@ public interface WorldUpdater extends MutableWorldView {
    * @return the account {@code address}, which will have nonce {@code nonce}, balance {@code
    *     balance} and empty code and storage.
    */
-  EvmAccount createAccount(Address address, long nonce, Wei balance);
+  EvmAccount createAccount(Address address, BigInteger nonce, Wei balance);
 
   /**
    * Creates a new account, or reset it (that is, act as if it was deleted and created anew) if it
    * already exists.
    *
-   * <p>This call is equivalent to {@link #createAccount(Address, long, Wei)} but defaults both the
+   * <p>This call is equivalent to {@link #createAccount(Address, BigInteger, Wei)} but defaults both the
    * nonce and balance to zero.
    *
    * @param address the address of the account to create (or reset).

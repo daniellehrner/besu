@@ -21,6 +21,7 @@ import org.hyperledger.besu.evm.account.EvmAccount;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.evm.worldstate.WrappedEvmAccount;
 
+import java.math.BigInteger;
 import java.util.Collection;
 import java.util.Optional;
 
@@ -39,7 +40,7 @@ public class DefaultMutablePrivateWorldStateUpdater implements WorldUpdater {
   }
 
   @Override
-  public EvmAccount createAccount(final Address address, final long nonce, final Wei balance) {
+  public EvmAccount createAccount(final Address address, final BigInteger nonce, final Wei balance) {
     return privateWorldUpdater.createAccount(address, nonce, balance);
   }
 

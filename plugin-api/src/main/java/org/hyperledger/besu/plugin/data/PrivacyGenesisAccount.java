@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.plugin.data;
 
+import java.math.BigInteger;
 import java.util.Map;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -39,7 +40,7 @@ public interface PrivacyGenesisAccount {
    *
    * @return the nonce
    */
-  Long getNonce();
+  BigInteger getNonce();
 
   /**
    * The initial balance assigned to the account.

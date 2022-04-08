@@ -200,16 +200,16 @@ public final class GenesisState {
     return genesis.streamAllocations().map(GenesisAccount::fromAllocation);
   }
 
-  private static long parseNonce(final GenesisConfigFile genesis) {
-    return withNiceErrorMessage("nonce", genesis.getNonce(), GenesisState::parseUnsignedLong);
+  private static BigInteger parseNonce(final GenesisConfigFile genesis) {
+    return withNiceErrorMessage("nonce", genesis.getNonce(), GenesisState::parseBigInteger);
   }
 
-  private static long parseUnsignedLong(final String value) {
+  private static BigInteger parseBigInteger(final String value) {
     String nonce = value.toLowerCase(Locale.US);
     if (nonce.startsWith("0x")) {
       nonce = nonce.substring(2);
     }
-    return Long.parseUnsignedLong(nonce, 16);
+    return new BigInteger(nonce, 16);
   }
 
   @Override
@@ -222,7 +222,7 @@ public final class GenesisState {
 
   private static final class GenesisAccount {
 
-    final long nonce;
+    final BigInteger nonce;
     final Address address;
     final Wei balance;
     final Map<UInt256, UInt256> storage;
@@ -243,7 +243,7 @@ public final class GenesisState {
         final String balance,
         final Map<String, String> storage,
         final String hexCode) {
-      this.nonce = withNiceErrorMessage("nonce", hexNonce, GenesisState::parseUnsignedLong);
+      this.nonce = withNiceErrorMessage("nonce", hexNonce, GenesisState::parseBigInteger);
       this.address = withNiceErrorMessage("address", hexAddress, Address::fromHexString);
       this.balance = withNiceErrorMessage("balance", balance, this::parseBalance);
       this.code = hexCode != null ? Bytes.fromHexString(hexCode) : null;

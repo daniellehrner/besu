@@ -187,7 +187,7 @@ public class Stratum1Protocol implements StratumProtocol {
     boolean result = false;
     final PoWSolution solution =
         new PoWSolution(
-            Bytes.fromHexString(message.getRequiredParameter(2, String.class)).getLong(0),
+            Bytes.fromHexString(message.getRequiredParameter(2, String.class)).toBigInteger(),
             Hash.fromHexString(message.getRequiredParameter(4, String.class)),
             null,
             Bytes.fromHexString(message.getRequiredParameter(3, String.class)));

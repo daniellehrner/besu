@@ -23,7 +23,9 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.log.LogsBloomFilter;
 
+import java.math.BigInteger;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.OptionalLong;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -64,9 +66,9 @@ public class BlockHeaderBuilder {
 
   private BlockHeaderFunctions blockHeaderFunctions;
 
-  // A nonce can be any value so we use the OptionalLong
+  // A nonce can be any value so we use an optional
   // instead of an invalid identifier such as -1.
-  private OptionalLong nonce = OptionalLong.empty();
+  private Optional<BigInteger> nonce = Optional.empty();
 
   public static BlockHeaderBuilder create() {
     return new BlockHeaderBuilder();
@@ -135,7 +137,7 @@ public class BlockHeaderBuilder {
         extraData,
         baseFee,
         mixHashOrPrevRandao,
-        nonce.getAsLong(),
+        nonce.get(),
         blockHeaderFunctions);
   }
 
@@ -319,8 +321,8 @@ public class BlockHeaderBuilder {
     return this;
   }
 
-  public BlockHeaderBuilder nonce(final long nonce) {
-    this.nonce = OptionalLong.of(nonce);
+  public BlockHeaderBuilder nonce(final BigInteger nonce) {
+    this.nonce = Optional.of(nonce);
     return this;
   }
 

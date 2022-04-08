@@ -43,6 +43,7 @@ import org.hyperledger.besu.evm.processor.AbstractMessageProcessor;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
+import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -283,7 +284,7 @@ public class MainnetTransactionProcessor {
       }
 
       final MutableAccount senderMutableAccount = sender.getMutable();
-      final long previousNonce = senderMutableAccount.incrementNonce();
+      final BigInteger previousNonce = senderMutableAccount.incrementNonce();
       final Wei transactionGasPrice =
           feeMarket.getTransactionPriceCalculator().price(transaction, blockHeader.getBaseFee());
       LOG.trace(
@@ -361,7 +362,7 @@ public class MainnetTransactionProcessor {
       final MessageFrame initialFrame;
       if (transaction.isContractCreation()) {
         final Address contractAddress =
-            Address.contractAddress(senderAddress, senderMutableAccount.getNonce() - 1L);
+            Address.contractAddress(senderAddress, senderMutableAccount.getNonce().subtract(BigInteger.ONE));
 
         final Bytes initCodeBytes = transaction.getPayload();
         initialFrame =

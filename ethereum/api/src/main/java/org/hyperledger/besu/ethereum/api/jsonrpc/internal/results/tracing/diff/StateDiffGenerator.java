@@ -124,6 +124,6 @@ public class StateDiffGenerator {
   }
 
   private static String nonceAsHex(final Account account) {
-    return "0x" + Long.toHexString(account.getNonce());
+    return "0x" + account.getNonce().toString(16);
   }
 }

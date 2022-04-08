@@ -16,11 +16,12 @@ package org.hyperledger.besu.ethereum.blockcreation;
 
 import org.hyperledger.besu.crypto.SecureRandomProvider;
 
+import java.math.BigInteger;
 import java.util.Iterator;
 import java.util.Random;
 
-/** Creates an everlasting random long value (for use in nonces). */
-public class RandomNonceGenerator implements Iterable<Long> {
+/** Creates an everlasting random BigInteger value (for use in nonces). */
+public class RandomNonceGenerator implements Iterable<BigInteger> {
 
   private final Random longGenerator;
 
@@ -29,16 +30,16 @@ public class RandomNonceGenerator implements Iterable<Long> {
   }
 
   @Override
-  public Iterator<Long> iterator() {
-    return new Iterator<Long>() {
+  public Iterator<BigInteger> iterator() {
+    return new Iterator<>() {
       @Override
       public boolean hasNext() {
         return true;
       }
 
       @Override
-      public Long next() {
-        return longGenerator.nextLong();
+      public BigInteger next() {
+        return BigInteger.valueOf(longGenerator.nextLong());
       }
     };
   }

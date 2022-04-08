@@ -22,6 +22,7 @@ import org.hyperledger.besu.ethereum.processing.TransactionProcessingResult;
 import org.hyperledger.besu.ethereum.transaction.CallParameter;
 import org.hyperledger.besu.ethereum.transaction.TransactionInvalidReason;
 
+import java.math.BigInteger;
 import java.util.List;
 import java.util.Optional;
 
@@ -94,7 +95,7 @@ public class MultiTenancyPrivacyController implements PrivacyController {
   }
 
   @Override
-  public long determineNonce(
+  public BigInteger determineNonce(
       final Address sender, final String privacyGroupId, final String privacyUserId) {
     verifyPrivacyGroupContainsPrivacyUserId(privacyGroupId, privacyUserId);
     return privacyController.determineNonce(sender, privacyGroupId, privacyUserId);

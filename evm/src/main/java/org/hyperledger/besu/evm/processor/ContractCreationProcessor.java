@@ -25,6 +25,7 @@ import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
 
+import java.math.BigInteger;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -43,7 +44,7 @@ public class ContractCreationProcessor extends AbstractMessageProcessor {
 
   private final GasCalculator gasCalculator;
 
-  private final long initialContractNonce;
+  private final BigInteger initialContractNonce;
 
   private final List<ContractValidationRule> contractValidationRules;
 
@@ -52,7 +53,7 @@ public class ContractCreationProcessor extends AbstractMessageProcessor {
       final EVM evm,
       final boolean requireCodeDepositToSucceed,
       final List<ContractValidationRule> contractValidationRules,
-      final long initialContractNonce,
+      final BigInteger initialContractNonce,
       final Collection<Address> forceCommitAddresses) {
     super(evm, forceCommitAddresses);
     this.gasCalculator = gasCalculator;
@@ -66,7 +67,7 @@ public class ContractCreationProcessor extends AbstractMessageProcessor {
       final EVM evm,
       final boolean requireCodeDepositToSucceed,
       final List<ContractValidationRule> contractValidationRules,
-      final long initialContractNonce) {
+      final BigInteger initialContractNonce) {
     this(
         gasCalculator,
         evm,
@@ -79,7 +80,12 @@ public class ContractCreationProcessor extends AbstractMessageProcessor {
   private static boolean accountExists(final Account account) {
     // The account exists if it has sent a transaction
     // or already has its code initialized.
-    return account.getNonce() > 0 || !account.getCode().isEmpty();
+    return hsaSentTransaction(account) || !account.getCode().isEmpty();
+  }
+
+  private static boolean hsaSentTransaction(final Account account) {
+    // return if nonce is greater than 0
+    return account.getNonce().compareTo(BigInteger.ZERO) > 0;
   }
 
   @Override

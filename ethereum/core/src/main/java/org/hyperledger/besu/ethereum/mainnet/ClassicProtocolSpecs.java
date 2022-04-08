@@ -185,7 +185,7 @@ public class ClassicProtocolSpecs {
                     evm,
                     true,
                     Collections.singletonList(MaxCodeSizeRule.of(contractSizeLimit)),
-                    1))
+                    BigInteger.ONE))
         .transactionProcessorBuilder(
             (gasCalculator,
                 transactionValidator,
@@ -386,7 +386,7 @@ public class ClassicProtocolSpecs {
                     evm,
                     true,
                     List.of(MaxCodeSizeRule.of(contractSizeLimit), PrefixCodeRule.of()),
-                    1))
+                    BigInteger.ONE))
         .name("Mystique");
   }
 }

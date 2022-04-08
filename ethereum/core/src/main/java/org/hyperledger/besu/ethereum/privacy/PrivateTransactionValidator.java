@@ -35,7 +35,7 @@ public class PrivateTransactionValidator {
 
   public ValidationResult<TransactionInvalidReason> validate(
       final PrivateTransaction transaction,
-      final Long accountNonce,
+      final BigInteger accountNonce,
       final boolean allowFutureNonces) {
     LOG.debug("Validating private transaction {}", transaction);
     final ValidationResult<TransactionInvalidReason> privateFieldsValidationResult =
@@ -57,11 +57,12 @@ public class PrivateTransactionValidator {
       return signatureValidationResult;
     }
 
-    final long transactionNonce = transaction.getNonce();
+    final BigInteger transactionNonce = transaction.getNonce();
 
     LOG.debug("Validating actual nonce {}, with expected nonce {}", transactionNonce, accountNonce);
 
-    if (accountNonce > transactionNonce) {
+    // invalid if the nonce of the account is greater than the nonce of the transaction
+    if (accountNonce.compareTo(transactionNonce) > 0) {
       final String errorMessage =
           String.format(
               "Private Transaction nonce %s, is lower than sender account nonce %s.",
@@ -70,7 +71,7 @@ public class PrivateTransactionValidator {
       return ValidationResult.invalid(TransactionInvalidReason.PRIVATE_NONCE_TOO_LOW, errorMessage);
     }
 
-    if (!allowFutureNonces && accountNonce != transactionNonce) {
+    if (!allowFutureNonces && !accountNonce.equals(transactionNonce)) {
       final String errorMessage =
           String.format(
               "Private Transaction nonce %s, does not match sender account nonce %s.",

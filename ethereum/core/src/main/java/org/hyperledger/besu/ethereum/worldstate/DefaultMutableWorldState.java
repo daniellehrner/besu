@@ -31,6 +31,7 @@ import org.hyperledger.besu.evm.worldstate.UpdateTrackingAccount;
 import org.hyperledger.besu.evm.worldstate.WorldState;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -133,7 +134,7 @@ public class DefaultMutableWorldState implements MutableWorldState {
   }
 
   private static Bytes serializeAccount(
-      final long nonce, final Wei balance, final Hash storageRoot, final Hash codeHash) {
+          final BigInteger nonce, final Wei balance, final Hash storageRoot, final Hash codeHash) {
     final StateTrieAccountValue accountValue =
         new StateTrieAccountValue(nonce, balance, storageRoot, codeHash);
     return RLP.encode(accountValue::writeTo);
@@ -261,7 +262,7 @@ public class DefaultMutableWorldState implements MutableWorldState {
     }
 
     @Override
-    public long getNonce() {
+    public BigInteger getNonce() {
       return accountValue.getNonce();
     }
 

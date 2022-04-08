@@ -75,7 +75,7 @@ public class TestCodeExecutor {
             .to(SENDER_ADDRESS)
             .payload(Bytes.EMPTY)
             .gasPrice(Wei.ZERO)
-            .nonce(0)
+            .nonce(BigInteger.ZERO)
             .build();
     final MessageFrame initialFrame =
         new MessageFrameTestFixture()

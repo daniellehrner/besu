@@ -16,8 +16,10 @@ package org.hyperledger.besu.ethereum.util;
 
 import org.hyperledger.besu.datatypes.Address;
 
+import java.math.BigInteger;
+
 @FunctionalInterface
 public interface NonceProvider {
 
-  long getNonce(final Address address);
+  BigInteger getNonce(final Address address);
 }

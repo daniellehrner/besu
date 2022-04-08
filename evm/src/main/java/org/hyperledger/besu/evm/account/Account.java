@@ -17,6 +17,8 @@ package org.hyperledger.besu.evm.account;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
 
+import java.math.BigInteger;
+
 /**
  * A world state account.
  *
@@ -26,7 +28,7 @@ import org.hyperledger.besu.datatypes.Wei;
  */
 public interface Account extends AccountState {
 
-  long DEFAULT_NONCE = 0L;
+  BigInteger DEFAULT_NONCE = BigInteger.ZERO;
   Wei DEFAULT_BALANCE = Wei.ZERO;
 
   /**

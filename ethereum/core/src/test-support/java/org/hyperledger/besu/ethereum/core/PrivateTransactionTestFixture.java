@@ -31,7 +31,7 @@ import org.apache.tuweni.bytes.Bytes32;
 
 public class PrivateTransactionTestFixture {
 
-  private long nonce = 0;
+  private BigInteger nonce = BigInteger.ZERO;
 
   private Wei gasPrice = Wei.of(5);
 
@@ -93,7 +93,7 @@ public class PrivateTransactionTestFixture {
     return new VersionedPrivateTransaction(transaction, Bytes32.ZERO);
   }
 
-  public PrivateTransactionTestFixture nonce(final long nonce) {
+  public PrivateTransactionTestFixture nonce(final BigInteger nonce) {
     this.nonce = nonce;
     return this;
   }

@@ -47,7 +47,7 @@ import org.apache.tuweni.bytes.Bytes32;
 
 public class PrivateTransactionDataFixture {
 
-  public static final long DEFAULT_NONCE = 0;
+  public static final BigInteger DEFAULT_NONCE = BigInteger.ZERO;
   public static final Wei DEFAULT_GAS_PRICE = Wei.of(1000);
   public static final long DEFAULT_GAS_LIMIT = 3000000;
   public static final Wei DEFAULT_VALUE = Wei.of(0);

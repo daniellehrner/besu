@@ -14,9 +14,10 @@
  */
 package org.hyperledger.besu.ethereum.blockcreation;
 
+import java.math.BigInteger;
 import java.util.Iterator;
 
-public class IncrementingNonceGenerator implements Iterable<Long> {
+public class IncrementingNonceGenerator implements Iterable<BigInteger> {
 
   private long nextValue;
 
@@ -25,16 +26,16 @@ public class IncrementingNonceGenerator implements Iterable<Long> {
   }
 
   @Override
-  public Iterator<Long> iterator() {
-    return new Iterator<Long>() {
+  public Iterator<BigInteger> iterator() {
+    return new Iterator<>() {
       @Override
       public boolean hasNext() {
         return true;
       }
 
       @Override
-      public Long next() {
-        return nextValue++;
+      public BigInteger next() {
+        return BigInteger.valueOf(nextValue++);
       }
     };
   }

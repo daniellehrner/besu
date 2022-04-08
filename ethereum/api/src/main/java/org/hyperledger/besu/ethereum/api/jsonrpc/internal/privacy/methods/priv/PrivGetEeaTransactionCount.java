@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.api.jsonrpc.internal.privacy.methods.priv;
 import static org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcError.GET_PRIVATE_TRANSACTION_NONCE_ERROR;
 import static org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcError.PRIVATE_FROM_DOES_NOT_MATCH_ENCLAVE_PUBLIC_KEY;
 
+import com.fasterxml.jackson.databind.node.BigIntegerNode;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.ethereum.api.jsonrpc.RpcMethod;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.JsonRpcRequestContext;
@@ -31,6 +32,7 @@ import org.hyperledger.besu.ethereum.privacy.MultiTenancyValidationException;
 import org.hyperledger.besu.ethereum.privacy.PrivacyController;
 import org.hyperledger.besu.ethereum.privacy.PrivacyGroupUtil;
 
+import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -77,7 +79,7 @@ public class PrivGetEeaTransactionCount implements JsonRpcMethod {
     }
 
     try {
-      final long nonce =
+      final BigInteger nonce =
           determineEeaNonce(
               privateFrom,
               privateFor,
@@ -96,7 +98,7 @@ public class PrivGetEeaTransactionCount implements JsonRpcMethod {
     }
   }
 
-  private long determineEeaNonce(
+  private BigInteger determineEeaNonce(
       final String privateFrom,
       final String[] privateFor,
       final Address address,

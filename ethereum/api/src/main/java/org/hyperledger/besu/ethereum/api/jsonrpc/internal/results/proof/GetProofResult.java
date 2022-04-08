@@ -20,6 +20,7 @@ import org.hyperledger.besu.ethereum.api.jsonrpc.internal.results.Quantity;
 import org.hyperledger.besu.ethereum.proof.WorldStateProof;
 import org.hyperledger.besu.ethereum.worldstate.StateTrieAccountValue;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -38,7 +39,7 @@ public class GetProofResult {
 
   private final Bytes32 codeHash;
 
-  private final long nonce;
+  private final BigInteger nonce;
 
   private final Bytes32 storageHash;
 
@@ -48,7 +49,7 @@ public class GetProofResult {
       final Address address,
       final Wei balance,
       final Bytes32 codeHash,
-      final long nonce,
+      final BigInteger nonce,
       final Bytes32 storageHash,
       final List<Bytes> accountProof,
       final List<StorageEntryProof> storageEntries) {

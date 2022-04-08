@@ -161,7 +161,7 @@ public class IbftBlockHashing {
       out.writeBytes(extraDataSerializer.get());
     }
     out.writeBytes(header.getMixHash());
-    out.writeLong(header.getNonce());
+    out.writeBigIntegerScalar(header.getNonce());
     out.endList();
     return out.encoded();
   }

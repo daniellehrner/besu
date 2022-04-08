@@ -29,6 +29,7 @@ import org.hyperledger.besu.ethereum.core.SealableBlockHeader;
 import org.hyperledger.besu.ethereum.eth.transactions.sorter.AbstractPendingTransactionsSorter;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 
+import java.math.BigInteger;
 import java.util.Optional;
 import java.util.function.Supplier;
 
@@ -76,7 +77,7 @@ public class BftBlockCreator extends AbstractBlockCreator {
         BlockHeaderBuilder.create()
             .populateFrom(sealableBlockHeader)
             .mixHash(BftHelpers.EXPECTED_MIX_HASH)
-            .nonce(0L)
+            .nonce(BigInteger.ZERO)
             .blockHeaderFunctions(BftBlockHeaderFunctions.forCommittedSeal(bftExtraDataCodec));
 
     return builder.buildBlockHeader();

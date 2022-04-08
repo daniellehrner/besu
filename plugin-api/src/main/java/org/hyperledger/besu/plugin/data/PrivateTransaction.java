@@ -26,7 +26,7 @@ public interface PrivateTransaction {
    *
    * @return the number of transactions sent by the sender.
    */
-  long getNonce();
+  BigInteger getNonce();
 
   /**
    * A scalar value equal to the number of Wei to be paid per unit of gas for all computation costs

@@ -23,6 +23,8 @@ import org.hyperledger.besu.evm.account.Account;
 
 import org.apache.tuweni.bytes.Bytes32;
 
+import java.math.BigInteger;
+
 public class ChainHeadPrivateNonceProvider implements PrivateNonceProvider {
   private final Blockchain blockchain;
   private final PrivateStateRootResolver privateStateRootResolver;
@@ -38,7 +40,7 @@ public class ChainHeadPrivateNonceProvider implements PrivateNonceProvider {
   }
 
   @Override
-  public long getNonce(final Address sender, final Bytes32 privacyGroupId) {
+  public BigInteger getNonce(final Address sender, final Bytes32 privacyGroupId) {
     final BlockHeader chainHeadHeader = blockchain.getChainHeadHeader();
     final Hash chainHeadHash = chainHeadHeader.getHash();
     final Hash stateRoot =
@@ -48,7 +50,7 @@ public class ChainHeadPrivateNonceProvider implements PrivateNonceProvider {
         .map(
             privateWorldState -> {
               final Account account = privateWorldState.get(sender);
-              return account == null ? 0L : account.getNonce();
+              return account == null ? BigInteger.ZERO : account.getNonce();
             })
         .orElse(Account.DEFAULT_NONCE);
   }

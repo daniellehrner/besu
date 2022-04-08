@@ -18,6 +18,7 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.account.Account;
 
+import java.math.BigInteger;
 import java.util.Optional;
 
 import graphql.schema.DataFetchingEnvironment;
@@ -41,7 +42,7 @@ public class AccountAdapter extends AdapterBase {
     return Optional.of(account.getBalance());
   }
 
-  public Optional<Long> getTransactionCount() {
+  public Optional<BigInteger> getTransactionCount() {
     return Optional.of(account.getNonce());
   }
 
