@@ -15,6 +15,10 @@
 package org.hyperledger.besu.consensus.merge.blockcreation;
 
 import static org.hyperledger.besu.consensus.merge.TransitionUtils.isTerminalProofOfWorkBlock;
+import static org.hyperledger.besu.consensus.merge.blockcreation.MergeMiningCoordinator.ForkchoiceResult.Status.INVALID;
+import static org.hyperledger.besu.consensus.merge.blockcreation.MergeMiningCoordinator.ForkchoiceResult.Status.INVALID_FORKCHOICE_STATE;
+import static org.hyperledger.besu.consensus.merge.blockcreation.MergeMiningCoordinator.ForkchoiceResult.Status.INVALID_TERMINAL_BLOCK;
+import static org.hyperledger.besu.consensus.merge.blockcreation.MergeMiningCoordinator.ForkchoiceResult.Status.SYNCING;
 import static org.hyperledger.besu.util.Slf4jLambdaHelper.debugLambda;
 
 import org.hyperledger.besu.consensus.merge.MergeContext;
@@ -254,18 +258,57 @@ public class MergeCoordinator implements MergeMiningCoordinator {
 
   @Override
   public ForkchoiceResult updateForkChoice(
-      final BlockHeader newHead, final Hash finalizedBlockHash, final Hash safeBlockHash) {
+          final Hash newHeadBlockHash, final Hash finalizedBlockHash, final Hash safeBlockHash) {
+    final Optional<Hash> maybeFinalizedHash =
+            Optional.ofNullable(finalizedBlockHash)
+                    .filter(finalized -> !finalized.isZero());
+
+    mergeContext.fireNewUnverifiedForkchoiceMessageEvent(
+            newHeadBlockHash, maybeFinalizedHash, safeBlockHash);
+
+    if (mergeContext.isSyncing()) {
+      return ForkchoiceResult.withFailure(SYNCING, null, Optional.empty());
+    }
+
+    final Optional<BlockHeader> newHead =
+            protocolContext.getBlockchain().getBlockHeader(newHeadBlockHash);
+
+    if (newHead.isEmpty()) {
+      Optional.ofNullable(newHeadBlockHash)
+              .filter(hash -> !hash.equals(Hash.ZERO))
+              .ifPresent(this::getOrSyncHeaderByHash);
+
+      return ForkchoiceResult.withFailure(SYNCING, null, Optional.empty());
+    }
+
+    LOG.info(
+            "Consensus fork-choice-update: head: {}, finalized: {}, safeBlockHash: {}",
+            newHeadBlockHash,
+            finalizedBlockHash,
+            safeBlockHash);
+
+    if (!isValidForkchoiceState(
+            safeBlockHash, finalizedBlockHash, newHead.get())) {
+      return ForkchoiceResult.withFailure(INVALID_FORKCHOICE_STATE, null, Optional.empty());
+    }
+
+    // TODO: post-merge cleanup, this should be unnecessary after merge
+    if (!latestValidAncestorDescendsFromTerminal(newHead.get())) {
+      return ForkchoiceResult.withFailure(INVALID_TERMINAL_BLOCK, "New head block" + newHeadBlockHash + " did not descend from the terminal block", Optional.empty());
+    }
+
     MutableBlockchain blockchain = protocolContext.getBlockchain();
     Optional<BlockHeader> currentFinalized = mergeContext.getFinalized();
     final Optional<BlockHeader> newFinalized = blockchain.getBlockHeader(finalizedBlockHash);
 
-    final Optional<Hash> latestValid = getLatestValidAncestor(newHead);
+    final Optional<Hash> latestValid = getLatestValidAncestor(newHeadBlockHash);
 
     if (currentFinalized.isPresent()
         && newFinalized.isPresent()
         && !isDescendantOf(currentFinalized.get(), newFinalized.get())) {
       return ForkchoiceResult.withFailure(
-          String.format(
+              INVALID,
+              String.format(
               "new finalized block %s is not a descendant of current finalized block %s",
               finalizedBlockHash, currentFinalized.get().getBlockHash()),
           latestValid);
@@ -276,25 +319,26 @@ public class MergeCoordinator implements MergeMiningCoordinator {
         newFinalized
             .map(Optional::of)
             .orElse(currentFinalized)
-            .filter(finalized -> !isDescendantOf(finalized, newHead))
+            .filter(finalized -> !isDescendantOf(finalized, newHead.get()))
             .map(
                 finalized ->
                     String.format(
                         "new head block %s is not a descendant of current finalized block %s",
-                        newHead.getBlockHash(), finalized.getBlockHash()));
+                        newHeadBlockHash, finalized.getBlockHash()));
 
     if (descendantError.isPresent()) {
-      return ForkchoiceResult.withFailure(descendantError.get(), latestValid);
+      return ForkchoiceResult.withFailure(INVALID, descendantError.get(), latestValid);
     }
 
-    Optional<BlockHeader> parentOfNewHead = blockchain.getBlockHeader(newHead.getParentHash());
+    Optional<BlockHeader> parentOfNewHead = blockchain.getBlockHeader(newHeadBlockHash);
     if (parentOfNewHead.isPresent()
-        && parentOfNewHead.get().getTimestamp() >= newHead.getTimestamp()) {
-      return ForkchoiceResult.withFailure(
+        && parentOfNewHead.get().getTimestamp() >= newHead.get().getTimestamp()) {
+      return ForkchoiceResult.withFailure(INVALID,
           "new head timestamp not greater than parent", latestValid);
     }
+
     // set the new head
-    blockchain.rewindToBlock(newHead.getHash());
+    blockchain.rewindToBlock(newHeadBlockHash);
 
     // set and persist the new finalized block if it is present
     newFinalized.ifPresent(
@@ -311,7 +355,7 @@ public class MergeCoordinator implements MergeMiningCoordinator {
               mergeContext.setSafeBlock(newSafeBlock);
             });
 
-    return ForkchoiceResult.withResult(newFinalized, Optional.of(newHead));
+    return ForkchoiceResult.withResult(newFinalized, newHead);
   }
 
   @Override
@@ -474,6 +518,53 @@ public class MergeCoordinator implements MergeMiningCoordinator {
     // neither matching nor is the ancestor block height lower than newBlock
     return false;
   }
+
+  private boolean isValidForkchoiceState(
+          final Hash safeBlockHash, final Hash finalizedBlockHash, final BlockHeader newBlock) {
+    Optional<BlockHeader> maybeFinalizedBlock = Optional.empty();
+
+    if (!finalizedBlockHash.isZero()) {
+      maybeFinalizedBlock = protocolContext.getBlockchain().getBlockHeader(finalizedBlockHash);
+
+      // if the finalized block hash is not zero, we always need to have its block, because we
+      // only do this check once we have finished syncing
+      if (maybeFinalizedBlock.isEmpty()) {
+        return false;
+      }
+
+      // a valid finalized block must be an ancestor of the new head
+      if (!isDescendantOf(maybeFinalizedBlock.get(), newBlock)) {
+        return false;
+      }
+    }
+
+    // A zero value is only allowed, if the transition block is not yet finalized.
+    // Once we have at least one finalized block, the transition block has either been finalized
+    // directly
+    // or through one of its descendants.
+    if (safeBlockHash.isZero()) {
+      return finalizedBlockHash.isZero();
+    }
+
+    final Optional<BlockHeader> maybeSafeBlock =
+            protocolContext.getBlockchain().getBlockHeader(safeBlockHash);
+
+    // if the safe block hash is not zero, we always need to have its block, because we
+    // only do this check once we have finished syncing
+    if (maybeSafeBlock.isEmpty()) {
+      return false;
+    }
+
+    // a valid safe block must be a descendant of the finalized block
+    if (maybeFinalizedBlock.isPresent()
+            && !isDescendantOf(maybeFinalizedBlock.get(), maybeSafeBlock.get())) {
+      return false;
+    }
+
+    // a valid safe block must be an ancestor of the new block
+    return isDescendantOf(maybeSafeBlock.get(), newBlock);
+  }
+
 
   @FunctionalInterface
   interface MergeBlockCreatorFactory {

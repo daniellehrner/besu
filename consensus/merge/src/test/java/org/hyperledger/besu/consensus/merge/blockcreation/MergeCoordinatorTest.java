@@ -143,7 +143,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
 
     ForkchoiceResult result =
         coordinator.updateForkChoice(
-            childHeader, terminalHeader.getHash(), terminalHeader.getHash());
+            childHeader.getHash(), terminalHeader.getHash(), terminalHeader.getHash());
 
     assertThat(result.isSuccessful()).isFalse();
     assertThat(result.getErrorMessage()).isPresent();
@@ -220,7 +220,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
     coordinator.executeBlock(headBlock);
 
     coordinator.updateForkChoice(
-        headBlockHeader, firstFinalizedBlock.getHash(), firstFinalizedBlock.getHash());
+        headBlockHeader.getHash(), firstFinalizedBlock.getHash(), firstFinalizedBlock.getHash());
 
     verify(blockchain).setFinalized(firstFinalizedBlock.getHash());
     verify(mergeContext).setFinalized(firstFinalizedHeader);
@@ -248,7 +248,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
     coordinator.executeBlock(headBlock);
 
     coordinator.updateForkChoice(
-        headBlockHeader, lastFinalizedBlock.getHash(), lastFinalizedBlock.getHash());
+        headBlockHeader.getHash(), lastFinalizedBlock.getHash(), lastFinalizedBlock.getHash());
 
     verify(blockchain).setFinalized(lastFinalizedBlock.getHash());
     verify(mergeContext).setFinalized(lastFinalizedHeader);
@@ -281,7 +281,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
         .thenReturn(Optional.of(headBlockHeader));
     var res =
         coordinator.updateForkChoice(
-            headBlockHeader, lastFinalizedBlock.getHash(), lastFinalizedBlock.getHash());
+            headBlockHeader.getHash(), lastFinalizedBlock.getHash(), lastFinalizedBlock.getHash());
     assertThat(res.isFailed()).isTrue();
 
     verify(blockchain, never()).setFinalized(lastFinalizedBlock.getHash());
@@ -315,7 +315,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
         .thenReturn(Optional.of(headBlockHeader));
     var res =
         coordinator.updateForkChoice(
-            headBlockHeader, lastFinalizedBlock.getHash(), lastFinalizedBlock.getHash());
+            headBlockHeader.getHash(), lastFinalizedBlock.getHash(), lastFinalizedBlock.getHash());
     assertThat(res.isSuccessful()).isFalse();
     assertThat(res.isFailed()).isTrue();
 
@@ -349,7 +349,7 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
         .thenReturn(Optional.of(headBlockHeader));
     var res =
         coordinator.updateForkChoice(
-            headBlockHeader, lastFinalizedBlock.getHash(), lastFinalizedBlock.getHash());
+            headBlockHeader.getHash(), lastFinalizedBlock.getHash(), lastFinalizedBlock.getHash());
     assertThat(res.isSuccessful()).isFalse();
     assertThat(res.isFailed()).isTrue();
 

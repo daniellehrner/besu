@@ -35,8 +35,7 @@ public interface MergeMiningCoordinator extends MiningCoordinator {
 
   Result executeBlock(final Block block);
 
-  ForkchoiceResult updateForkChoice(
-      final BlockHeader newHead, final Hash finalizedBlockHash, final Hash safeBlockHash);
+  ForkchoiceResult updateForkChoice(final Hash newHeadBlockHash, final Hash finalizedBlockHash, final Hash safeBlockHash);
 
   Optional<Hash> getLatestValidAncestor(Hash blockHash);
 
@@ -55,16 +54,28 @@ public interface MergeMiningCoordinator extends MiningCoordinator {
   boolean isMiningBeforeMerge();
 
   class ForkchoiceResult {
+    public enum Status {
+      VALID,
+      SYNCING,
+      INVALID,
+      INVALID_TERMINAL_BLOCK,
+      INVALID_FORKCHOICE_STATE
+    }
+
+    private final Status status;
     private final Optional<String> errorMessage;
     private final Optional<BlockHeader> newFinalized;
     private final Optional<BlockHeader> newHead;
     private final Optional<Hash> latestValid;
 
     private ForkchoiceResult(
+        final Status status,
         final Optional<String> errorMessage,
         final Optional<BlockHeader> newFinalized,
         final Optional<BlockHeader> newHead,
-        final Optional<Hash> latestValid) {
+        final Optional<Hash> latestValid
+        ) {
+      this.status = status;
       this.errorMessage = errorMessage;
       this.newFinalized = newFinalized;
       this.newHead = newHead;
@@ -72,14 +83,18 @@ public interface MergeMiningCoordinator extends MiningCoordinator {
     }
 
     public static ForkchoiceResult withFailure(
-        final String errorMessage, final Optional<Hash> latestValid) {
+            final Status status, final String errorMessage, final Optional<Hash> latestValid) {
       return new ForkchoiceResult(
-          Optional.of(errorMessage), Optional.empty(), Optional.empty(), latestValid);
+              status, Optional.ofNullable(errorMessage), Optional.empty(), Optional.empty(), latestValid);
     }
 
     public static ForkchoiceResult withResult(
         final Optional<BlockHeader> newFinalized, final Optional<BlockHeader> newHead) {
-      return new ForkchoiceResult(Optional.empty(), newFinalized, newHead, Optional.empty());
+      return new ForkchoiceResult(Status.VALID, Optional.empty(), newFinalized, newHead, Optional.empty());
+    }
+
+    public Status getStatus() {
+      return status;
     }
 
     public Optional<String> getErrorMessage() {
@@ -99,15 +114,11 @@ public interface MergeMiningCoordinator extends MiningCoordinator {
     }
 
     public boolean isFailed() {
-      return errorMessage.isPresent();
+      return !isSuccessful();
     }
 
     public boolean isSuccessful() {
-      return newHead.isPresent() || newFinalized.isPresent();
-    }
-
-    public boolean isUnknown() {
-      return errorMessage.isEmpty() && newFinalized.isEmpty();
+      return status == Status.VALID;
     }
   }
 }
