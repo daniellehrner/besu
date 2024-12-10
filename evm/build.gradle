@@ -38,6 +38,7 @@ dependencies {
   implementation project(':datatypes')
   implementation project(':ethereum:rlp')
 
+  implementation 'com.dynatrace.hash4j:hash4j'
   implementation 'com.github.ben-manes.caffeine:caffeine'
   implementation 'com.google.guava:guava'
   implementation 'net.java.dev.jna:jna'

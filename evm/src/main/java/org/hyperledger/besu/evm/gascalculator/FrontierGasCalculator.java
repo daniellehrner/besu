@@ -28,11 +28,19 @@ import org.hyperledger.besu.evm.operation.ExpOperation;
 
 import java.util.function.Supplier;
 
+import com.dynatrace.hash4j.hashing.Hasher64;
+import com.dynatrace.hash4j.hashing.Hashing;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** The Frontier gas calculator. */
 public class FrontierGasCalculator implements GasCalculator {
+
+  private static final Logger LOG = LoggerFactory.getLogger(GasCalculator.class.getSimpleName());
 
   private static final long TX_DATA_ZERO_COST = 4L;
 
@@ -122,13 +130,37 @@ public class FrontierGasCalculator implements GasCalculator {
 
   private static final long SELF_DESTRUCT_REFUND_AMOUNT = 24_000L;
 
+  protected final Cache<Long, Long> intrinsicGasCache;
+  protected final Hasher64 cacheKeyHashing;
+  protected long cacheStatCounter = 0;
+
   /** Default constructor. */
   public FrontierGasCalculator() {
-    // Default Constructor, for JavaDoc lint
+    intrinsicGasCache = Caffeine.newBuilder().maximumSize(10_000L).recordStats().build();
+    cacheKeyHashing = Hashing.xxh3_64();
   }
 
   @Override
   public long transactionIntrinsicGasCost(
+      final Bytes payload, final boolean isContractCreation, final long evmGasUsed) {
+    final long cacheKey =
+        cacheKeyHashing
+            .hashStream()
+            .putBytes(payload.toArray())
+            .putBoolean(isContractCreation)
+            .putLong(evmGasUsed)
+            .getAsLong();
+
+    if ((cacheStatCounter % 1_000) == 0) {
+      LOG.info("Intrinsic gas cache stats: {}", intrinsicGasCache.stats());
+    }
+
+    return intrinsicGasCache.get(
+        cacheKey,
+        ck -> computeTransactionIntrinsicGasCost(payload, isContractCreation, evmGasUsed));
+  }
+
+  private long computeTransactionIntrinsicGasCost(
       final Bytes payload, final boolean isContractCreation, final long evmGasUsed) {
     final long dynamicIntrinsicGasCost =
         dynamicIntrinsicGasCost(payload, isContractCreation, evmGasUsed);
@@ -169,7 +201,7 @@ public class FrontierGasCalculator implements GasCalculator {
     int zeros = 0;
     for (int i = 0; i < payload.size(); i++) {
       if (payload.get(i) == 0) {
-        ++zeros;
+        zeros += 1;
       }
     }
     return zeros;

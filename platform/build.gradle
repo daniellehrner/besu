@@ -66,6 +66,8 @@ dependencies {
     api project(':testutil')
     api project(':util')
 
+    api 'com.dynatrace.hash4j:hash4j:0.19.0'
+
     api 'com.github.ben-manes.caffeine:caffeine:3.1.8'
 
     api 'com.github.oshi:oshi-core:6.6.5'
