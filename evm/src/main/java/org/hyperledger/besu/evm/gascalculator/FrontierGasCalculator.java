@@ -152,7 +152,7 @@ public class FrontierGasCalculator implements GasCalculator {
             .getAsLong();
 
     cacheStatCounter++;
-    if ((cacheStatCounter % 1_000_000) == 0) {
+    if ((cacheStatCounter % 100_000) == 0) {
       LOG.info("Intrinsic gas cache stats: {}", intrinsicGasCache.stats());
     }
 
