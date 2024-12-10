@@ -40,7 +40,7 @@ import org.slf4j.LoggerFactory;
 /** The Frontier gas calculator. */
 public class FrontierGasCalculator implements GasCalculator {
 
-  private static final Logger LOG = LoggerFactory.getLogger(GasCalculator.class.getSimpleName());
+//  private static final Logger LOG = LoggerFactory.getLogger(GasCalculator.class.getSimpleName());
 
   private static final long TX_DATA_ZERO_COST = 4L;
 
@@ -132,11 +132,11 @@ public class FrontierGasCalculator implements GasCalculator {
 
   protected final Cache<Long, Long> intrinsicGasCache;
   protected final Hasher64 cacheKeyHashing;
-  protected long cacheStatCounter = 0;
+//  protected long cacheStatCounter = 0;
 
   /** Default constructor. */
   public FrontierGasCalculator() {
-    intrinsicGasCache = Caffeine.newBuilder().maximumSize(10_000L).recordStats().build();
+    intrinsicGasCache = Caffeine.newBuilder().maximumSize(30_000L).build();
     cacheKeyHashing = Hashing.xxh3_64();
   }
 
@@ -151,10 +151,10 @@ public class FrontierGasCalculator implements GasCalculator {
             .putLong(evmGasUsed)
             .getAsLong();
 
-    cacheStatCounter++;
-    if ((cacheStatCounter % 100_000) == 0) {
-      LOG.info("Intrinsic gas cache stats: {}", intrinsicGasCache.stats());
-    }
+//    cacheStatCounter++;
+//    if ((cacheStatCounter % 100_000) == 0) {
+//      LOG.info("Intrinsic gas cache stats: {}", intrinsicGasCache.stats());
+//    }
 
     return intrinsicGasCache.get(
         cacheKey,
