@@ -151,7 +151,8 @@ public class FrontierGasCalculator implements GasCalculator {
             .putLong(evmGasUsed)
             .getAsLong();
 
-    if ((cacheStatCounter % 1_000) == 0) {
+    cacheStatCounter++;
+    if ((cacheStatCounter % 1_000_000) == 0) {
       LOG.info("Intrinsic gas cache stats: {}", intrinsicGasCache.stats());
     }
 
