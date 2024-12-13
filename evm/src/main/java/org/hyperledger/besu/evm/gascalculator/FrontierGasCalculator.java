@@ -34,8 +34,8 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+//import org.slf4j.Logger;
+//import org.slf4j.LoggerFactory;
 
 /** The Frontier gas calculator. */
 public class FrontierGasCalculator implements GasCalculator {
@@ -137,7 +137,10 @@ public class FrontierGasCalculator implements GasCalculator {
 
   /** Default constructor. */
   public FrontierGasCalculator() {
-    intrinsicGasCache = Caffeine.newBuilder().maximumSize(30_000L).build();
+    intrinsicGasCache = Caffeine.newBuilder()
+      .maximumSize(10_000L)
+//      .recordStats()
+      .build();
     cacheKeyHashing = Hashing.xxh3_64();
   }
 
@@ -153,7 +156,7 @@ public class FrontierGasCalculator implements GasCalculator {
             .getAsLong();
 
 //    cacheStatCounter++;
-//    if ((cacheStatCounter % 100_000) == 0) {
+//    if ((cacheStatCounter % 50_000) == 0) {
 //      LOG.info("Intrinsic gas cache stats: {}", intrinsicGasCache.stats());
 //    }
 
