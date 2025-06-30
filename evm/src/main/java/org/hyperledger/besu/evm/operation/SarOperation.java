@@ -14,22 +14,16 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.apache.tuweni.bytes.Bytes32.leftPad;
-
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Sar operation. */
 public class SarOperation extends AbstractFixedCostOperation {
 
   /** The Sar operation success result. */
   static final OperationResult sarSuccess = new OperationResult(3, null);
-
-  private static final Bytes ALL_BITS =
-      Bytes.fromHexString("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
 
   /**
    * Instantiates a new Sar operation.
@@ -53,28 +47,11 @@ public class SarOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    Bytes shiftAmount = frame.popStackItem();
-    final Bytes value = leftPad(frame.popStackItem());
-    final boolean negativeNumber = value.get(0) < 0;
-    if (shiftAmount.size() > 4 && (shiftAmount = shiftAmount.trimLeadingZeros()).size() > 4) {
-      frame.pushStackItem(negativeNumber ? ALL_BITS : Bytes.EMPTY);
-    } else {
-      final int shiftAmountInt = shiftAmount.toInt();
+    final int shift = frame.popStackItem().clampedToInt();
+    final Word256 value = frame.popStackItem();
 
-      if (shiftAmountInt >= 256 || shiftAmountInt < 0) {
-        frame.pushStackItem(negativeNumber ? ALL_BITS : Bytes.EMPTY);
-      } else {
-        // first perform standard shift right.
-        Bytes result = value.shiftRight(shiftAmountInt);
+    frame.pushStackItem(value.sar(shift));
 
-        // if a negative number, carry through the sign.
-        if (negativeNumber) {
-          final Bytes significantBits = ALL_BITS.shiftLeft(256 - shiftAmountInt);
-          result = result.or(significantBits);
-        }
-        frame.pushStackItem(result);
-      }
-    }
     return sarSuccess;
   }
 }

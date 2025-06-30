@@ -17,11 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import java.math.BigInteger;
-
-import org.apache.tuweni.bytes.Bytes;
-import org.apache.tuweni.bytes.Bytes32;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Sub (Subtract) operation. */
 public class SubOperation extends AbstractFixedCostOperation {
@@ -51,20 +47,10 @@ public class SubOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    final BigInteger value0 = new BigInteger(1, frame.popStackItem().toArrayUnsafe());
-    final BigInteger value1 = new BigInteger(1, frame.popStackItem().toArrayUnsafe());
+    final Word256 value0 = frame.popStackItem();
+    final Word256 value1 = frame.popStackItem();
 
-    final BigInteger result = value0.subtract(value1);
-
-    byte[] resultArray = result.toByteArray();
-    int length = resultArray.length;
-    if (length >= 32) {
-      frame.pushStackItem(Bytes.wrap(resultArray, length - 32, 32));
-    } else if (result.signum() < 0) {
-      frame.pushStackItem(Bytes32.leftPad(Bytes.wrap(resultArray), (byte) -1));
-    } else {
-      frame.pushStackItem(Bytes.wrap(resultArray));
-    }
+    frame.pushStackItem(value0.sub(value1));
 
     return subSuccess;
   }

@@ -19,8 +19,7 @@ import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Jump operation. */
 public class JumpOperation extends AbstractFixedCostOperation {
@@ -51,19 +50,20 @@ public class JumpOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    final int jumpDestination;
-    final Bytes bytes = frame.popStackItem().trimLeadingZeros();
-    try {
-      jumpDestination = bytes.toInt();
-    } catch (final RuntimeException iae) {
+    final Word256 destination = frame.popStackItem();
+
+    if (!destination.fitsInt()) {
       return invalidJumpResponse;
     }
+
+    final int jumpDestination = destination.toInt();
     final Code code = frame.getCode();
+
     if (code.isJumpDestInvalid(jumpDestination)) {
       return invalidJumpResponse;
-    } else {
-      frame.setPC(jumpDestination);
-      return jumpResponse;
     }
+
+    frame.setPC(jumpDestination);
+    return jumpResponse;
   }
 }

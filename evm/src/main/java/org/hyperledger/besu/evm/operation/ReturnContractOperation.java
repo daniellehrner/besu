@@ -14,8 +14,6 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
-
 import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
@@ -51,8 +49,8 @@ public class ReturnContractOperation extends AbstractOperation {
     int pc = frame.getPC();
     int index = code.readU8(pc + 1);
 
-    final long from = clampedToLong(frame.popStackItem());
-    final long length = clampedToLong(frame.popStackItem());
+    final long from = frame.popStackItem().clampedToLong();
+    final long length = frame.popStackItem().clampedToLong();
 
     final long cost = gasCalculator().memoryExpansionGasCost(frame, from, length);
     if (frame.getRemainingGas() < cost) {

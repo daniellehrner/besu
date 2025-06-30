@@ -14,14 +14,15 @@
  */
 package org.hyperledger.besu.evm.operation;
 
+import org.apache.tuweni.units.bigints.UInt256;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.internal.UnderflowException;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import org.apache.tuweni.bytes.Bytes32;
-import org.apache.tuweni.units.bigints.UInt256;
 
 /** Implements the TLOAD operation defined in EIP-1153 */
 public class TLoadOperation extends AbstractOperation {
@@ -39,11 +40,13 @@ public class TLoadOperation extends AbstractOperation {
   public OperationResult execute(final MessageFrame frame, final EVM evm) {
     final long cost = gasCalculator().getTransientLoadOperationGasCost();
     try {
-      final Bytes32 slot = UInt256.fromBytes(frame.popStackItem());
+      final UInt256 slot = UInt256.fromBytes(Bytes32.wrap(frame.popStackItem().toBytes()));
       if (frame.getRemainingGas() < cost) {
         return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
       } else {
-        frame.pushStackItem(frame.getTransientStorageValue(frame.getRecipientAddress(), slot));
+        frame.pushStackItem(
+            Word256.fromBytes(
+                frame.getTransientStorageValue(frame.getRecipientAddress(), slot).toArrayUnsafe()));
 
         return new OperationResult(cost, null);
       }

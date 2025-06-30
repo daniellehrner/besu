@@ -17,6 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -28,6 +29,7 @@ public class ChainIdOperation extends AbstractFixedCostOperation {
   public static final int OPCODE = 0x46;
 
   private final Bytes32 chainId;
+  private final Word256 chainIdWord256;
 
   /**
    * Instantiates a new Chain id operation.
@@ -38,6 +40,7 @@ public class ChainIdOperation extends AbstractFixedCostOperation {
   public ChainIdOperation(final GasCalculator gasCalculator, final Bytes32 chainId) {
     super(OPCODE, "CHAINID", 0, 1, gasCalculator, gasCalculator.getBaseTierGasCost());
     this.chainId = chainId;
+    this.chainIdWord256 = Word256.fromBytes(chainId.toArrayUnsafe());
   }
 
   /**
@@ -52,7 +55,7 @@ public class ChainIdOperation extends AbstractFixedCostOperation {
   @Override
   public Operation.OperationResult executeFixedCostOperation(
       final MessageFrame frame, final EVM evm) {
-    frame.pushStackItem(chainId);
+    frame.pushStackItem(chainIdWord256);
 
     return successResponse;
   }

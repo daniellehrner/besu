@@ -17,8 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Push operation. */
 public class PushOperation extends AbstractFixedCostOperation {
@@ -69,22 +68,14 @@ public class PushOperation extends AbstractFixedCostOperation {
   public static OperationResult staticOperation(
       final MessageFrame frame, final byte[] code, final int pc, final int pushSize) {
     final int copyStart = pc + 1;
-    Bytes push;
-    if (code.length <= copyStart) {
-      push = Bytes.EMPTY;
-    } else {
+    final byte[] padded = new byte[32];
+
+    if (copyStart < code.length) {
       final int copyLength = Math.min(pushSize, code.length - pc - 1);
-      final int rightPad = pushSize - copyLength;
-      if (rightPad == 0) {
-        push = Bytes.wrap(code, copyStart, copyLength);
-      } else {
-        // Right Pad the push with 0s up to pushSize if greater than the copyLength
-        var bytecodeLocal = new byte[pushSize];
-        System.arraycopy(code, copyStart, bytecodeLocal, 0, copyLength);
-        push = Bytes.wrap(bytecodeLocal);
-      }
+      System.arraycopy(code, copyStart, padded, 32 - copyLength, copyLength); // right-align
     }
-    frame.pushStackItem(push);
+
+    frame.pushStackItem(Word256.fromBytes(padded));
     frame.setPC(pc + pushSize);
     return pushSuccess;
   }

@@ -17,7 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-import org.hyperledger.besu.evm.internal.Words;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import org.apache.tuweni.bytes.Bytes;
 
@@ -37,7 +37,7 @@ public class ReturnDataSizeOperation extends AbstractFixedCostOperation {
   public Operation.OperationResult executeFixedCostOperation(
       final MessageFrame frame, final EVM evm) {
     final Bytes returnData = frame.getReturnData();
-    frame.pushStackItem(Words.longBytes(returnData.size()));
+    frame.pushStackItem(Word256.fromInt(returnData.size()));
 
     return successResponse;
   }

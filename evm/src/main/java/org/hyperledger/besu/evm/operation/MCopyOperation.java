@@ -14,8 +14,6 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
-
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -35,9 +33,9 @@ public class MCopyOperation extends AbstractOperation {
 
   @Override
   public OperationResult execute(final MessageFrame frame, final EVM evm) {
-    final long dst = clampedToLong(frame.popStackItem());
-    final long src = clampedToLong(frame.popStackItem());
-    final long length = clampedToLong(frame.popStackItem());
+    final long dst = frame.popStackItem().clampedToLong();
+    final long src = frame.popStackItem().clampedToLong();
+    final long length = frame.popStackItem().clampedToLong();
 
     final long cost = gasCalculator().dataCopyOperationGasCost(frame, Math.max(src, dst), length);
     if (frame.getRemainingGas() < cost) {

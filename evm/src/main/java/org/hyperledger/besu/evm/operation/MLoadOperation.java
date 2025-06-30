@@ -14,14 +14,11 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
-
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The M load operation. */
 public class MLoadOperation extends AbstractOperation {
@@ -37,14 +34,14 @@ public class MLoadOperation extends AbstractOperation {
 
   @Override
   public OperationResult execute(final MessageFrame frame, final EVM evm) {
-    final long location = clampedToLong(frame.popStackItem());
+    final long location = frame.popStackItem().clampedToLong();
 
     final long cost = gasCalculator().mLoadOperationGasCost(frame, location);
     if (frame.getRemainingGas() < cost) {
       return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
     }
 
-    final Bytes value = frame.readMutableMemory(location, 32, true).copy();
+    final Word256 value = Word256.fromBytes(frame.readMemory(location, 32, true).toArrayUnsafe());
 
     frame.pushStackItem(value);
     return new OperationResult(cost, null);

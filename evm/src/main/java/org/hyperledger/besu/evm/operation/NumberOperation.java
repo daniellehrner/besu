@@ -17,7 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-import org.hyperledger.besu.evm.internal.Words;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Number operation. */
 public class NumberOperation extends AbstractFixedCostOperation {
@@ -34,8 +34,8 @@ public class NumberOperation extends AbstractFixedCostOperation {
   @Override
   public Operation.OperationResult executeFixedCostOperation(
       final MessageFrame frame, final EVM evm) {
-    final long number = frame.getBlockValues().getNumber();
-    frame.pushStackItem(Words.longBytes(number));
+    final Word256 number = Word256.fromLong(frame.getBlockValues().getNumber());
+    frame.pushStackItem(number);
 
     return successResponse;
   }

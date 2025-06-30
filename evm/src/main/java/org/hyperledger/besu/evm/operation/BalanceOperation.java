@@ -23,8 +23,7 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.internal.OverflowException;
 import org.hyperledger.besu.evm.internal.UnderflowException;
 import org.hyperledger.besu.evm.internal.Words;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Balance operation. */
 public class BalanceOperation extends AbstractOperation {
@@ -54,17 +53,22 @@ public class BalanceOperation extends AbstractOperation {
   @Override
   public OperationResult execute(final MessageFrame frame, final EVM evm) {
     try {
-      final Address address = Words.toAddress(frame.popStackItem());
+      final Word256 addressWord = frame.popStackItem();
+      final Address address = Words.toAddress(addressWord);
       final boolean accountIsWarm =
           frame.warmUpAddress(address) || gasCalculator().isPrecompile(address);
       final long cost = cost(accountIsWarm);
+
       if (frame.getRemainingGas() < cost) {
         return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
-      } else {
-        final Account account = frame.getWorldUpdater().get(address);
-        frame.pushStackItem(account == null ? Bytes.EMPTY : account.getBalance());
-        return new OperationResult(cost, null);
       }
+
+      final Account account = frame.getWorldUpdater().get(address);
+      final Word256 balance =
+          account == null ? Word256.ZERO : Word256.fromBytes(account.getBalance().toArray());
+      frame.pushStackItem(balance);
+      return new OperationResult(cost, null);
+
     } catch (final UnderflowException ufe) {
       return new OperationResult(cost(true), ExceptionalHaltReason.INSUFFICIENT_STACK_ITEMS);
     } catch (final OverflowException ofe) {

@@ -31,6 +31,7 @@ import org.hyperledger.besu.evm.internal.Words;
 import java.util.Objects;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 
 /** The PAY operation */
 public class PayOperation extends AbstractOperation {
@@ -50,14 +51,14 @@ public class PayOperation extends AbstractOperation {
       return new OperationResult(0, ExceptionalHaltReason.ILLEGAL_STATE_CHANGE);
     }
 
-    final Bytes toAddressBytes = frame.getStackItem(0);
+    final Bytes toAddressBytes = Bytes32.wrap(frame.getStackItem(0).toBytes());
     final int numberOfLowBytes = toAddressBytes.size() - toAddressBytes.numberOfLeadingZeroBytes();
     if (numberOfLowBytes > 20) {
       return new OperationResult(0, ExceptionalHaltReason.ADDRESS_OUT_OF_RANGE);
     }
 
     final Address to = Words.toAddress(toAddressBytes);
-    final Wei value = Wei.wrap(frame.getStackItem(1));
+    final Wei value = Wei.wrap(Bytes32.wrap(frame.getStackItem(1).toBytes()));
     final boolean hasValue = value.greaterThan(Wei.ZERO);
     final Account recipient = frame.getWorldUpdater().get(to);
 

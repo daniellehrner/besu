@@ -17,10 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
-import org.apache.tuweni.bytes.Bytes32;
-import org.apache.tuweni.bytes.MutableBytes32;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Call data load operation. */
 public class CallDataLoadOperation extends AbstractFixedCostOperation {
@@ -35,33 +32,31 @@ public class CallDataLoadOperation extends AbstractFixedCostOperation {
   }
 
   @Override
-  public Operation.OperationResult executeFixedCostOperation(
-      final MessageFrame frame, final EVM evm) {
-    final Bytes startWord = frame.popStackItem().trimLeadingZeros();
+  public OperationResult executeFixedCostOperation(final MessageFrame frame, final EVM evm) {
+    final Word256 offsetWord = frame.popStackItem();
 
-    // If the start index doesn't fit in an int, it comes after anything in data, and so the
-    // returned
-    // word should be zero.
-    if (startWord.size() > 4) {
-      frame.pushStackItem(Bytes.EMPTY);
+    // If offset doesn't fit into int, return zero
+    if (offsetWord.bitLength() > 31) {
+      frame.pushStackItem(Word256.ZERO);
       return successResponse;
     }
 
-    final int offset = startWord.toInt();
+    final int offset = offsetWord.toInt();
     if (offset < 0) {
-      frame.pushStackItem(Bytes.EMPTY);
+      frame.pushStackItem(Word256.ZERO);
       return successResponse;
     }
-    final Bytes data = frame.getInputData();
-    final MutableBytes32 res = MutableBytes32.create();
-    if (offset < data.size()) {
-      final Bytes toCopy = data.slice(offset, Math.min(Bytes32.SIZE, data.size() - offset));
-      toCopy.copyTo(res, 0);
-      frame.pushStackItem(res.copy());
-    } else {
-      frame.pushStackItem(Bytes.EMPTY);
+
+    final byte[] input = frame.getInputData().toArrayUnsafe();
+    final byte[] result = new byte[32];
+
+    // Copy as much as is available from input, rest remains zero
+    final int available = Math.max(0, Math.min(32, input.length - offset));
+    if (available > 0) {
+      System.arraycopy(input, offset, result, 0, available);
     }
 
+    frame.pushStackItem(Word256.fromBytes(result));
     return successResponse;
   }
 }

@@ -14,13 +14,10 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.apache.tuweni.bytes.Bytes32.leftPad;
-
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Shr (Shift Right) operation. */
 public class ShrOperation extends AbstractFixedCostOperation {
@@ -50,20 +47,14 @@ public class ShrOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    Bytes shiftAmount = frame.popStackItem();
-    if (shiftAmount.size() > 4 && (shiftAmount = shiftAmount.trimLeadingZeros()).size() > 4) {
-      frame.popStackItem();
-      frame.pushStackItem(Bytes.EMPTY);
-    } else {
-      final int shiftAmountInt = shiftAmount.toInt();
-      final Bytes value = leftPad(frame.popStackItem());
+    final Word256 shiftAmount = frame.popStackItem();
+    final Word256 value = frame.popStackItem();
 
-      if (shiftAmountInt >= 256 || shiftAmountInt < 0) {
-        frame.pushStackItem(Bytes.EMPTY);
-      } else {
-        frame.pushStackItem(value.shiftRight(shiftAmountInt));
-      }
-    }
+    final int shiftBits = shiftAmount.toInt();
+    final Word256 result =
+        (shiftBits >= 256 || shiftBits < 0) ? Word256.ZERO : value.shr(shiftBits);
+
+    frame.pushStackItem(result);
     return shrSuccess;
   }
 }

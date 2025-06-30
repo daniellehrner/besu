@@ -24,13 +24,14 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.internal.OverflowException;
 import org.hyperledger.besu.evm.internal.UnderflowException;
 import org.hyperledger.besu.evm.internal.Words;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import org.apache.tuweni.bytes.Bytes;
 
 /** The Ext code size operation. */
 public class ExtCodeSizeOperation extends AbstractOperation {
 
-  static final Bytes EOF_SIZE = Bytes.of(2);
+  static final Word256 EOF_SIZE = Word256.fromInt(2);
 
   private final boolean enableEIP3540;
 
@@ -79,9 +80,9 @@ public class ExtCodeSizeOperation extends AbstractOperation {
       } else {
         final Account account = frame.getWorldUpdater().get(address);
 
-        Bytes codeSize;
+        Word256 codeSize;
         if (account == null) {
-          codeSize = Bytes.EMPTY;
+          codeSize = Word256.ZERO;
         } else {
           final Bytes code = account.getCode();
           if (enableEIP3540
@@ -90,7 +91,7 @@ public class ExtCodeSizeOperation extends AbstractOperation {
               && code.get(1) == 0) {
             codeSize = EOF_SIZE;
           } else {
-            codeSize = Words.intBytes(code.size());
+            codeSize = Word256.fromInt(code.size());
           }
         }
         frame.pushStackItem(codeSize);

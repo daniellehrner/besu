@@ -35,6 +35,7 @@ import java.util.OptionalLong;
 import java.util.TreeMap;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 
 public class DebugOperationTracer implements OperationTracer {
@@ -248,7 +249,7 @@ public class DebugOperationTracer implements OperationTracer {
     final Bytes[] stackContents = new Bytes[frame.stackSize()];
     for (int i = 0; i < stackContents.length; i++) {
       // Record stack contents in reverse
-      stackContents[i] = frame.getStackItem(stackContents.length - i - 1);
+      stackContents[i] = Bytes32.wrap(frame.getStackItem(stackContents.length - i - 1).toBytes());
     }
     return Optional.of(stackContents);
   }

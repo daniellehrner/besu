@@ -14,14 +14,11 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.hyperledger.besu.evm.internal.Words.clampedToInt;
-
 import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Data load operation. */
 public class DataLoadOperation extends AbstractFixedCostOperation {
@@ -42,9 +39,9 @@ public class DataLoadOperation extends AbstractFixedCostOperation {
     if (code.getEofVersion() == 0) {
       return InvalidOperation.INVALID_RESULT;
     }
-    final int sourceOffset = clampedToInt(frame.popStackItem());
+    final int sourceOffset = frame.popStackItem().clampedToInt();
 
-    final Bytes data = code.getData(sourceOffset, 32);
+    final Word256 data = Word256.fromBytes(code.getData(sourceOffset, 32).toArrayUnsafe());
     frame.pushStackItem(data);
 
     return successResponse;

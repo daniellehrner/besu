@@ -17,6 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Origin operation. */
 public class OriginOperation extends AbstractFixedCostOperation {
@@ -33,7 +34,7 @@ public class OriginOperation extends AbstractFixedCostOperation {
   @Override
   public Operation.OperationResult executeFixedCostOperation(
       final MessageFrame frame, final EVM evm) {
-    frame.pushStackItem(frame.getOriginatorAddress());
+    frame.pushStackItem(Word256.fromBytes(frame.getOriginatorAddress().toArrayUnsafe()));
 
     return successResponse;
   }

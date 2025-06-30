@@ -33,6 +33,7 @@ import org.hyperledger.besu.evm.internal.StorageEntry;
 import org.hyperledger.besu.evm.internal.UnderflowException;
 import org.hyperledger.besu.evm.log.Log;
 import org.hyperledger.besu.evm.operation.Operation;
+import org.hyperledger.besu.evm.word256.Word256;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
 import java.util.ArrayDeque;
@@ -444,7 +445,7 @@ public class MessageFrame {
    * @return The item at the specified offset in the stack
    * @throws UnderflowException if the offset is out of range
    */
-  public Bytes getStackItem(final int offset) {
+  public Word256 getStackItem(final int offset) {
     return stack.get(offset);
   }
 
@@ -454,7 +455,7 @@ public class MessageFrame {
    * @return the item at the top of the stack
    * @throws UnderflowException if the stack is empty
    */
-  public Bytes popStackItem() {
+  public Word256 popStackItem() {
     return stack.pop();
   }
 
@@ -472,7 +473,7 @@ public class MessageFrame {
    *
    * @param value The value to push onto the stack.
    */
-  public void pushStackItem(final Bytes value) {
+  public void pushStackItem(final Word256 value) {
     stack.push(value);
   }
 
@@ -483,7 +484,7 @@ public class MessageFrame {
    * @param value The value to set the stack item to
    * @throws IllegalStateException if the stack is too small
    */
-  public void setStackItem(final int offset, final Bytes value) {
+  public void setStackItem(final int offset, final Word256 value) {
     stack.set(offset, value);
   }
 
@@ -590,18 +591,6 @@ public class MessageFrame {
   }
 
   /**
-   * Read bytes in memory as mutable. Contents should not be considered stable outside the scope of
-   * the current operation.
-   *
-   * @param offset The offset in memory
-   * @param length The length of the bytes to read
-   * @return The bytes in the specified range
-   */
-  public MutableBytes readMutableMemory(final long offset, final long length) {
-    return readMutableMemory(offset, length, false);
-  }
-
-  /**
    * Read bytes in memory without expanding the word capacity.
    *
    * @param offset The offset in memory
@@ -613,14 +602,14 @@ public class MessageFrame {
   }
 
   /**
-   * Read bytes in memory .
+   * Read bytes in memory.
    *
    * @param offset The offset in memory
    * @param length The length of the bytes to read
    * @return The bytes in the specified range
    */
   public Bytes readMemory(final long offset, final long length) {
-    return readMutableMemory(offset, length, false).copy();
+    return readMemory(offset, length, false);
   }
 
   /**
@@ -632,8 +621,7 @@ public class MessageFrame {
    * @param explicitMemoryRead true if triggered by a memory opcode, false otherwise
    * @return The bytes in the specified range
    */
-  public MutableBytes readMutableMemory(
-      final long offset, final long length, final boolean explicitMemoryRead) {
+  public Bytes readMemory(final long offset, final long length, final boolean explicitMemoryRead) {
     final MutableBytes memBytes = memory.getMutableBytes(offset, length);
     if (explicitMemoryRead) {
       setUpdatedMemory(offset, memBytes);
@@ -666,6 +654,11 @@ public class MessageFrame {
     writeMemory(offset, length, value, false);
   }
 
+  public void writeMemory(
+      final long offset, final Word256 value, final boolean explicitMemoryUpdate) {
+    writeMemory(offset, 32, Bytes32.wrap(value.toBytes()), explicitMemoryUpdate);
+  }
+
   /**
    * Write bytes to memory
    *
@@ -679,24 +672,6 @@ public class MessageFrame {
     memory.setBytes(offset, length, value);
     if (explicitMemoryUpdate) {
       setUpdatedMemory(offset, 0, length, value);
-    }
-  }
-
-  /**
-   * Copy the bytes from the value param into memory at the specified offset. In cases where the
-   * value does not have numBytes bytes the appropriate amount of zero bytes will be added before
-   * writing the value bytes.
-   *
-   * @param offset The offset in memory
-   * @param length The length of the bytes to write
-   * @param value The value to write
-   * @param explicitMemoryUpdate true if triggered by a memory opcode, false otherwise
-   */
-  public void writeMemoryRightAligned(
-      final long offset, final long length, final Bytes value, final boolean explicitMemoryUpdate) {
-    memory.setBytesRightAligned(offset, length, value);
-    if (explicitMemoryUpdate) {
-      setUpdatedMemoryRightAligned(offset, length, value);
     }
   }
 
@@ -767,22 +742,6 @@ public class MessageFrame {
         setUpdatedMemory(offset, paddedAnswer.copy());
       } else {
         setUpdatedMemory(offset, value.slice((int) sourceOffset, (int) length).copy());
-      }
-    }
-  }
-
-  private void setUpdatedMemoryRightAligned(
-      final long offset, final long length, final Bytes value) {
-    if (length > 0) {
-      final int srcSize = value.size();
-      if (length > srcSize) {
-        final MutableBytes paddedAnswer = MutableBytes.create((int) length);
-        if ((long) 0 < srcSize) {
-          value.slice(0, srcSize).copyTo(paddedAnswer, (int) (length - srcSize));
-        }
-        setUpdatedMemory(offset, paddedAnswer.copy());
-      } else {
-        setUpdatedMemory(offset, value.slice(0, (int) length).copy());
       }
     }
   }

@@ -15,7 +15,6 @@
 package org.hyperledger.besu.evm.operation;
 
 import static org.hyperledger.besu.evm.internal.Words.clampedAdd;
-import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.evm.EVM;
@@ -80,9 +79,9 @@ public class ExtCodeCopyOperation extends AbstractOperation {
   @Override
   public OperationResult execute(final MessageFrame frame, final EVM evm) {
     final Address address = Words.toAddress(frame.popStackItem());
-    final long memOffset = clampedToLong(frame.popStackItem());
-    final long sourceOffset = clampedToLong(frame.popStackItem());
-    final long numBytes = clampedToLong(frame.popStackItem());
+    final long memOffset = frame.popStackItem().clampedToLong();
+    final long sourceOffset = frame.popStackItem().clampedToLong();
+    final long numBytes = frame.popStackItem().clampedToLong();
 
     final boolean accountIsWarm =
         frame.warmUpAddress(address) || gasCalculator().isPrecompile(address);

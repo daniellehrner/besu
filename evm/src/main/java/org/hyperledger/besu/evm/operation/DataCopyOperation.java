@@ -14,8 +14,6 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.hyperledger.besu.evm.internal.Words.clampedToInt;
-
 import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
@@ -55,10 +53,11 @@ public class DataCopyOperation extends AbstractOperation {
     if (code.getEofVersion() == 0) {
       return InvalidOperation.INVALID_RESULT;
     }
-    final int memOffset = clampedToInt(frame.popStackItem());
-    final int sourceOffset = clampedToInt(frame.popStackItem());
-    final int length = clampedToInt(frame.popStackItem());
+    final int memOffset = frame.popStackItem().clampedToInt();
+    final int sourceOffset = frame.popStackItem().clampedToInt();
+    final int length = frame.popStackItem().clampedToInt();
     final long cost = cost(frame, memOffset, length);
+
     if (cost > frame.getRemainingGas()) {
       return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
     }

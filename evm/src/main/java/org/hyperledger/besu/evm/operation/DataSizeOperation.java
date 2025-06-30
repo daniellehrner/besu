@@ -18,8 +18,7 @@ import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Data load operation. */
 public class DataSizeOperation extends AbstractFixedCostOperation {
@@ -40,7 +39,7 @@ public class DataSizeOperation extends AbstractFixedCostOperation {
       return InvalidOperation.INVALID_RESULT;
     }
     final int size = code.getDataSize();
-    frame.pushStackItem(Bytes.ofUnsignedInt(size));
+    frame.pushStackItem(Word256.fromInt(size));
 
     return successResponse;
   }

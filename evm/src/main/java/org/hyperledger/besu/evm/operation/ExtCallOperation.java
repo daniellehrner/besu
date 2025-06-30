@@ -14,12 +14,12 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
-
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+
+import org.apache.tuweni.bytes.Bytes32;
 
 /** The Call operation. */
 public class ExtCallOperation extends AbstractExtCallOperation {
@@ -40,7 +40,7 @@ public class ExtCallOperation extends AbstractExtCallOperation {
 
   @Override
   protected Wei value(final MessageFrame frame) {
-    return Wei.wrap(frame.getStackItem(STACK_VALUE));
+    return Wei.wrap(Bytes32.wrap(frame.getStackItem(STACK_VALUE).toBytes()));
   }
 
   @Override
@@ -50,12 +50,12 @@ public class ExtCallOperation extends AbstractExtCallOperation {
 
   @Override
   protected long inputDataOffset(final MessageFrame frame) {
-    return clampedToLong(frame.getStackItem(STACK_INPUT_OFFSET));
+    return frame.getStackItem(STACK_INPUT_OFFSET).clampedToLong();
   }
 
   @Override
   protected long inputDataLength(final MessageFrame frame) {
-    return clampedToLong(frame.getStackItem(STACK_INPUT_LENGTH));
+    return frame.getStackItem(STACK_INPUT_LENGTH).clampedToLong();
   }
 
   @Override

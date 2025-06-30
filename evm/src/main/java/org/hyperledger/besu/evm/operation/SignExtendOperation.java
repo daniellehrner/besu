@@ -17,10 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
-import org.apache.tuweni.bytes.Bytes32;
-import org.apache.tuweni.bytes.MutableBytes32;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Sign extend operation. */
 public class SignExtendOperation extends AbstractFixedCostOperation {
@@ -49,31 +46,23 @@ public class SignExtendOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    final Bytes value0 = frame.popStackItem().trimLeadingZeros();
-    final Bytes value1 = Bytes32.leftPad(frame.popStackItem());
+    final Word256 extByte = frame.popStackItem();
+    final Word256 value = frame.popStackItem();
 
-    final MutableBytes32 result = MutableBytes32.create();
-
-    // Any value >= 31 imply an index <= 0, so no work to do (note that 0 itself is a valid index,
-    // but copying the 0th byte to itself is only so useful).
-    int value0size = value0.size();
-    if (value0size > 1) {
-      frame.pushStackItem(value1);
+    if (!extByte.fitsInt() || extByte.toInt() >= 31) {
+      frame.pushStackItem(value);
       return signExtendSuccess;
     }
 
-    int value0Value = value0.toInt();
-    if (value0Value >= 31) {
-      frame.pushStackItem(value1);
-      return signExtendSuccess;
-    }
+    final int byteIndex = extByte.toInt();
+    final int bitIndex = (31 - byteIndex) * 8;
+    final int signBit = value.getBit(bitIndex);
+    final Word256 result =
+        signBit == 1
+            ? value.or(Word256.maskAbove(bitIndex))
+            : value.and(Word256.maskBelow(bitIndex + 1));
 
-    final int byteIndex = 31 - value0.toInt();
-    final byte toSet = value1.get(byteIndex) < 0 ? (byte) 0xFF : 0x00;
-    result.mutableSlice(0, byteIndex).fill(toSet);
-    value1.slice(byteIndex).copyTo(result, byteIndex);
     frame.pushStackItem(result);
-
     return signExtendSuccess;
   }
 }

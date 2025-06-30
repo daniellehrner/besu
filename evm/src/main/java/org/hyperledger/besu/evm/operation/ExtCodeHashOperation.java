@@ -25,6 +25,7 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.internal.OverflowException;
 import org.hyperledger.besu.evm.internal.UnderflowException;
 import org.hyperledger.besu.evm.internal.Words;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import org.apache.tuweni.bytes.Bytes;
 
@@ -32,7 +33,8 @@ import org.apache.tuweni.bytes.Bytes;
 public class ExtCodeHashOperation extends AbstractOperation {
 
   // // 0x9dbf3648db8210552e9c4f75c6a1c3057c0ca432043bd648be15fe7be05646f5
-  static final Hash EOF_REPLACEMENT_HASH = Hash.hash(ExtCodeCopyOperation.EOF_REPLACEMENT_CODE);
+  static final Word256 EOF_REPLACEMENT_HASH =
+      Word256.fromBytes(Hash.hash(ExtCodeCopyOperation.EOF_REPLACEMENT_CODE).toArrayUnsafe());
 
   private final boolean enableEIP3540;
 
@@ -83,17 +85,17 @@ public class ExtCodeHashOperation extends AbstractOperation {
       final Account account = frame.getWorldUpdater().get(address);
 
       if (account == null || account.isEmpty()) {
-        frame.pushStackItem(Bytes.EMPTY);
+        frame.pushStackItem(Word256.ZERO);
       } else {
         if (enableEIP3540) {
           final Bytes code = account.getCode();
           if (code.size() >= 2 && code.get(0) == EOFLayout.EOF_PREFIX_BYTE && code.get(1) == 0) {
             frame.pushStackItem(EOF_REPLACEMENT_HASH);
           } else {
-            frame.pushStackItem(account.getCodeHash());
+            frame.pushStackItem(Word256.fromBytes(account.getCodeHash().toArrayUnsafe()));
           }
         } else {
-          frame.pushStackItem(account.getCodeHash());
+          frame.pushStackItem(Word256.fromBytes(account.getCodeHash().toArrayUnsafe()));
         }
       }
       return new OperationResult(cost, null);

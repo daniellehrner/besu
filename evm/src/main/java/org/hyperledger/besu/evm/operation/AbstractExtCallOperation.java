@@ -25,9 +25,11 @@ import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.internal.Words;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import jakarta.validation.constraints.NotNull;
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 
 /**
  * A skeleton class for implementing call operations.
@@ -42,13 +44,13 @@ public abstract class AbstractExtCallOperation extends AbstractCallOperation {
   static final int STACK_INPUT_LENGTH = 2;
 
   /** EXT*CALL response indicating success */
-  public static final Bytes EOF1_SUCCESS_STACK_ITEM = Bytes.EMPTY;
+  public static final Word256 EOF1_SUCCESS_STACK_ITEM = Word256.ZERO;
 
   /** EXT*CALL response indicating a "soft failure" */
-  public static final Bytes EOF1_EXCEPTION_STACK_ITEM = BYTES_ONE;
+  public static final Word256 EOF1_EXCEPTION_STACK_ITEM = Word256.ONE;
 
   /** EXT*CALL response indicating a hard failure, such as a REVERT was called */
-  public static final Bytes EOF1_FAILURE_STACK_ITEM = Bytes.of(2);
+  public static final Word256 EOF1_FAILURE_STACK_ITEM = Word256.fromInt(2);
 
   /**
    * Instantiates a new Abstract call operation.
@@ -100,7 +102,7 @@ public abstract class AbstractExtCallOperation extends AbstractCallOperation {
       return InvalidOperation.INVALID_RESULT;
     }
 
-    final Bytes toBytes = frame.getStackItem(STACK_TO).trimLeadingZeros();
+    final Bytes toBytes = Bytes32.wrap(frame.getStackItem(STACK_TO).toBytes());
     final Wei value = value(frame);
     final boolean zeroValue = value.isZero();
     long inputOffset = inputDataOffset(frame);
@@ -182,7 +184,7 @@ public abstract class AbstractExtCallOperation extends AbstractCallOperation {
     }
 
     // all checks passed, do the call
-    final Bytes inputData = frame.readMutableMemory(inputOffset, inputLength);
+    final Bytes inputData = frame.readMemory(inputOffset, inputLength);
 
     MessageFrame.builder()
         .parentMessageFrame(frame)
@@ -210,7 +212,7 @@ public abstract class AbstractExtCallOperation extends AbstractCallOperation {
   }
 
   @Override
-  Bytes getCallResultStackItem(final MessageFrame childFrame) {
+  Word256 getCallResultStackItem(final MessageFrame childFrame) {
     return switch (childFrame.getState()) {
       case COMPLETED_SUCCESS -> EOF1_SUCCESS_STACK_ITEM;
       case EXCEPTIONAL_HALT -> EOF1_EXCEPTION_STACK_ITEM;

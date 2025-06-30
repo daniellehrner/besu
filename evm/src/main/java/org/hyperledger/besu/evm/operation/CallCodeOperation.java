@@ -14,13 +14,13 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
-
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.internal.Words;
+
+import org.apache.tuweni.bytes.Bytes32;
 
 /** The Call code operation. */
 public class CallCodeOperation extends AbstractCallOperation {
@@ -41,7 +41,7 @@ public class CallCodeOperation extends AbstractCallOperation {
 
   @Override
   protected Wei value(final MessageFrame frame) {
-    return Wei.wrap(frame.getStackItem(2));
+    return Wei.wrap(Bytes32.wrap(frame.getStackItem(2).toBytes()));
   }
 
   @Override
@@ -51,22 +51,22 @@ public class CallCodeOperation extends AbstractCallOperation {
 
   @Override
   protected long inputDataOffset(final MessageFrame frame) {
-    return clampedToLong(frame.getStackItem(3));
+    return frame.getStackItem(3).clampedToLong();
   }
 
   @Override
   protected long inputDataLength(final MessageFrame frame) {
-    return clampedToLong(frame.getStackItem(4));
+    return frame.getStackItem(4).clampedToLong();
   }
 
   @Override
   protected long outputDataOffset(final MessageFrame frame) {
-    return clampedToLong(frame.getStackItem(5));
+    return frame.getStackItem(5).clampedToLong();
   }
 
   @Override
   protected long outputDataLength(final MessageFrame frame) {
-    return clampedToLong(frame.getStackItem(6));
+    return frame.getStackItem(6).clampedToLong();
   }
 
   @Override

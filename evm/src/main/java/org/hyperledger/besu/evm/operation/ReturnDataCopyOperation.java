@@ -14,8 +14,6 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
-
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -45,9 +43,9 @@ public class ReturnDataCopyOperation extends AbstractOperation {
 
   @Override
   public OperationResult execute(final MessageFrame frame, final EVM evm) {
-    final long memOffset = clampedToLong(frame.popStackItem());
-    final long sourceOffset = clampedToLong(frame.popStackItem());
-    final long numBytes = clampedToLong(frame.popStackItem());
+    final long memOffset = frame.popStackItem().clampedToLong();
+    final long sourceOffset = frame.popStackItem().clampedToLong();
+    final long numBytes = frame.popStackItem().clampedToLong();
     final Bytes returnData = frame.getReturnData();
     final int returnDataLength = returnData.size();
 

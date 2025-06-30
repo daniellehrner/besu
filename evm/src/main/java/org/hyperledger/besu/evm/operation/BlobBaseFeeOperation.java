@@ -18,6 +18,7 @@ import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Blob Base fee operation. */
 public class BlobBaseFeeOperation extends AbstractFixedCostOperation {
@@ -35,7 +36,7 @@ public class BlobBaseFeeOperation extends AbstractFixedCostOperation {
   public OperationResult executeFixedCostOperation(final MessageFrame frame, final EVM evm) {
 
     final Wei blobGasPrice = frame.getBlobGasPrice();
-    frame.pushStackItem(blobGasPrice.toBytes());
+    frame.pushStackItem(Word256.fromBytes(blobGasPrice.toArrayUnsafe()));
     return successResponse;
   }
 }

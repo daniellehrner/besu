@@ -16,13 +16,13 @@ package org.hyperledger.besu.evm.operation;
 
 import static org.hyperledger.besu.crypto.Hash.keccak256;
 import static org.hyperledger.besu.evm.internal.Words.clampedAdd;
-import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import java.util.function.Supplier;
 
@@ -48,8 +48,8 @@ public class EOFCreateOperation extends AbstractCreateOperation {
 
   @Override
   public long cost(final MessageFrame frame, final Supplier<Code> codeSupplier) {
-    final long inputOffset = clampedToLong(frame.getStackItem(2));
-    final long inputSize = clampedToLong(frame.getStackItem(3));
+    final long inputOffset = frame.getStackItem(2).clampedToLong();
+    final long inputSize = frame.getStackItem(3).clampedToLong();
     return clampedAdd(
         gasCalculator().memoryExpansionGasCost(frame, inputOffset, inputSize),
         clampedAdd(
@@ -60,7 +60,7 @@ public class EOFCreateOperation extends AbstractCreateOperation {
   @Override
   public Address generateTargetContractAddress(final MessageFrame frame, final Code initcode) {
     final Address sender = frame.getRecipientAddress();
-    final Bytes32 salt = Bytes32.leftPad(frame.getStackItem(1));
+    final Bytes32 salt = Bytes32.wrap(frame.getStackItem(1).toBytes());
     final Bytes32 hash = keccak256(Bytes.concatenate(PREFIX, sender, salt, initcode.getCodeHash()));
     return Address.extract(hash);
   }
@@ -76,8 +76,8 @@ public class EOFCreateOperation extends AbstractCreateOperation {
 
   @Override
   protected Bytes getInputData(final MessageFrame frame) {
-    final long inputOffset = clampedToLong(frame.getStackItem(2));
-    final long inputSize = clampedToLong(frame.getStackItem(3));
+    final long inputOffset = frame.getStackItem(2).clampedToLong();
+    final long inputSize = frame.getStackItem(3).clampedToLong();
     return frame.readMemory(inputOffset, inputSize);
   }
 
@@ -88,10 +88,10 @@ public class EOFCreateOperation extends AbstractCreateOperation {
 
   @Override
   protected void fail(final MessageFrame frame) {
-    final long inputOffset = clampedToLong(frame.getStackItem(2));
-    final long inputSize = clampedToLong(frame.getStackItem(3));
-    frame.readMutableMemory(inputOffset, inputSize);
+    final long inputOffset = frame.getStackItem(2).clampedToLong();
+    final long inputSize = frame.getStackItem(3).clampedToLong();
+    frame.readMemory(inputOffset, inputSize);
     frame.popStackItems(getStackItemsConsumed());
-    frame.pushStackItem(Bytes.EMPTY);
+    frame.pushStackItem(Word256.ZERO);
   }
 }

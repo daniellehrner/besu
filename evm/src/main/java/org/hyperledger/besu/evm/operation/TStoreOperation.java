@@ -14,12 +14,13 @@
  */
 package org.hyperledger.besu.evm.operation;
 
+import org.apache.tuweni.units.bigints.UInt256;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 
-import org.apache.tuweni.units.bigints.UInt256;
+import org.apache.tuweni.bytes.Bytes32;
 
 /** Implements the TLOAD operation defined in EIP-1153 */
 public class TStoreOperation extends AbstractOperation {
@@ -35,8 +36,8 @@ public class TStoreOperation extends AbstractOperation {
 
   @Override
   public OperationResult execute(final MessageFrame frame, final EVM evm) {
-    final UInt256 key = UInt256.fromBytes(frame.popStackItem());
-    final UInt256 value = UInt256.fromBytes(frame.popStackItem());
+    final UInt256 key = UInt256.fromBytes(Bytes32.wrap(frame.popStackItem().toBytes()));
+    final UInt256 value = UInt256.fromBytes(Bytes32.wrap(frame.popStackItem().toBytes()));
 
     final long cost = gasCalculator().getTransientStoreOperationGasCost();
 

@@ -14,13 +14,10 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.apache.tuweni.bytes.Bytes32.leftPad;
-
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Shl (Shift Left) operation. */
 public class ShlOperation extends AbstractFixedCostOperation {
@@ -50,20 +47,18 @@ public class ShlOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    Bytes shiftAmount = frame.popStackItem();
-    if (shiftAmount.size() > 4 && (shiftAmount = shiftAmount.trimLeadingZeros()).size() > 4) {
-      frame.popStackItem();
-      frame.pushStackItem(Bytes.EMPTY);
-    } else {
-      final int shiftAmountInt = shiftAmount.toInt();
-      final Bytes value = leftPad(frame.popStackItem());
+    final Word256 shiftAmount = frame.popStackItem();
 
-      if (shiftAmountInt >= 256 || shiftAmountInt < 0) {
-        frame.pushStackItem(Bytes.EMPTY);
-      } else {
-        frame.pushStackItem(value.shiftLeft(shiftAmountInt));
-      }
+    if (!shiftAmount.fitsInt()) {
+      // Shift amount exceeds int range or is negative; treat as shift >= 256 → result is zero
+      frame.popStackItem(); // discard value
+      frame.pushStackItem(Word256.ZERO);
+    } else {
+      final int shift = shiftAmount.toInt();
+      final Word256 value = frame.popStackItem();
+      frame.pushStackItem(value.shl(shift));
     }
+
     return shlSuccess;
   }
 }

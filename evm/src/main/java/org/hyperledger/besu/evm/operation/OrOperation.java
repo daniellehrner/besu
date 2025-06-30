@@ -17,8 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Or operation. */
 public class OrOperation extends AbstractFixedCostOperation {
@@ -48,10 +47,10 @@ public class OrOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    final Bytes value0 = frame.popStackItem();
-    final Bytes value1 = frame.popStackItem();
+    final Word256 value0 = frame.popStackItem();
+    final Word256 value1 = frame.popStackItem();
 
-    final Bytes result = value0.or(value1);
+    final Word256 result = value0.or(value1);
 
     frame.pushStackItem(result);
 

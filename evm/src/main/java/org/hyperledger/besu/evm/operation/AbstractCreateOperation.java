@@ -14,8 +14,6 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
-
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.Code;
@@ -25,13 +23,14 @@ import org.hyperledger.besu.evm.code.CodeInvalid;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-import org.hyperledger.besu.evm.internal.Words;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import java.util.Optional;
 import java.util.function.Supplier;
 
 import com.google.common.base.Suppliers;
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 
 /** The Abstract create operation. */
 public abstract class AbstractCreateOperation extends AbstractOperation {
@@ -89,7 +88,7 @@ public abstract class AbstractCreateOperation extends AbstractOperation {
     if (frame.getRemainingGas() < cost) {
       return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
     }
-    final Wei value = Wei.wrap(frame.getStackItem(0));
+    final Wei value = Wei.wrap(Bytes32.wrap(frame.getStackItem(0).toBytes()));
 
     final Address address = frame.getRecipientAddress();
     final MutableAccount account = frame.getWorldUpdater().getAccount(address);
@@ -166,15 +165,15 @@ public abstract class AbstractCreateOperation extends AbstractOperation {
    * @param frame the current execution frame
    */
   protected void fail(final MessageFrame frame) {
-    final long inputOffset = clampedToLong(frame.getStackItem(1));
-    final long inputSize = clampedToLong(frame.getStackItem(2));
-    frame.readMutableMemory(inputOffset, inputSize);
+    final long inputOffset = frame.getStackItem(1).clampedToLong();
+    final long inputSize = frame.getStackItem(2).clampedToLong();
+    frame.readMemory(inputOffset, inputSize);
     frame.popStackItems(getStackItemsConsumed());
-    frame.pushStackItem(Bytes.EMPTY);
+    frame.pushStackItem(Word256.ZERO);
   }
 
   private void spawnChildMessage(final MessageFrame parent, final Code code, final EVM evm) {
-    final Wei value = Wei.wrap(parent.getStackItem(0));
+    final Wei value = Wei.wrap(Bytes32.wrap(parent.getStackItem(0).toBytes()));
 
     final Address contractAddress = generateTargetContractAddress(parent, code);
     final Bytes inputData = getInputData(parent);
@@ -228,18 +227,18 @@ public abstract class AbstractCreateOperation extends AbstractOperation {
               : evm.getCodeForCreation(childFrame.getOutputData());
       if (outputCode.isValid()) {
         Address createdAddress = childFrame.getContractAddress();
-        frame.pushStackItem(Words.fromAddress(createdAddress));
+        frame.pushStackItem(Word256.fromBytes(createdAddress.toArrayUnsafe()));
         frame.setReturnData(Bytes.EMPTY);
         onSuccess(frame, createdAddress);
       } else {
         frame.getWorldUpdater().deleteAccount(childFrame.getRecipientAddress());
         frame.setReturnData(childFrame.getOutputData());
-        frame.pushStackItem(Bytes.EMPTY);
+        frame.pushStackItem(Word256.ZERO);
         onInvalid(frame, (CodeInvalid) outputCode);
       }
     } else {
       frame.setReturnData(childFrame.getOutputData());
-      frame.pushStackItem(Bytes.EMPTY);
+      frame.pushStackItem(Word256.ZERO);
       onFailure(frame, childFrame.getExceptionalHaltReason());
     }
 

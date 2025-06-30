@@ -18,8 +18,7 @@ import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The type Relative jump If operation. */
 public class RelativeJumpIfOperation extends AbstractFixedCostOperation {
@@ -42,7 +41,7 @@ public class RelativeJumpIfOperation extends AbstractFixedCostOperation {
     if (code.getEofVersion() == 0) {
       return InvalidOperation.INVALID_RESULT;
     }
-    final Bytes condition = frame.popStackItem();
+    final Word256 condition = frame.popStackItem();
     if (!condition.isZero()) {
       final int pcPostInstruction = frame.getPC() + 1;
       return new OperationResult(gasCost, null, 2 + code.readBigEndianI16(pcPostInstruction) + 1);

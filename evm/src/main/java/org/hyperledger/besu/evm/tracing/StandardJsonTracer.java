@@ -29,6 +29,7 @@ import java.util.Optional;
 
 import com.google.common.base.Joiner;
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 
 /** The Standard json tracer. */
@@ -171,7 +172,7 @@ public class StandardJsonTracer implements OperationTracer {
   public void tracePreExecution(final MessageFrame messageFrame) {
     stack = new ArrayList<>(messageFrame.stackSize());
     for (int i = messageFrame.stackSize() - 1; i >= 0; i--) {
-      stack.add("\"" + shortBytes(messageFrame.getStackItem(i)) + "\"");
+      stack.add("\"" + shortBytes(Bytes32.wrap(messageFrame.getStackItem(i).toBytes())) + "\"");
     }
     pc = messageFrame.getPC();
     section = messageFrame.getSection();

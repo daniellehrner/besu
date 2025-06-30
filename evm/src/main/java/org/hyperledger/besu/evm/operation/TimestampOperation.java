@@ -17,7 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-import org.hyperledger.besu.evm.internal.Words;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Timestamp operation. */
 public class TimestampOperation extends AbstractFixedCostOperation {
@@ -35,7 +35,7 @@ public class TimestampOperation extends AbstractFixedCostOperation {
   public Operation.OperationResult executeFixedCostOperation(
       final MessageFrame frame, final EVM evm) {
     final long timestamp = frame.getBlockValues().getTimestamp();
-    frame.pushStackItem(Words.longBytes(timestamp));
+    frame.pushStackItem(Word256.fromLong(timestamp));
 
     return successResponse;
   }

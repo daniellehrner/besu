@@ -44,7 +44,7 @@ public class RelativeJumpVectorOperation extends AbstractFixedCostOperation {
     }
     int offsetCase;
     try {
-      offsetCase = frame.popStackItem().trimLeadingZeros().toInt();
+      offsetCase = frame.popStackItem().toInt();
       if (offsetCase < 0) {
         offsetCase = Integer.MAX_VALUE;
       }

@@ -18,7 +18,7 @@ import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-import org.hyperledger.besu.evm.internal.Words;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Code size operation. */
 public class CodeSizeOperation extends AbstractFixedCostOperation {
@@ -36,7 +36,7 @@ public class CodeSizeOperation extends AbstractFixedCostOperation {
   public Operation.OperationResult executeFixedCostOperation(
       final MessageFrame frame, final EVM evm) {
     final Code code = frame.getCode();
-    frame.pushStackItem(Words.intBytes(code.getSize()));
+    frame.pushStackItem(Word256.fromInt(code.getSize()));
 
     return successResponse;
   }

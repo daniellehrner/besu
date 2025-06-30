@@ -19,6 +19,7 @@ import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import java.util.Optional;
 
@@ -35,13 +36,16 @@ public class BaseFeeOperation extends AbstractFixedCostOperation {
   }
 
   @Override
-  public Operation.OperationResult executeFixedCostOperation(
-      final MessageFrame frame, final EVM evm) {
+  public OperationResult executeFixedCostOperation(final MessageFrame frame, final EVM evm) {
+
     final Optional<Wei> maybeBaseFee = frame.getBlockValues().getBaseFee();
+
     if (maybeBaseFee.isEmpty()) {
-      return new Operation.OperationResult(gasCost, ExceptionalHaltReason.INVALID_OPERATION);
+      return new OperationResult(gasCost, ExceptionalHaltReason.INVALID_OPERATION);
     }
-    frame.pushStackItem(maybeBaseFee.orElseThrow());
+
+    final Word256 baseFee = Word256.fromBytes(maybeBaseFee.get().toArray());
+    frame.pushStackItem(baseFee);
     return successResponse;
   }
 }

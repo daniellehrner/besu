@@ -21,13 +21,11 @@ import org.hyperledger.besu.evm.frame.BlockValues;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
-import org.apache.tuweni.bytes.Bytes32;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Block hash operation. */
 public class BlockHashOperation extends AbstractOperation {
-  private static final int MAX_BLOCK_ARG_SIZE = 8;
+  private static final Word256 HASH_ZERO = Word256.fromBytes(Hash.ZERO.toArrayUnsafe());
 
   /**
    * Instantiates a new Block hash operation.
@@ -45,10 +43,10 @@ public class BlockHashOperation extends AbstractOperation {
       return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
     }
 
-    // Make sure we can convert to long
-    final Bytes blockArg = frame.popStackItem().trimLeadingZeros();
-    if (blockArg.size() > MAX_BLOCK_ARG_SIZE) {
-      frame.pushStackItem(Hash.ZERO);
+    final Word256 blockArg = frame.popStackItem();
+
+    if (!blockArg.fitsLong()) {
+      frame.pushStackItem(HASH_ZERO);
       return new OperationResult(cost, null);
     }
 
@@ -57,15 +55,13 @@ public class BlockHashOperation extends AbstractOperation {
     final long currentBlockNumber = blockValues.getNumber();
     final BlockHashLookup blockHashLookup = frame.getBlockHashLookup();
 
-    // If the sought block is negative, a future block, the current block, or not in the
-    // lookback window, zero is returned.
     if (soughtBlock < 0
         || soughtBlock >= currentBlockNumber
         || soughtBlock < (currentBlockNumber - blockHashLookup.getLookback())) {
-      frame.pushStackItem(Bytes32.ZERO);
+      frame.pushStackItem(HASH_ZERO);
     } else {
       final Hash blockHash = blockHashLookup.apply(frame, soughtBlock);
-      frame.pushStackItem(blockHash);
+      frame.pushStackItem(Word256.fromBytes(blockHash.toArrayUnsafe()));
     }
 
     return new OperationResult(cost, null);

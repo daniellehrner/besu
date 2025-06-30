@@ -17,8 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Is zero operation. */
 public class IsZeroOperation extends AbstractFixedCostOperation {
@@ -48,9 +47,9 @@ public class IsZeroOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    final Bytes value = frame.popStackItem().trimLeadingZeros();
+    final Word256 value = frame.popStackItem();
 
-    frame.pushStackItem((value.size() == 0) ? BYTES_ONE : Bytes.EMPTY);
+    frame.pushStackItem((value.isZero()) ? Word256.ONE : Word256.ZERO);
 
     return isZeroSuccess;
   }

@@ -24,6 +24,7 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import java.util.function.Supplier;
 
 import com.google.common.base.Suppliers;
+import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 
 /** The SStore operation. */
@@ -64,8 +65,8 @@ public class SStoreOperation extends AbstractOperation {
   @Override
   public OperationResult execute(final MessageFrame frame, final EVM evm) {
 
-    final UInt256 key = UInt256.fromBytes(frame.popStackItem());
-    final UInt256 newValue = UInt256.fromBytes(frame.popStackItem());
+    final UInt256 key = UInt256.fromBytes(Bytes32.wrap(frame.popStackItem().toBytes()));
+    final UInt256 newValue = UInt256.fromBytes(Bytes32.wrap(frame.popStackItem().toBytes()));
 
     final MutableAccount account = frame.getWorldUpdater().getAccount(frame.getRecipientAddress());
     if (account == null) {

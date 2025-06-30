@@ -15,6 +15,7 @@
 package org.hyperledger.besu.evm.internal;
 
 import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import java.math.BigInteger;
 
@@ -56,6 +57,12 @@ public interface Words {
     } else {
       return Address.wrap(bytes.slice(size - Address.SIZE, Address.SIZE));
     }
+  }
+
+  static Address toAddress(final Word256 word) {
+    final Bytes bytes = Bytes.wrap(word.toBytes());
+    // Always take the right-most 20 bytes
+    return Address.wrap(bytes.slice(12, Address.SIZE));
   }
 
   /**

@@ -17,10 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import java.math.BigInteger;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Mul operation. */
 public class MulOperation extends AbstractFixedCostOperation {
@@ -44,22 +41,16 @@ public class MulOperation extends AbstractFixedCostOperation {
   }
 
   /**
-   * Performs mul operation
+   * Performs the multiplication of two 256-bit words from the stack.
    *
-   * @param frame the frame
+   * @param frame the message frame
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    BigInteger a = new BigInteger(1, frame.popStackItem().toArrayUnsafe());
-    BigInteger b = new BigInteger(1, frame.popStackItem().toArrayUnsafe());
-    BigInteger c = a.multiply(b);
-    byte[] cBytes = c.toByteArray();
-    Bytes result = Bytes.wrap(cBytes);
-    if (cBytes.length > 32) {
-      result = result.slice(cBytes.length - 32, 32);
-    }
+    final Word256 value0 = frame.popStackItem();
+    final Word256 value1 = frame.popStackItem();
 
-    frame.pushStackItem(result);
+    frame.pushStackItem(value0.mul(value1));
     return mulSuccess;
   }
 }

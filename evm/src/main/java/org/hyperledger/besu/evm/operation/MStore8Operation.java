@@ -14,14 +14,11 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
-
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The M store8 operation. */
 public class MStore8Operation extends AbstractOperation {
@@ -37,9 +34,9 @@ public class MStore8Operation extends AbstractOperation {
 
   @Override
   public OperationResult execute(final MessageFrame frame, final EVM evm) {
-    final long location = clampedToLong(frame.popStackItem());
-    final Bytes value = frame.popStackItem();
-    final byte theByte = (value.size() > 0) ? value.get(value.size() - 1) : 0;
+    final long location = frame.popStackItem().clampedToLong();
+    final Word256 value = frame.popStackItem();
+    final byte theByte = value.getLeastSignificantByte();
 
     final long cost = gasCalculator().mStore8OperationGasCost(frame, location);
     if (frame.getRemainingGas() < cost) {

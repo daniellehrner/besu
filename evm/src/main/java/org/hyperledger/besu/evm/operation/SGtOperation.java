@@ -17,10 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import java.math.BigInteger;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The SGt operation. */
 public class SGtOperation extends AbstractFixedCostOperation {
@@ -50,22 +47,12 @@ public class SGtOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    final Bytes value0 = frame.popStackItem();
-    final Bytes value1 = frame.popStackItem();
+    final Word256 value0 = frame.popStackItem();
+    final Word256 value1 = frame.popStackItem();
 
-    final BigInteger b0 =
-        value0.size() < 32
-            ? new BigInteger(1, value0.toArrayUnsafe())
-            : new BigInteger(value0.toArrayUnsafe());
-    final BigInteger b1 =
-        value1.size() < 32
-            ? new BigInteger(1, value1.toArrayUnsafe())
-            : new BigInteger(value1.toArrayUnsafe());
-
-    final Bytes result = b0.compareTo(b1) > 0 ? BYTES_ONE : Bytes.EMPTY;
+    final Word256 result = value0.compareSigned(value1) > 0 ? Word256.ONE : Word256.ZERO;
 
     frame.pushStackItem(result);
-
     return sgtSuccess;
   }
 }

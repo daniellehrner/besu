@@ -16,8 +16,6 @@ package org.hyperledger.besu.evm.operation;
 
 import static org.hyperledger.besu.crypto.Hash.keccak256;
 import static org.hyperledger.besu.evm.internal.Words.clampedAdd;
-import static org.hyperledger.besu.evm.internal.Words.clampedToInt;
-import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.evm.Code;
@@ -46,8 +44,8 @@ public class Create2Operation extends AbstractCreateOperation {
 
   @Override
   public long cost(final MessageFrame frame, final Supplier<Code> unused) {
-    final int inputOffset = clampedToInt(frame.getStackItem(1));
-    final int inputSize = clampedToInt(frame.getStackItem(2));
+    final int inputOffset = frame.getStackItem(1).clampedToInt();
+    final int inputSize = frame.getStackItem(2).clampedToInt();
     return clampedAdd(
         clampedAdd(
             gasCalculator().txCreateCost(),
@@ -59,15 +57,15 @@ public class Create2Operation extends AbstractCreateOperation {
   @Override
   public Address generateTargetContractAddress(final MessageFrame frame, final Code initcode) {
     final Address sender = frame.getRecipientAddress();
-    final Bytes32 salt = Bytes32.leftPad(frame.getStackItem(3));
+    final Bytes32 salt = Bytes32.wrap(frame.getStackItem(3).toBytes());
     final Bytes32 hash = keccak256(Bytes.concatenate(PREFIX, sender, salt, initcode.getCodeHash()));
     return Address.extract(hash);
   }
 
   @Override
   protected Code getInitCode(final MessageFrame frame, final EVM evm) {
-    final long inputOffset = clampedToLong(frame.getStackItem(1));
-    final long inputSize = clampedToLong(frame.getStackItem(2));
+    final long inputOffset = frame.getStackItem(1).clampedToLong();
+    final long inputSize = frame.getStackItem(2).clampedToLong();
     final Bytes inputData = frame.readMemory(inputOffset, inputSize);
     // Never cache CREATEx initcode. The amount of reuse is very low, and caching mostly
     // addresses disk loading delay, and we already have the code.

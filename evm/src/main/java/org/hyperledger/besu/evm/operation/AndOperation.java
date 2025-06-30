@@ -17,8 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The And operation. */
 public class AndOperation extends AbstractFixedCostOperation {
@@ -48,11 +47,10 @@ public class AndOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    final Bytes value0 = frame.popStackItem();
-    final Bytes value1 = frame.popStackItem();
+    final Word256 a = frame.popStackItem();
+    final Word256 b = frame.popStackItem();
 
-    final Bytes result = value0.and(value1);
-    frame.pushStackItem(result);
+    frame.pushStackItem(a.and(b));
 
     return andSuccess;
   }

@@ -17,6 +17,7 @@ package org.hyperledger.besu.evm.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Address operation. */
 public class AddressOperation extends AbstractFixedCostOperation {
@@ -33,7 +34,7 @@ public class AddressOperation extends AbstractFixedCostOperation {
   @Override
   public Operation.OperationResult executeFixedCostOperation(
       final MessageFrame frame, final EVM evm) {
-    frame.pushStackItem(frame.getRecipientAddress());
+    frame.pushStackItem(Word256.fromBytes(frame.getRecipientAddress().toArrayUnsafe()));
 
     return successResponse;
   }

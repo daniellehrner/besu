@@ -18,6 +18,7 @@ import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Gas price operation. */
 public class GasPriceOperation extends AbstractFixedCostOperation {
@@ -35,7 +36,7 @@ public class GasPriceOperation extends AbstractFixedCostOperation {
   public Operation.OperationResult executeFixedCostOperation(
       final MessageFrame frame, final EVM evm) {
     final Wei gasPrice = frame.getGasPrice();
-    frame.pushStackItem(gasPrice.toBytes());
+    frame.pushStackItem(Word256.fromBytes(gasPrice.toBytes().toArrayUnsafe()));
 
     return successResponse;
   }

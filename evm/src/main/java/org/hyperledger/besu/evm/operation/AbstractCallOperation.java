@@ -15,7 +15,6 @@
 package org.hyperledger.besu.evm.operation;
 
 import static org.hyperledger.besu.evm.internal.Words.clampedAdd;
-import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
 import static org.hyperledger.besu.evm.worldstate.CodeDelegationHelper.getTargetAccount;
 import static org.hyperledger.besu.evm.worldstate.CodeDelegationHelper.hasCodeDelegation;
 
@@ -31,6 +30,7 @@ import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.frame.MessageFrame.State;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import org.apache.tuweni.bytes.Bytes;
 
@@ -46,8 +46,8 @@ public abstract class AbstractCallOperation extends AbstractOperation {
   protected static final OperationResult UNDERFLOW_RESPONSE =
       new OperationResult(0L, ExceptionalHaltReason.INSUFFICIENT_STACK_ITEMS);
 
-  static final Bytes LEGACY_SUCCESS_STACK_ITEM = BYTES_ONE;
-  static final Bytes LEGACY_FAILURE_STACK_ITEM = Bytes.EMPTY;
+  static final Word256 LEGACY_SUCCESS_STACK_ITEM = Word256.ONE;
+  static final Word256 LEGACY_FAILURE_STACK_ITEM = Word256.ZERO;
 
   /**
    * Instantiates a new Abstract call operation.
@@ -74,7 +74,7 @@ public abstract class AbstractCallOperation extends AbstractOperation {
    * @return the additional gas to provide the call operation
    */
   protected long gas(final MessageFrame frame) {
-    return clampedToLong(frame.getStackItem(0));
+    return frame.getStackItem(0).clampedToLong();
   }
 
   /**
@@ -215,7 +215,7 @@ public abstract class AbstractCallOperation extends AbstractOperation {
       return new OperationResult(cost, null);
     }
 
-    final Bytes inputData = frame.readMutableMemory(inputDataOffset(frame), inputDataLength(frame));
+    final Bytes inputData = frame.readMemory(inputDataOffset(frame), inputDataLength(frame));
 
     final Code code = getCode(evm, frame, contract);
 
@@ -304,16 +304,14 @@ public abstract class AbstractCallOperation extends AbstractOperation {
     frame.incrementRemainingGas(gasRemaining);
 
     frame.popStackItems(getStackItemsConsumed());
-    Bytes resultItem;
 
-    resultItem = getCallResultStackItem(childFrame);
-    frame.pushStackItem(resultItem);
+    frame.pushStackItem(getCallResultStackItem(childFrame));
 
     final int currentPC = frame.getPC();
     frame.setPC(currentPC + 1);
   }
 
-  Bytes getCallResultStackItem(final MessageFrame childFrame) {
+  Word256 getCallResultStackItem(final MessageFrame childFrame) {
     if (childFrame.getState() == State.COMPLETED_SUCCESS) {
       return LEGACY_SUCCESS_STACK_ITEM;
     } else {

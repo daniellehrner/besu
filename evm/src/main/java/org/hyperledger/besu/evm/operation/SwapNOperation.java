@@ -18,8 +18,7 @@ import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The SwapN operation. */
 public class SwapNOperation extends AbstractFixedCostOperation {
@@ -49,7 +48,7 @@ public class SwapNOperation extends AbstractFixedCostOperation {
     int pc = frame.getPC();
     int index = code.readU8(pc + 1);
 
-    final Bytes tmp = frame.getStackItem(0);
+    final Word256 tmp = frame.getStackItem(0);
     frame.setStackItem(0, frame.getStackItem(index + 1));
     frame.setStackItem(index + 1, tmp);
     frame.setPC(pc + 1);

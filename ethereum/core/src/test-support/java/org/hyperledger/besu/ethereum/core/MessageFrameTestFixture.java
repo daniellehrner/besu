@@ -24,6 +24,7 @@ import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
 import org.hyperledger.besu.evm.code.CodeV0;
 import org.hyperledger.besu.evm.frame.MessageFrame;
+import org.hyperledger.besu.evm.word256.Word256;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
 import java.util.ArrayList;
@@ -186,7 +187,7 @@ public class MessageFrameTestFixture {
                             .createBlockHashLookup(localBlockchain, localBlockHeader)))
             .maxStackSize(maxStackSize)
             .build();
-    stackItems.forEach(frame::pushStackItem);
+    stackItems.forEach(item -> frame.pushStackItem(Word256.fromBytes(item.toArrayUnsafe())));
     return frame;
   }
 

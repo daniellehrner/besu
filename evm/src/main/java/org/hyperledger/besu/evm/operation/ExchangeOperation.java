@@ -18,8 +18,7 @@ import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Exchange operation. */
 public class ExchangeOperation extends AbstractFixedCostOperation {
@@ -50,7 +49,7 @@ public class ExchangeOperation extends AbstractFixedCostOperation {
     int n = (imm >> 4) + 1;
     int m = (imm & 0x0F) + 1 + n;
 
-    final Bytes tmp = frame.getStackItem(n);
+    final Word256 tmp = frame.getStackItem(n);
     frame.setStackItem(n, frame.getStackItem(m));
     frame.setStackItem(m, tmp);
     frame.setPC(pc + 1);

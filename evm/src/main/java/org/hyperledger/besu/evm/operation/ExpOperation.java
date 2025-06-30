@@ -18,10 +18,9 @@ import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import java.math.BigInteger;
-
-import org.apache.tuweni.bytes.Bytes;
 
 /** The Exp operation. */
 public class ExpOperation extends AbstractOperation {
@@ -51,30 +50,17 @@ public class ExpOperation extends AbstractOperation {
    */
   public static OperationResult staticOperation(
       final MessageFrame frame, final GasCalculator gasCalculator) {
-    final Bytes number = frame.popStackItem();
-    final Bytes power = frame.popStackItem();
+    final Word256 base = frame.popStackItem();
+    final Word256 exponent = frame.popStackItem();
 
-    final int numBytes = (power.bitLength() + 7) / 8;
-
-    final long cost = gasCalculator.expOperationGasCost(numBytes);
+    final int exponentBytes = exponent.byteLength(); // Counts significant bytes
+    final long cost = gasCalculator.expOperationGasCost(exponentBytes);
     if (frame.getRemainingGas() < cost) {
       return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
     }
 
-    byte[] numberBytes = number.toArrayUnsafe();
-    BigInteger numBI = numberBytes.length > 0 ? new BigInteger(1, numberBytes) : BigInteger.ZERO;
-    byte[] powBytes = power.toArrayUnsafe();
-    BigInteger powBI = powBytes.length > 0 ? new BigInteger(1, powBytes) : BigInteger.ZERO;
-
-    final BigInteger result = numBI.modPow(powBI, MOD_BASE);
-
-    byte[] resultArray = result.toByteArray();
-    int length = resultArray.length;
-    if (length > 32) {
-      frame.pushStackItem(Bytes.wrap(resultArray, length - 32, 32));
-    } else {
-      frame.pushStackItem(Bytes.wrap(resultArray));
-    }
+    final Word256 result = base.exp(exponent);
+    frame.pushStackItem(result);
     return new OperationResult(cost, null);
   }
 }

@@ -27,6 +27,7 @@ import org.hyperledger.besu.evm.gascalculator.LondonGasCalculator;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
+import org.hyperledger.besu.evm.word256.Word256;
 import org.junit.jupiter.api.Test;
 
 class PrevRanDaoOperationTest {
@@ -43,7 +44,7 @@ class PrevRanDaoOperationTest {
     EVM evm = mock(EVM.class);
     Operation.OperationResult r = op.executeFixedCostOperation(messageFrame, evm);
     assertThat(r.getHaltReason()).isNull();
-    verify(messageFrame).pushStackItem(prevRandao);
+    verify(messageFrame).pushStackItem(Word256.fromBytes(prevRandao.toArrayUnsafe()));
   }
 
   @Test
@@ -59,6 +60,6 @@ class PrevRanDaoOperationTest {
     EVM evm = mock(EVM.class);
     Operation.OperationResult r = op.executeFixedCostOperation(messageFrame, evm);
     assertThat(r.getHaltReason()).isNull();
-    verify(messageFrame).pushStackItem(prevRandao);
+    verify(messageFrame).pushStackItem(Word256.fromBytes(prevRandao.toArrayUnsafe()));
   }
 }

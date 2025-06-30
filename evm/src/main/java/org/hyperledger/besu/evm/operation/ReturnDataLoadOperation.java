@@ -14,15 +14,11 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import static org.hyperledger.besu.evm.internal.Words.clampedToInt;
-
 import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
-import org.apache.tuweni.bytes.Bytes;
-import org.apache.tuweni.bytes.Bytes32;
+import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Return data load operation. */
 public class ReturnDataLoadOperation extends AbstractOperation {
@@ -38,25 +34,26 @@ public class ReturnDataLoadOperation extends AbstractOperation {
 
   @Override
   public OperationResult execute(final MessageFrame frame, final EVM evm) {
-    Code code = frame.getCode();
+    final Code code = frame.getCode();
     if (code.getEofVersion() == 0) {
       return InvalidOperation.INVALID_RESULT;
     }
 
-    final int offset = clampedToInt(frame.popStackItem());
-    Bytes returnData = frame.getReturnData();
-    int returnDataSize = returnData.size();
+    final Word256 offset = frame.popStackItem();
+    final int offsetInt = offset.clampedToInt();
+    final byte[] returnData = frame.getReturnData().toArrayUnsafe();
 
-    Bytes value;
-    if (offset > returnDataSize) {
-      value = Bytes.EMPTY;
-    } else if (offset + 32 >= returnData.size()) {
-      value = Bytes32.rightPad(returnData.slice(offset));
+    final Word256 result;
+    if (offsetInt >= returnData.length) {
+      result = Word256.ZERO;
     } else {
-      value = returnData.slice(offset, 32);
+      final int copyLen = Math.min(32, returnData.length - offsetInt);
+      final byte[] padded = new byte[32];
+      System.arraycopy(returnData, offsetInt, padded, 0, copyLen);
+      result = Word256.fromBytes(padded);
     }
 
-    frame.pushStackItem(value);
+    frame.pushStackItem(result);
     return new OperationResult(3L, null);
   }
 }
