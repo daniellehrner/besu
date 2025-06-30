@@ -49,20 +49,7 @@ public class SignExtendOperation extends AbstractFixedCostOperation {
     final Word256 extByte = frame.popStackItem();
     final Word256 value = frame.popStackItem();
 
-    if (!extByte.fitsInt() || extByte.toInt() >= 31) {
-      frame.pushStackItem(value);
-      return signExtendSuccess;
-    }
-
-    final int byteIndex = extByte.toInt();
-    final int bitIndex = (31 - byteIndex) * 8;
-    final int signBit = value.getBit(bitIndex);
-    final Word256 result =
-        signBit == 1
-            ? value.or(Word256.maskAbove(bitIndex))
-            : value.and(Word256.maskBelow(bitIndex + 1));
-
-    frame.pushStackItem(result);
+    frame.pushStackItem(value.signExtend(extByte));
     return signExtendSuccess;
   }
 }

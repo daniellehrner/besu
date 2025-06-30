@@ -654,6 +654,13 @@ public class MessageFrame {
     writeMemory(offset, length, value, false);
   }
 
+  /**
+   * Write a word to memory
+   *
+   * @param offset The offset in memory
+   * @param value The value to write
+   * @param explicitMemoryUpdate true if triggered by a memory opcode, false otherwise
+   */
   public void writeMemory(
       final long offset, final Word256 value, final boolean explicitMemoryUpdate) {
     writeMemory(offset, 32, Bytes32.wrap(value.toBytes()), explicitMemoryUpdate);

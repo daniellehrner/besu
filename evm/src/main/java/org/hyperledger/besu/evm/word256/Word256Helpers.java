@@ -113,19 +113,78 @@ final class Word256Helpers {
     }
   }
 
-  /**
-   * Reads 8 bytes from the given byte array starting at the specified offset, interpreting them as
-   * a big-endian long value.
-   *
-   * @param src the source byte array
-   * @param offset the offset into the array
-   * @return the long value represented by the 8 bytes starting at offset
-   */
-  static long readLongBE(final byte[] src, final int offset) {
-    long value = 0L;
-    for (int i = 0; i < 8; i++) {
-      value = (value << 8) | (src[offset + i] & 0xFFL);
+  static Word256 maskAbove(final int bitIndex) {
+    if (bitIndex < 0 || bitIndex >= 256) {
+      throw new IllegalArgumentException("bitIndex must be in [0, 255]");
     }
-    return value;
+    if (bitIndex == 0) {
+      return Word256.MINUS_ONE;
+    }
+
+    final int wordIndex = bitIndex / 64;
+    final int bitInWord = bitIndex % 64;
+
+    final long[] longs = new long[4];
+    for (int i = 0; i < wordIndex; i++) {
+      longs[i] = -1L;
+    }
+    longs[wordIndex] = ~0L << bitInWord;
+    // remaining are 0 by default
+
+    return new Word256(longs[0], longs[1], longs[2], longs[3]);
+  }
+
+  /**
+   * Returns a mask with all bits below the specified index set to 1, the rest 0.
+   *
+   * @param bitIndex index in range [0, 256]
+   * @return Word256 mask
+   */
+  static Word256 maskBelow(final int bitIndex) {
+    if (bitIndex < 0 || bitIndex > 256) {
+      throw new IllegalArgumentException("bitIndex must be in [0, 256]");
+    }
+    if (bitIndex == 256) {
+      return Word256.MINUS_ONE;
+    } else if (bitIndex == 0) {
+      return Word256.ZERO;
+    }
+
+    final int wordIndex = bitIndex / 64;
+    final int bitInWord = bitIndex % 64;
+
+    final long[] longs = new long[4];
+    for (int i = 0; i < wordIndex; i++) {
+      longs[i] = -1L;
+    }
+    if (wordIndex < 4) {
+      longs[wordIndex] = (1L << bitInWord) - 1;
+    }
+
+    return new Word256(longs[0], longs[1], longs[2], longs[3]);
+  }
+
+  static Word256 divideByLong(final Word256 dividend, final long divisor) {
+    if (divisor == 0) throw new ArithmeticException("division by zero");
+    if (dividend.isZero()) return Word256.ZERO;
+
+    long[] result = new long[4];
+    long rem = 0;
+
+    for (int i = 3; i >= 0; i--) {
+      long part = switch (i) {
+        case 3 -> dividend.l3;
+        case 2 -> dividend.l2;
+        case 1 -> dividend.l1;
+        case 0 -> dividend.l0;
+        default -> throw new IllegalStateException();
+      };
+      long numerator = rem;
+      numerator = (numerator << 64) | (part & 0xFFFFFFFFFFFFFFFFL);
+      result[i] = Long.divideUnsigned(numerator, divisor);
+      rem = Long.remainderUnsigned(numerator, divisor);
+    }
+
+    return new Word256(result[0], result[1], result[2], result[3]);
   }
 }

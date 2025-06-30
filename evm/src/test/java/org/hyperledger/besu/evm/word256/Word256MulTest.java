@@ -1,5 +1,18 @@
+/*
+ * Copyright contributors to Besu.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 package org.hyperledger.besu.evm.word256;
-
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -85,8 +98,12 @@ class Word256MulTest {
   @Test
   void mulAlternatingBits() {
     // A * B = expected based on known product (check masking, not overflow)
-    Word256 a = new Word256(0xAAAAAAAAAAAAAAAAL, 0xAAAAAAAAAAAAAAAAL, 0xAAAAAAAAAAAAAAAAL, 0xAAAAAAAAAAAAAAAAL);
-    Word256 b = new Word256(0x5555555555555555L, 0x5555555555555555L, 0x5555555555555555L, 0x5555555555555555L);
+    Word256 a =
+        new Word256(
+            0xAAAAAAAAAAAAAAAAL, 0xAAAAAAAAAAAAAAAAL, 0xAAAAAAAAAAAAAAAAL, 0xAAAAAAAAAAAAAAAAL);
+    Word256 b =
+        new Word256(
+            0x5555555555555555L, 0x5555555555555555L, 0x5555555555555555L, 0x5555555555555555L);
     Word256 result = a.mul(b);
     // The low 256 bits of the full 512-bit product are not easy to compute directly,
     // so here we check commutativity and reproducibility
@@ -98,7 +115,8 @@ class Word256MulTest {
     Word256 a = new Word256(0, 0, 1L, 0L); // 2^64
     Word256 b = new Word256(0, 0, 2L, 0L); // 2^65
     Word256 result = a.mul(b); // = 2^129
-    Word256 expected = new Word256(0x0000000000000004L, 0x0000000000000000L, 0x0000000000000000L, 0L);
+    Word256 expected =
+        new Word256(0x0000000000000004L, 0x0000000000000000L, 0x0000000000000000L, 0L);
     assertEquals(expected, result);
   }
 
@@ -116,7 +134,9 @@ class Word256MulTest {
     Word256 a = new Word256(0, 0, 0xFFFFFFFFFFFFFFFFL, 0xFFFFFFFFFFFFFFFFL);
     Word256 result = a.mul(a);
     // Result is 2^256 - 2^129 + 1 => only keep low 256 bits
-    Word256 expected = new Word256(0x0000000000000001L, 0xFFFFFFFFFFFFFFFEL, 0x0000000000000000L, 0x0000000000000001L);
+    Word256 expected =
+        new Word256(
+            0x0000000000000001L, 0xFFFFFFFFFFFFFFFEL, 0x0000000000000000L, 0x0000000000000001L);
     assertEquals(expected, result);
   }
 }

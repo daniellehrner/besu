@@ -14,7 +14,6 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import org.apache.tuweni.units.bigints.UInt256;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -23,6 +22,7 @@ import org.hyperledger.besu.evm.internal.UnderflowException;
 import org.hyperledger.besu.evm.word256.Word256;
 
 import org.apache.tuweni.bytes.Bytes32;
+import org.apache.tuweni.units.bigints.UInt256;
 
 /** Implements the TLOAD operation defined in EIP-1153 */
 public class TLoadOperation extends AbstractOperation {

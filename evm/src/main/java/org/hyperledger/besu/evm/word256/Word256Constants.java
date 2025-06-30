@@ -14,18 +14,22 @@
  */
 package org.hyperledger.besu.evm.word256;
 
-/** Shared constant values used by Word256. */
+/**
+ * Utility class for defining constants for Word256 values.
+ *
+ * <p>This class provides commonly used Word256 constants such as ZERO, ONE, MINUS_ONE, and MAX.
+ */
 final class Word256Constants {
 
   private Word256Constants() {
     // Prevent instantiation
   }
 
-  public static final Word256 ZERO = new Word256(0L, 0L, 0L, 0L);
+  static final Word256 ZERO = new Word256(0L, 0L, 0L, 0L);
 
-  public static final Word256 ONE = new Word256(0L, 0L, 0L, 1L);
+  static final Word256 ONE = new Word256(1L, 0L, 0L, 0L);
 
-  public static final Word256 MINUS_ONE = new Word256(-1L, -1L, -1L, -1L);
+  static final Word256 MINUS_ONE = new Word256(-1L, -1L, -1L, -1L);
 
-  public static final Word256 MAX = new Word256(~0L, ~0L, ~0L, ~0L);
+  static final Word256 MAX = new Word256(~0L, ~0L, ~0L, ~0L);
 }

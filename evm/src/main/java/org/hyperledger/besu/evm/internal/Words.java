@@ -59,6 +59,15 @@ public interface Words {
     }
   }
 
+  /**
+   * Extract an address from the provided word.
+   *
+   * <p>This method is used to convert a {@link Word256} to an {@link Address} by taking the
+   * right-most 20 bytes of the word.
+   *
+   * @param word The word to extract the address from.
+   * @return An address build from the right-most 160-bits of the {@code word}.
+   */
   static Address toAddress(final Word256 word) {
     final Bytes bytes = Bytes.wrap(word.toBytes());
     // Always take the right-most 20 bytes

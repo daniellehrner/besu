@@ -23,11 +23,11 @@ import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.BlockValues;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.LondonGasCalculator;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
-import org.hyperledger.besu.evm.word256.Word256;
 import org.junit.jupiter.api.Test;
 
 class PrevRanDaoOperationTest {
