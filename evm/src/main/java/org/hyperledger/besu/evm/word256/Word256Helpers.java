@@ -164,27 +164,68 @@ final class Word256Helpers {
     return new Word256(longs[0], longs[1], longs[2], longs[3]);
   }
 
-  static Word256 divideByLong(final Word256 dividend, final long divisor) {
-    if (divisor == 0) throw new ArithmeticException("division by zero");
-    if (dividend.isZero()) return Word256.ZERO;
-
-    long[] result = new long[4];
-    long rem = 0;
-
-    for (int i = 3; i >= 0; i--) {
-      long part = switch (i) {
-        case 3 -> dividend.l3;
-        case 2 -> dividend.l2;
-        case 1 -> dividend.l1;
-        case 0 -> dividend.l0;
-        default -> throw new IllegalStateException();
-      };
-      long numerator = rem;
-      numerator = (numerator << 64) | (part & 0xFFFFFFFFFFFFFFFFL);
-      result[i] = Long.divideUnsigned(numerator, divisor);
-      rem = Long.remainderUnsigned(numerator, divisor);
+  static int significantLength(final long[] x) {
+    for (int i = x.length - 1; i >= 0; i--) {
+      if (x[i] != 0) {
+        return i + 1;
+      }
     }
 
-    return new Word256(result[0], result[1], result[2], result[3]);
+    return 0;
+  }
+
+  static long[] shiftLeft(final long[] x, final int shift, final int len) {
+    long[] r = new long[len];
+    long carry = 0;
+    for (int i = 0; i < len; i++) {
+      r[i] = (x[i] << shift) | carry;
+      carry = x[i] >>> (64 - shift);
+    }
+    return r;
+  }
+
+  static long[] shiftLeftExtended(final long[] x, final int shift, final int len) {
+    long[] r = new long[len + 1];
+    long carry = 0;
+    for (int i = 0; i < len; i++) {
+      r[i] = (x[i] << shift) | carry;
+      carry = x[i] >>> (64 - shift);
+    }
+    r[len] = carry;
+    return r;
+  }
+
+  static long estimateQHat(final long u2, final long u1, final long v1) {
+    return Long.divideUnsigned((u2 << 32) | (u1 >>> 32), v1 >>> 32);
+  }
+
+  static boolean overflowEstimate(
+      final long qhat, final long v1, final long v0, final long u2, final long u1) {
+    final long rhat = ((u2 << 32) | (u1 >>> 32)) - qhat * (v1 >>> 32);
+    final long left = (rhat << 32) | (u1 & 0xFFFFFFFFL);
+    final long right = qhat * v0;
+
+    return Long.compareUnsigned(left, right) < 0;
+  }
+
+  static long mulSub(final long[] un, final long[] vn, final long qhat, final int j) {
+    long borrow = 0;
+    for (int i = 0; i < vn.length; i++) {
+      final long prod = qhat * vn[i];
+      final long diff = un[i + j] - prod - borrow;
+
+      borrow = Long.compareUnsigned(prod + borrow, un[i + j]) > 0 ? 1 : 0;
+      un[i + j] = diff;
+    }
+    return borrow;
+  }
+
+  static void addBack(final long[] un, final long[] vn, final int j) {
+    long carry = 0;
+    for (int i = 0; i < vn.length; i++) {
+      long sum = un[i + j] + vn[i] + carry;
+      carry = Long.compareUnsigned(sum, un[i + j]) < 0 ? 1 : 0;
+      un[i + j] = sum;
+    }
   }
 }

@@ -104,7 +104,7 @@ final class Word256Arithmetic {
    * @throws ArithmeticException if divisor is zero
    */
   public static Word256 divide(final Word256 dividend, final Word256 divisor) {
-    if (Word256Comparison.isZero(divisor)) {
+    if (divisor.isZero()) {
       throw new ArithmeticException("Division by zero");
     }
 
@@ -112,34 +112,46 @@ final class Word256Arithmetic {
       return Word256Constants.ZERO;
     }
 
-    Word256 quotient = Word256Constants.ZERO;
-    Word256 remainder = Word256Constants.ZERO;
-
-    for (int i = 255; i >= 0; i--) {
-      remainder = Word256Bitwise.shiftLeft1(remainder);
-
-      int bit = Word256Bitwise.getBit(dividend, i);
-      if (bit != 0) {
-        remainder = Word256Bitwise.setBit(remainder, 255);
-      }
-
-      int cmp = compareUnsigned(remainder, divisor);
-      boolean subtract = cmp >= 0;
-
-      if (subtract) {
-        remainder = subtract(remainder, divisor);
-        quotient = Word256Bitwise.setBit(quotient, i);
-      }
-
-      System.out.printf(
-        "i=%3d | bit=%d | cmp=%d | subtract=%s\n" +
-          "       remainder=%s\n" +
-          "       quotient =%s\n",
-        i, bit, cmp, subtract, remainder.toString(), quotient.toString()
-      );
+    if (dividend.equals(divisor)) {
+      return Word256Constants.ONE;
     }
 
-    return quotient;
+    final long[] u = {dividend.l0, dividend.l1, dividend.l2, dividend.l3}; // little-endian
+    final long[] v = {divisor.l0, divisor.l1, divisor.l2, divisor.l3}; // little-endian
+    final long[] q = new long[4];
+
+    final int n = Word256Helpers.significantLength(v);
+    final int m = Word256Helpers.significantLength(u) - n;
+
+    final int shift = Long.numberOfLeadingZeros(v[n - 1]);
+
+    final long[] vn = Word256Helpers.shiftLeft(v, shift, n);
+    final long[] un = Word256Helpers.shiftLeftExtended(u, shift, m + n);
+
+    for (int j = m; j >= 0; j--) {
+      final long u2 = un[j + n];
+      final long u1 = un[j + n - 1];
+
+      final long v1 = vn[n - 1];
+      final long v0 = vn[n - 2];
+
+      long qHat = Word256Helpers.estimateQHat(u2, u1, v1);
+
+      while (Word256Helpers.overflowEstimate(qHat, v1, v0, u2, u1)) {
+        qHat--;
+      }
+
+      if (Word256Helpers.mulSub(un, vn, qHat, j) < 0) {
+        qHat--;
+        Word256Helpers.addBack(un, vn, j);
+      }
+
+      if (j < q.length) {
+        q[j] = qHat;
+      }
+    }
+
+    return new Word256(q[0], q[1], q[2], q[3]);
   }
 
   /**

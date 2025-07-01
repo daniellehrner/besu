@@ -59,23 +59,20 @@ final class Word256Bitwise {
    * @throws IllegalArgumentException if the index is out of range
    */
   static int getBit(final Word256 a, final int index) {
-    if (index < 0 || index >= 256)
+    if (index < 0 || index >= 256) {
       throw new IllegalArgumentException("bit index out of range: " + index);
+    }
     int word = index / 64;
     int bit = index % 64;
-    long mask = 1L << (63 - bit);
-    switch (word) {
-      case 3:
-        return (a.l3 & mask) != 0 ? 1 : 0;
-      case 2:
-        return (a.l2 & mask) != 0 ? 1 : 0;
-      case 1:
-        return (a.l1 & mask) != 0 ? 1 : 0;
-      case 0:
-        return (a.l0 & mask) != 0 ? 1 : 0;
-      default:
-        throw new AssertionError();
-    }
+    long mask = 1L << bit; // ✅ fix here too
+
+    return switch (word) {
+      case 0 -> (a.l0 & mask) != 0 ? 1 : 0;
+      case 1 -> (a.l1 & mask) != 0 ? 1 : 0;
+      case 2 -> (a.l2 & mask) != 0 ? 1 : 0;
+      case 3 -> (a.l3 & mask) != 0 ? 1 : 0;
+      default -> throw new AssertionError();
+    };
   }
 
   /**
@@ -87,23 +84,20 @@ final class Word256Bitwise {
    * @throws IllegalArgumentException if the index is out of range
    */
   static Word256 setBit(final Word256 a, final int index) {
-    if (index < 0 || index >= 256)
+    if (index < 0 || index >= 256) {
       throw new IllegalArgumentException("bit index out of range: " + index);
+    }
     int word = index / 64;
     int bit = index % 64;
-    long mask = 1L << (63 - bit);
-    switch (word) {
-      case 3:
-        return new Word256(a.l0, a.l1, a.l2, a.l3 | mask);
-      case 2:
-        return new Word256(a.l0, a.l1, a.l2 | mask, a.l3);
-      case 1:
-        return new Word256(a.l0, a.l1 | mask, a.l2, a.l3);
-      case 0:
-        return new Word256(a.l0 | mask, a.l1, a.l2, a.l3);
-      default:
-        throw new AssertionError();
-    }
+    long mask = 1L << bit;
+
+    return switch (word) {
+      case 0 -> new Word256(a.l0 | mask, a.l1, a.l2, a.l3);
+      case 1 -> new Word256(a.l0, a.l1 | mask, a.l2, a.l3);
+      case 2 -> new Word256(a.l0, a.l1, a.l2 | mask, a.l3);
+      case 3 -> new Word256(a.l0, a.l1, a.l2, a.l3 | mask);
+      default -> throw new AssertionError();
+    };
   }
 
   /**
