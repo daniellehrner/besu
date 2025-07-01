@@ -164,6 +164,59 @@ final class Word256Helpers {
     return new Word256(longs[0], longs[1], longs[2], longs[3]);
   }
 
+  static Word256 divideBySingleWord(
+      final long[] u, final long[] vn, final int m, final long[] q, final int shift) {
+    // Single-limb divisor optimization
+    final long[] un = Word256Helpers.shiftLeftExtended(u, shift, m + 1);
+    final long d = vn[0];
+
+    for (int j = m; j >= 0; j--) {
+      final int k = j + 1;
+      final long u1 = un[k];
+      final long u0 = un[k - 1];
+
+      // Compose 128-bit value
+      final long rHat = Long.remainderUnsigned(u1, d);
+
+      final long full = (rHat << 64) | u0;
+      final long r = Long.divideUnsigned(full, d);
+
+      if (j < q.length) {
+        q[j] = r;
+      }
+    }
+
+    return new Word256(q[0], q[1], q[2], q[3]);
+  }
+
+  static Word256 divideKnuth(
+      final int m, final long[] un, final int n, final long[] vn, final long[] q) {
+    for (int j = m; j >= 0; j--) {
+      final long u2 = un[j + n];
+      final long u1 = un[j + n - 1];
+
+      final long v1 = vn[n - 1];
+      final long v0 = vn[n - 2];
+
+      long qHat = Word256Helpers.estimateQHat(u2, u1, v1);
+
+      while (Word256Helpers.overflowEstimate(qHat, v1, v0, u2, u1)) {
+        qHat--;
+      }
+
+      if (Word256Helpers.mulSub(un, vn, qHat, j) < 0) {
+        qHat--;
+        Word256Helpers.addBack(un, vn, j);
+      }
+
+      if (j < q.length) {
+        q[j] = qHat;
+      }
+    }
+
+    return new Word256(q[0], q[1], q[2], q[3]);
+  }
+
   static int significantLength(final long[] x) {
     for (int i = x.length - 1; i >= 0; i--) {
       if (x[i] != 0) {

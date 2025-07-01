@@ -128,30 +128,12 @@ final class Word256Arithmetic {
     final long[] vn = Word256Helpers.shiftLeft(v, shift, n);
     final long[] un = Word256Helpers.shiftLeftExtended(u, shift, m + n);
 
-    for (int j = m; j >= 0; j--) {
-      final long u2 = un[j + n];
-      final long u1 = un[j + n - 1];
-
-      final long v1 = vn[n - 1];
-      final long v0 = vn[n - 2];
-
-      long qHat = Word256Helpers.estimateQHat(u2, u1, v1);
-
-      while (Word256Helpers.overflowEstimate(qHat, v1, v0, u2, u1)) {
-        qHat--;
-      }
-
-      if (Word256Helpers.mulSub(un, vn, qHat, j) < 0) {
-        qHat--;
-        Word256Helpers.addBack(un, vn, j);
-      }
-
-      if (j < q.length) {
-        q[j] = qHat;
-      }
+    if (n == 1) {
+      // Single-limb divisor optimization
+      return Word256Helpers.divideBySingleWord(u, vn, m, q, shift);
     }
 
-    return new Word256(q[0], q[1], q[2], q[3]);
+    return Word256Helpers.divideKnuth(m, un, n, vn, q);
   }
 
   /**
