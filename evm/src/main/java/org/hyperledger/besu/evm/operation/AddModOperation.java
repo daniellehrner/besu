@@ -47,9 +47,9 @@ public class AddModOperation extends AbstractFixedCostOperation {
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
 
-    final Word256 modulus = frame.popStackItem();
-    final Word256 b = frame.popStackItem();
     final Word256 a = frame.popStackItem();
+    final Word256 b = frame.popStackItem();
+    final Word256 modulus = frame.popStackItem();
 
     if (modulus.isZero()) {
       frame.pushStackItem(Word256.ZERO);
