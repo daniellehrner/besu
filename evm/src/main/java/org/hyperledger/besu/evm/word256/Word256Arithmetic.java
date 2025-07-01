@@ -144,9 +144,20 @@ final class Word256Arithmetic {
    * @return the result of value % modulus as a new Word256
    */
   static Word256 mod(final Word256 value, final Word256 modulus) {
-    if (Word256Comparison.isZero(modulus)) return Word256Constants.ZERO;
-    if (compareUnsigned(value, modulus) < 0) return value;
-    return subtract(value, mul(divide(value, modulus), modulus));
+    if (Word256Comparison.isZero(modulus)) {
+      return Word256Constants.ZERO;
+    }
+
+    if (compareUnsigned(value, modulus) < 0) {
+      return value;
+    }
+
+    final Word256 result = subtract(value, mul(divide(value, modulus), modulus));
+
+    // Strip high bits explicitly (truncate to modulus bit width)
+    final int modBitLength = modulus.bitLength();
+    final Word256 mask = Word256Helpers.maskBelow(modBitLength);
+    return Word256Bitwise.and(result, mask);
   }
 
   /**
@@ -188,7 +199,10 @@ final class Word256Arithmetic {
    * @return the result of (a + b) % modulus as a new Word256
    */
   static Word256 addmod(final Word256 a, final Word256 b, final Word256 modulus) {
-    if (Word256Comparison.isZero(modulus)) return Word256Constants.ZERO;
+    if (Word256Comparison.isZero(modulus)) {
+      return Word256Constants.ZERO;
+    }
+
     return mod(add(a, b), modulus);
   }
 
