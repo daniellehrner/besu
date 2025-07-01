@@ -332,17 +332,26 @@ final class Word256Arithmetic {
    * @return the result of base^exponent as a new Word256
    */
   static Word256 exp(final Word256 base, final Word256 exponent) {
-    if (exponent.isZero()) return Word256Constants.ONE;
-    if (base.isZero()) return Word256Constants.ZERO;
+    if (exponent.isZero()) {
+      return Word256Constants.ONE;
+    }
 
+    if (base.isZero()) {
+      return Word256Constants.ZERO;
+    }
+
+    final int highestBit = exponent.bitLength() - 1;
     Word256 result = Word256Constants.ONE;
     Word256 power = base;
 
-    for (int i = 255; i >= 0; i--) {
+    for (int i = 0; i <= highestBit; i++) {
       if (exponent.getBit(i) == 1) {
         result = mul(result, power);
       }
-      power = mul(power, power);
+
+      if (i != highestBit) {
+        power = mul(power, power);
+      }
     }
 
     return result;
