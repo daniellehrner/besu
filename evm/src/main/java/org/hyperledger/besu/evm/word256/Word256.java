@@ -588,6 +588,16 @@ public final class Word256 {
     return 256;
   }
 
+  long getLimb(final int index) {
+    return switch (index) {
+      case 0 -> l0;
+      case 1 -> l1;
+      case 2 -> l2;
+      case 3 -> l3;
+      default -> throw new IndexOutOfBoundsException();
+    };
+  }
+
   @Override
   public boolean equals(final Object obj) {
     if (this == obj) return true;

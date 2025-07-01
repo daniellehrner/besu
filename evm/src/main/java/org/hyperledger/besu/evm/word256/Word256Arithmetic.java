@@ -17,6 +17,8 @@ package org.hyperledger.besu.evm.word256;
 import static org.hyperledger.besu.evm.word256.Word256Comparison.compareUnsigned;
 import static org.hyperledger.besu.evm.word256.Word256Comparison.isNegative;
 
+import java.util.Arrays;
+
 /**
  * * Utility class for performing arithmetic operations on {@link Word256} values.
  *
@@ -250,10 +252,97 @@ final class Word256Arithmetic {
    * @param modulus the modulus to reduce by
    * @return the result of (a * b) % modulus as a new Word256
    */
-  static Word256 mulmod(final Word256 a, final Word256 b, final Word256 modulus) {
-    if (Word256Comparison.isZero(modulus)) return Word256Constants.ZERO;
-    long[] product = Word256Helpers.multiplyFull(a, b);
-    return Word256Helpers.mod512(product, modulus);
+  public static Word256 mulmod(final Word256 a, final Word256 b, final Word256 modulus) {
+    System.out.println("MULMOD input:");
+    System.out.println("  a:       " + a);
+    System.out.println("  b:       " + b);
+    System.out.println("  modulus: " + modulus);
+    System.out.println("Word256.MAX: " + Word256.MAX);
+    System.out.println("modulus.equals(MAX): " + modulus.equals(Word256.MAX));
+
+    // Special case: mod == 2^256 - 1
+    if (modulus.equals(Word256.MAX)) {
+      final long[] product = Word256Helpers.multiplyFull(a, b);
+
+      final Word256 lo = new Word256(product[0], product[1], product[2], product[3]);
+      final Word256 hi = new Word256(product[4], product[5], product[6], product[7]);
+
+      Word256 result = lo.add(hi);
+      if (result.compareUnsigned(lo) < 0) {
+        result = result.add(Word256.ONE); // propagate carry
+      }
+
+      if (result.compareUnsigned(modulus) >= 0) {
+        result = result.sub(modulus);
+      }
+
+      if (result.equals(modulus)) {
+        return Word256.ZERO;
+      }
+
+      return result;
+    }
+
+    if (modulus.isZero() || a.isZero() || b.isZero()) {
+      return Word256.ZERO;
+    }
+
+    final long[] product = Word256Helpers.multiplyFull(a, b);
+    System.out.println("Full 512-bit product:");
+    System.out.println("  product: " + Arrays.toString(product));
+
+    final boolean highIsZero = product[4] == 0 && product[5] == 0 && product[6] == 0 && product[7] == 0;
+    if (highIsZero) {
+      final Word256 lo = new Word256(product[0], product[1], product[2], product[3]);
+      return Word256Arithmetic.mod(lo, modulus);
+    }
+
+    final long[] modLimbs = new long[] { modulus.l0, modulus.l1, modulus.l2, modulus.l3 };
+    final int modLen = Word256Helpers.significantLength(modLimbs);
+    if (modLen == 0) {
+      return Word256.ZERO;
+    }
+
+    final int shift = Long.numberOfLeadingZeros(modulus.getLimb(modLen - 1));
+    final long[] modShifted = Word256Helpers.shiftLeft(modLimbs, shift, modLen);
+
+    System.out.println("Shift params:");
+    System.out.println("  shift: " + shift);
+    System.out.println("  shifted modulus: " + Arrays.toString(modShifted));
+
+    final int m = 4;
+    final int unLen = m + modLen + 1;
+
+    final long[] unShifted = new long[unLen]; // make sure it has enough room
+    System.arraycopy(product, 0, unShifted, 0, 8); // copy the full product
+    final long[] un = Word256Helpers.shiftLeft(unShifted, shift, unLen);
+
+    System.out.println("Shifted product (un): " + Arrays.toString(un));
+
+    final long[] q = new long[modLen + 1];
+    final long[] normRem = (shift == 0)
+      ? Arrays.copyOfRange(un, 0, modLen)
+      : Word256Helpers.divideAndRemainderKnuth(m, un, modLen, modShifted, q);
+
+    System.out.println("Quotient q: " + Arrays.toString(q));
+    System.out.println("Normalized remainder (before shiftRight): " + Arrays.toString(normRem));
+
+    // Shift remainder back (de-normalize)
+    final long[] rem = (shift == 0)
+      ? normRem
+      : Word256Helpers.shiftRight(normRem, shift, normRem.length);
+    System.out.println("Final remainder (after shiftRight): " + Arrays.toString(rem));
+
+    final Word256 result = new Word256(
+      rem.length > 0 ? rem[0] : 0,
+      rem.length > 1 ? rem[1] : 0,
+      rem.length > 2 ? rem[2] : 0,
+      rem.length > 3 ? rem[3] : 0);
+    System.out.println("Word256 result: " + result);
+
+    final Word256 resultModulus = Word256Arithmetic.mod(result, modulus);
+    System.out.println("Final Word256 resultModulus: " + resultModulus);
+    return resultModulus;
   }
 
   /**

@@ -14,6 +14,8 @@
  */
 package org.hyperledger.besu.evm.word256;
 
+import java.util.Arrays;
+
 /**
  * Internal helpers for Word256 that support full-width multiplication and 512-bit modular
  * reduction.
@@ -29,70 +31,85 @@ final class Word256Helpers {
    *
    * @return an array of 8 unsigned 64-bit limbs, least significant limb at index 0
    */
-  static long[] multiplyFull(final Word256 a, final Word256 b) {
-    long[] aLimbs = {a.l3, a.l2, a.l1, a.l0};
-    long[] bLimbs = {b.l3, b.l2, b.l1, b.l0};
-    long[] result = new long[8];
+  public static long[] multiplyFull(final Word256 a, final Word256 b) {
+    final long[] x = {a.l0, a.l1, a.l2, a.l3}; // LSB to MSB
+    final long[] y = {b.l0, b.l1, b.l2, b.l3};
+    final long[] result = new long[8];
 
     for (int i = 0; i < 4; i++) {
-      for (int j = 0; j < 4; j++) {
-        int k = i + j;
-        long low = aLimbs[i] * bLimbs[j];
-        long high = Math.multiplyHigh(aLimbs[i], bLimbs[j]);
+      final long xi = x[i];
+      final long xLow = xi & 0xFFFFFFFFL;
+      final long xHigh = xi >>> 32;
 
-        // accumulate low
-        long sum = result[k] + low;
-        long carry = Long.compareUnsigned(sum, result[k]) < 0 ? 1 : 0;
+      for (int j = 0; j < 4; j++) {
+        final long yj = y[j];
+        final long yLow = yj & 0xFFFFFFFFL;
+        final long yHigh = yj >>> 32;
+
+        final int k = i + j;
+
+        // 64x64 = 128-bit multiplication (unsigned)
+        long p0 = xLow * yLow;
+        long p1 = xLow * yHigh;
+        long p2 = xHigh * yLow;
+        long p3 = xHigh * yHigh;
+
+        long middle = (p1 & 0xFFFFFFFFL) + (p2 & 0xFFFFFFFFL) + (p0 >>> 32);
+        long carry = middle >>> 32;
+
+        long lo = (p0 & 0xFFFFFFFFL) | (middle << 32);
+        long hi = p3 + (p1 >>> 32) + (p2 >>> 32) + carry;
+
+        // Add lo to result[k]
+        long sum = result[k] + lo;
+        boolean carry1 = Long.compareUnsigned(sum, result[k]) < 0;
         result[k] = sum;
 
-        // accumulate high + carry
-        result[k + 1] += high + carry;
+        // Add hi + carry1 to result[k + 1]
+        long sum1 = result[k + 1] + hi + (carry1 ? 1 : 0);
+        boolean carry2 = Long.compareUnsigned(sum1, result[k + 1]) < 0
+          || (carry1 && sum1 == result[k + 1]);
+        result[k + 1] = sum1;
+
+        // Propagate carry2
+        int l = k + 2;
+        while (carry2 && l < 8) {
+          long next = result[l] + 1;
+          carry2 = next == 0;
+          result[l++] = next;
+        }
       }
     }
 
     return result;
   }
 
-  /**
-   * Reduces a 512-bit value (given as 8 longs, LSB at index 0) modulo a 256-bit modulus. Equivalent
-   * to (hi << 256 + lo) % modulus.
-   */
-  static Word256 mod512(final long[] limbs, final Word256 modulus) {
-    if (limbs.length != 8) {
-      throw new IllegalArgumentException("Expected 8-limb array");
-    }
-    if (modulus.l0 == 0 && modulus.l1 == 0 && modulus.l2 == 0 && modulus.l3 == 0) {
-      return Word256Constants.ZERO;
-    }
+  public static long[] divideAndRemainderKnuth(
+    final int m, final long[] un, final int n, final long[] vn, final long[] q) {
 
-    Word256 hi = new Word256(limbs[7], limbs[6], limbs[5], limbs[4]);
-    Word256 lo = new Word256(limbs[3], limbs[2], limbs[1], limbs[0]);
+    for (int j = m; j >= 0; j--) {
+      final long u2 = un[j + n];
+      final long u1 = un[j + n - 1];
+      final long v1 = vn[n - 1];
+      final long v0 = vn[n - 2];
 
-    Word256 rem = Word256Constants.ZERO;
+      long qHat = estimateQHat(u2, u1, v1);
 
-    // reduce hi
-    for (int i = 0; i < 256; i++) {
-      rem = Word256Bitwise.shiftLeft1(rem);
-      if (Word256Bitwise.getBit(hi, 255 - i) != 0) {
-        rem = Word256Bitwise.setBit(rem, 0);
+      while (overflowEstimate(qHat, v1, v0, u2, u1)) {
+        qHat--;
       }
-      if (Word256Comparison.compareUnsigned(rem, modulus) >= 0) {
-        rem = Word256Arithmetic.subtract(rem, modulus);
+
+      if (mulSub(un, vn, qHat, j) < 0) {
+        qHat--;
+        addBack(un, vn, j);
+      }
+
+      if (j < q.length) {
+        q[j] = qHat;
       }
     }
 
-    // reduce lo
-    for (int i = 0; i < 256; i++) {
-      rem = Word256Bitwise.shiftLeft1(rem);
-      if (Word256Bitwise.getBit(lo, 255 - i) != 0) {
-        rem = Word256Bitwise.setBit(rem, 0);
-      }
-      if (Word256Comparison.compareUnsigned(rem, modulus) >= 0) {
-        rem = Word256Arithmetic.subtract(rem, modulus);
-      }
-    }
-
-    return rem;
+    return Arrays.copyOf(un, n); // full remainder, not truncated
   }
 
   static long bytesToLong(final byte[] bytes, final int offset) {
@@ -280,5 +297,39 @@ final class Word256Helpers {
       carry = Long.compareUnsigned(sum, un[i + j]) < 0 ? 1 : 0;
       un[i + j] = sum;
     }
+  }
+
+  static long[] shiftLeft512(final long[] x, final int shift) {
+    if (shift == 0) {
+      return Arrays.copyOf(x, 8);
+    }
+
+    final long[] result = new long[8];
+    long carry = 0;
+
+    for (int i = 0; i < 8; i++) {
+      long limb = x[i];
+      result[i] = (limb << shift) | carry;
+      carry = (limb >>> (64 - shift));
+    }
+
+    return result;
+  }
+
+  public static long[] shiftRight(final long[] x, final int shift, final int len) {
+    if (shift == 0) {
+      return Arrays.copyOf(x, len);
+    }
+
+    final long[] result = new long[len];
+    long carry = 0;
+
+    for (int i = len - 1; i >= 0; i--) {
+      final long limb = i < x.length ? x[i] : 0;
+      result[i] = (limb >>> shift) | carry;
+      carry = (limb << (64 - shift));
+    }
+
+    return result;
   }
 }

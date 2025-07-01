@@ -46,11 +46,11 @@ public class MulModOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    final Word256 value0 = frame.popStackItem();
-    final Word256 value1 = frame.popStackItem();
-    final Word256 value2 = frame.popStackItem();
+    final Word256 a = frame.popStackItem();
+    final Word256 b = frame.popStackItem();
+    final Word256 modulus = frame.popStackItem();
 
-    final Word256 result = value2.isZero() ? Word256.ZERO : value0.mulmod(value1, value2);
+    final Word256 result = modulus.isZero() ? Word256.ZERO : a.mulmod(b, modulus);
 
     frame.pushStackItem(result);
     return mulModSuccess;
