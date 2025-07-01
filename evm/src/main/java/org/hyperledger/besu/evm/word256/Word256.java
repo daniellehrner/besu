@@ -413,7 +413,7 @@ public final class Word256 {
     }
 
     final int byteIndex = extByte.toInt();
-    final int bitIndex = (31 - byteIndex) * 8;
+    final int bitIndex = byteIndex * 8;
     final int signBit = getBit(bitIndex);
 
     return signBit == 1
