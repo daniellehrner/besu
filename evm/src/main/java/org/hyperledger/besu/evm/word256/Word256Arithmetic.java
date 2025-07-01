@@ -131,8 +131,7 @@ final class Word256Arithmetic {
     final long[] un = Word256Helpers.shiftLeftExtended(u, shift, m + n);
 
     if (n == 1) {
-      // Single-limb divisor optimization
-      return Word256Helpers.divideBySingleWord(u, vn, m, q, shift);
+      return Word256Helpers.divideBySingleWord(u, v[0], m, q);
     }
 
     return Word256Helpers.divideKnuth(m, un, n, vn, q);

@@ -181,66 +181,53 @@ final class Word256Helpers {
     return new Word256(longs[0], longs[1], longs[2], longs[3]);
   }
 
-  static Word256 divideBySingleWord(
-      final long[] u, final long[] vn, final int m, final long[] q, final int shift) {
-    final long d = vn[0];
-    final long[] un = Word256Helpers.shiftLeftExtended(u, shift, m + 2);
+  static Word256 divideBySingleWord(final long[] u, final long d, final int m, final long[] q) {
+    long remHi = 0;
+    long remLo = 0;
 
-    for (int j = m; j >= 0; j--) {
-      final long hi = un[j + 1];
-      final long lo = un[j];
+    for (int j = m + 3; j >= 0; j--) {
+      remHi = remLo;
+      remLo = u[j];
 
-      final long qhat = divideUnsigned128Pure(hi, lo, d);
+      long qhat = divideUnsigned128(remHi, remLo, d);
 
       if (j < q.length) {
         q[j] = qhat;
       }
 
-      // Subtract qhat * d from the (lo, mid) part of un
-      final long prodLo = d * qhat;
-      final long prodHi = Math.multiplyHigh(d, qhat);
-
-      final long mid = un[j];
+      // Update remainder: remainder = (remHi:remLo) - qhat * d
+      long prodLo = d * qhat;
+      long prodHi = Math.multiplyHigh(d, qhat);
 
       long borrow = 0;
-      final long newLo = mid - prodLo;
-      if (Long.compareUnsigned(mid, prodLo) < 0) {
+      if (Long.compareUnsigned(remLo, prodLo) < 0) {
         borrow = 1;
       }
-
-      long newHi = lo - prodHi - borrow;
-
-      un[j] = newLo;
-      un[j + 1] = newHi;
+      remLo = remLo - prodLo;
+      remHi = remHi - prodHi - borrow;
     }
 
     return new Word256(q[0], q[1], q[2], q[3]);
   }
 
-  private static long divideUnsigned128Pure(final long hi, final long lo, final long d) {
+  private static long divideUnsigned128(final long hi, final long lo, final long d) {
     if (d == 0) {
       throw new ArithmeticException("Division by zero");
     }
 
     if (hi == 0) {
-      long q = Long.divideUnsigned(lo, d);
-      return q;
+      return Long.divideUnsigned(lo, d);
     }
 
-    // Manual long division loop over 128 bits
     long quotient = 0;
     long remainder = 0;
 
     for (int i = 127; i >= 0; i--) {
-      // Shift remainder left by 1, bring in next bit from hi:lo
-      remainder = Long.rotateLeft(remainder, 1);
-      if (i >= 64) {
-        remainder |= (hi >>> (i - 64)) & 1;
-      } else {
-        remainder |= (lo >>> i) & 1;
-      }
+      // Shift remainder left by 1 and bring in next bit from hi:lo
+      remainder <<= 1;
+      final long bit = (i >= 64) ? ((hi >>> (i - 64)) & 1) : ((lo >>> i) & 1);
+      remainder |= bit;
 
-      // Shift quotient left and set bit if remainder >= d
       quotient <<= 1;
       if (Long.compareUnsigned(remainder, d) >= 0) {
         remainder = Long.remainderUnsigned(remainder, d);
