@@ -185,7 +185,7 @@ final class Word256Helpers {
     long remHi = 0;
     long remLo = 0;
 
-    for (int j = m + 3; j >= 0; j--) {
+    for (int j = m; j >= 0; j--) {
       remHi = remLo;
       remLo = u[j];
 
