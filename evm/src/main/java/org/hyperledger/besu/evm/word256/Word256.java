@@ -233,8 +233,8 @@ public final class Word256 {
    * @param modulus the modulus to use
    * @return a new Word256 representing the result of (this + b) % modulus
    */
-  public Word256 addmod(final Word256 b, final Word256 modulus) {
-    return Word256Arithmetic.addmod(this, b, modulus);
+  public Word256 addMod(final Word256 b, final Word256 modulus) {
+    return Word256Arithmetic.addMod(this, b, modulus);
   }
 
   /**

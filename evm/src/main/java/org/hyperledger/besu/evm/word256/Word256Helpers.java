@@ -182,11 +182,10 @@ final class Word256Helpers {
   }
 
   static Word256 divideBySingleWord(final long[] u, final long d, final int m, final long[] q) {
-    long remHi = 0;
     long remLo = 0;
 
     for (int j = m; j >= 0; j--) {
-      remHi = remLo;
+      final long remHi = remLo;
       remLo = u[j];
 
       long qhat = divideUnsigned128(remHi, remLo, d);
@@ -197,14 +196,7 @@ final class Word256Helpers {
 
       // Update remainder: remainder = (remHi:remLo) - qhat * d
       long prodLo = d * qhat;
-      long prodHi = Math.multiplyHigh(d, qhat);
-
-      long borrow = 0;
-      if (Long.compareUnsigned(remLo, prodLo) < 0) {
-        borrow = 1;
-      }
       remLo = remLo - prodLo;
-      remHi = remHi - prodHi - borrow;
     }
 
     return new Word256(q[0], q[1], q[2], q[3]);
@@ -334,24 +326,7 @@ final class Word256Helpers {
     }
   }
 
-  static long[] shiftLeft512(final long[] x, final int shift) {
-    if (shift == 0) {
-      return Arrays.copyOf(x, 8);
-    }
-
-    final long[] result = new long[8];
-    long carry = 0;
-
-    for (int i = 0; i < 8; i++) {
-      long limb = x[i];
-      result[i] = (limb << shift) | carry;
-      carry = (limb >>> (64 - shift));
-    }
-
-    return result;
-  }
-
-  public static long[] shiftRight(final long[] x, final int shift, final int len) {
+  static long[] shiftRight(final long[] x, final int shift, final int len) {
     if (shift == 0) {
       return Arrays.copyOf(x, len);
     }
@@ -366,5 +341,23 @@ final class Word256Helpers {
     }
 
     return result;
+  }
+
+  /**
+   * Computes the unsigned borrow from a subtraction of two longs with an incoming borrow.
+   *
+   * @param a the minuend
+   * @param b the subtrahend
+   * @param borrowIn the incoming borrow (must be 0 or 1)
+   * @return the outgoing borrow (0 or 1)
+   */
+  static int getBorrow(final long a, final long b, final long borrowIn) {
+    final long sub = b + borrowIn;
+    final boolean overflow = (Long.compareUnsigned(sub, b) < 0); // if b + 1 overflows
+    if (overflow) {
+      // Always borrow in unsigned subtraction
+      return 1;
+    }
+    return Long.compareUnsigned(a, sub) < 0 ? 1 : 0;
   }
 }

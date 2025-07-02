@@ -199,12 +199,71 @@ final class Word256Arithmetic {
    * @param modulus the modulus to reduce by
    * @return the result of (a + b) % modulus as a new Word256
    */
-  static Word256 addmod(final Word256 a, final Word256 b, final Word256 modulus) {
+  static Word256 addMod(final Word256 a, final Word256 b, final Word256 modulus) {
     if (Word256Comparison.isZero(modulus)) {
       return Word256Constants.ZERO;
     }
 
-    return mod(add(a, b), modulus);
+    // Step 1: Reduce a and b modulo modulus
+    final Word256 x = a.mod(modulus);
+    final Word256 y = b.mod(modulus);
+
+    // Step 2: Perform x + y with carry
+    final long[] sum = new long[5];
+
+    sum[0] = x.l0 + y.l0;
+    long carry = Long.compareUnsigned(sum[0], x.l0) < 0 ? 1 : 0;
+
+    sum[1] = x.l1 + y.l1 + carry;
+    carry = ((Long.compareUnsigned(sum[1], x.l1) < 0) || (carry == 1 && sum[1] == x.l1)) ? 1 : 0;
+
+    sum[2] = x.l2 + y.l2 + carry;
+    carry = ((Long.compareUnsigned(sum[2], x.l2) < 0) || (carry == 1 && sum[2] == x.l2)) ? 1 : 0;
+
+    sum[3] = x.l3 + y.l3 + carry;
+    carry = ((Long.compareUnsigned(sum[3], x.l3) < 0) || (carry == 1 && sum[3] == x.l3)) ? 1 : 0;
+
+    sum[4] = carry;
+
+    // Step 3: Overflow path (5-limb division mod 4-limb modulus)
+    if (sum[4] != 0) {
+      final long[] un = Arrays.copyOf(sum, 5); // dividend
+      final long[] vn = {modulus.l0, modulus.l1, modulus.l2, modulus.l3};
+      final long[] q = new long[2]; // quotient (ignored)
+      final long[] rem = Word256Helpers.divideAndRemainderKnuth(1, un, 4, vn, q);
+      final Word256 result = new Word256(rem[0], rem[1], rem[2], rem[3]);
+      return result;
+    }
+
+    // Step 4: Try subtracting modulus: sum - modulus, with unsigned borrow tracking
+    final long[] reduced = trySubtract(sum, modulus);
+    final Word256 result;
+    if (reduced != null) {
+      result = new Word256(reduced[0], reduced[1], reduced[2], reduced[3]);
+    } else {
+      result = new Word256(sum[0], sum[1], sum[2], sum[3]);
+    }
+
+    return result;
+  }
+
+  private static long[] trySubtract(final long[] sum, final Word256 modulus) {
+    final long[] mod = {modulus.l0, modulus.l1, modulus.l2, modulus.l3};
+    final long[] tmp = new long[4];
+    long borrow = 0;
+
+    for (int i = 0; i < 4; i++) {
+      final long subtrahend = mod[i] + borrow;
+      tmp[i] = sum[i] - subtrahend;
+      final long newBorrow = Word256Helpers.getBorrow(sum[i], subtrahend, tmp[i]);
+
+      if (newBorrow < borrow) {
+        return null; // Invalid borrow propagation
+      }
+      borrow = newBorrow;
+    }
+
+    return (borrow == 0) ? tmp : null;
   }
 
   /**

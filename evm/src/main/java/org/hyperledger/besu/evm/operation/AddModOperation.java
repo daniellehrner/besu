@@ -54,7 +54,7 @@ public class AddModOperation extends AbstractFixedCostOperation {
     if (modulus.isZero()) {
       frame.pushStackItem(Word256.ZERO);
     } else {
-      frame.pushStackItem(a.addmod(b, modulus));
+      frame.pushStackItem(a.addMod(b, modulus));
     }
 
     return addModSuccess;
