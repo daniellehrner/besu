@@ -26,6 +26,17 @@ final class Word256Helpers {
     // Prevent instantiation
   }
 
+  static long[] subtract64(final long x, final long y, final long borrowIn) {
+    final long diff = x - y - borrowIn;
+
+    // Bitwise computation of borrowOut: ((~x & y) | (~(x ^ y) & diff)) >>> 63
+    final long t1 = ~x & y;
+    final long t2 = ~(x ^ y) & diff;
+    final long borrowOut = (t1 | t2) >>> 63;
+
+    return new long[] {diff, borrowOut};
+  }
+
   /**
    * Performs full 512-bit multiplication of two Word256 values.
    *

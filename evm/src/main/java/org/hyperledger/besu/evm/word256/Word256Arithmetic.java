@@ -58,21 +58,25 @@ final class Word256Arithmetic {
    * @param b the Word256 value to subtract
    * @return the result of a - b as a new Word256
    */
-  public static Word256 subtract(final Word256 a, final Word256 b) {
-    long r3 = a.l3 - b.l3;
-    long borrow = (Long.compareUnsigned(a.l3, b.l3) < 0) ? 1 : 0;
+  static Word256 sub(final Word256 a, final Word256 b) {
+    long[] r;
+    long r0, r1, r2, r3;
+    long borrow;
 
-    long b2 = b.l2 + borrow;
-    borrow = (Long.compareUnsigned(a.l2, b2) < 0) ? 1 : 0;
-    long r2 = a.l2 - b2;
+    r = Word256Helpers.subtract64(a.l0, b.l0, 0);
+    r0 = r[0];
+    borrow = r[1];
 
-    long b1 = b.l1 + borrow;
-    borrow = (Long.compareUnsigned(a.l1, b1) < 0) ? 1 : 0;
-    long r1 = a.l1 - b1;
+    r = Word256Helpers.subtract64(a.l1, b.l1, borrow);
+    r1 = r[0];
+    borrow = r[1];
 
-    long b0 = b.l0 + borrow;
-    // No need to compute final borrow — we ignore underflow
-    long r0 = a.l0 - b0;
+    r = Word256Helpers.subtract64(a.l2, b.l2, borrow);
+    r2 = r[0];
+    borrow = r[1];
+
+    r = Word256Helpers.subtract64(a.l3, b.l3, borrow);
+    r3 = r[0];
 
     return new Word256(r0, r1, r2, r3);
   }
@@ -84,7 +88,7 @@ final class Word256Arithmetic {
    * @return the negated value as a new Word256
    */
   static Word256 negate(final Word256 a) {
-    return subtract(Word256Constants.ZERO, a);
+    return sub(Word256Constants.ZERO, a);
   }
 
   /**
@@ -153,7 +157,7 @@ final class Word256Arithmetic {
       return value;
     }
 
-    final Word256 result = subtract(value, mul(divide(value, modulus), modulus));
+    final Word256 result = sub(value, mul(divide(value, modulus), modulus));
 
     // Strip high bits explicitly (truncate to modulus bit width)
     final int modBitLength = modulus.bitLength();

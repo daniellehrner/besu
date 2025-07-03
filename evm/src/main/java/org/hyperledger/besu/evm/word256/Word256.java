@@ -164,7 +164,7 @@ public final class Word256 {
    * @return a new Word256 representing the result of this - other
    */
   public Word256 sub(final Word256 other) {
-    return Word256Arithmetic.subtract(this, other);
+    return Word256Arithmetic.sub(this, other);
   }
 
   /**
