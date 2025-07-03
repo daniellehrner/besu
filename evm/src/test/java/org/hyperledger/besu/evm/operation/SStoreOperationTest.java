@@ -28,6 +28,7 @@ import org.hyperledger.besu.evm.operation.Operation.OperationResult;
 import org.hyperledger.besu.evm.testutils.FakeBlockValues;
 import org.hyperledger.besu.evm.testutils.TestMessageFrameBuilder;
 import org.hyperledger.besu.evm.toy.ToyWorld;
+import org.hyperledger.besu.evm.word256.Word256;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
 import java.util.List;
@@ -82,8 +83,8 @@ class SStoreOperationTest {
     final SStoreOperation operation = new SStoreOperation(gasCalculator, minimumGasAvailable);
     final MessageFrame frame =
         createMessageFrame(Address.fromHexString("0x18675309"), initialGas, remainingGas);
-    frame.pushStackItem(UInt256.ZERO);
-    frame.pushStackItem(UInt256.fromHexString("0x01"));
+    frame.pushStackItem(Word256.ZERO);
+    frame.pushStackItem(Word256.fromLong(0x01));
 
     final OperationResult result = operation.execute(frame, null);
     assertThat(result.getHaltReason()).isEqualTo(expectedHalt);

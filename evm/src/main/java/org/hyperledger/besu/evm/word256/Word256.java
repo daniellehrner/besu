@@ -147,6 +147,21 @@ public final class Word256 {
     return new Word256(l0, l1, l2, l3, padded);
   }
 
+  public static Word256 fromHexString(final String hex) {
+    final String cleanHex = hex.startsWith("0x") || hex.startsWith("0X") ? hex.substring(2) : hex;
+    if (cleanHex.length() > 64) {
+      throw new IllegalArgumentException("Hex string too long for Word256: " + cleanHex.length() + " hex chars");
+    }
+
+    final String paddedHex = String.format("%64s", cleanHex).replace(' ', '0');
+    final long l3 = Long.parseUnsignedLong(paddedHex.substring(0, 16), 16);
+    final long l2 = Long.parseUnsignedLong(paddedHex.substring(16, 32), 16);
+    final long l1 = Long.parseUnsignedLong(paddedHex.substring(32, 48), 16);
+    final long l0 = Long.parseUnsignedLong(paddedHex.substring(48, 64), 16);
+
+    return new Word256(l0, l1, l2, l3);
+  }
+
   /**
    * Adds this Word256 to another Word256.
    *

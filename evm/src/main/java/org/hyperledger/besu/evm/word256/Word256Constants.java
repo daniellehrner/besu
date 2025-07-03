@@ -33,10 +33,7 @@ final class Word256Constants {
 
   static final Word256 MAX = new Word256(~0L, ~0L, ~0L, ~0L);
 
-  static final Word256 FULL_MASK = new Word256(
-    0xFFFFFFFFFFFFFFFFL,
-    0xFFFFFFFFFFFFFFFFL,
-    0xFFFFFFFFFFFFFFFFL,
-    0xFFFFFFFFFFFFFFFFL
-  );
+  static final Word256 FULL_MASK =
+      new Word256(
+          0xFFFFFFFFFFFFFFFFL, 0xFFFFFFFFFFFFFFFFL, 0xFFFFFFFFFFFFFFFFL, 0xFFFFFFFFFFFFFFFFL);
 }

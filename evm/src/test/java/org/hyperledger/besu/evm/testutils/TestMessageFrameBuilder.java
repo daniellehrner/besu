@@ -26,6 +26,7 @@ import org.hyperledger.besu.evm.frame.BlockValues;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.internal.Words;
 import org.hyperledger.besu.evm.toy.ToyWorld;
+import org.hyperledger.besu.evm.word256.Word256;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
 import java.util.ArrayList;
@@ -53,7 +54,7 @@ public class TestMessageFrameBuilder {
   private Code code = CodeV0.EMPTY_CODE;
   private int pc = 0;
   private int section = 0;
-  private final List<Bytes> stackItems = new ArrayList<>();
+  private final List<Word256> stackItems = new ArrayList<>();
   private Optional<BlockHashLookup> blockHashLookup = Optional.empty();
   private Bytes memory = Bytes.EMPTY;
   private boolean isStatic = false;
@@ -128,7 +129,7 @@ public class TestMessageFrameBuilder {
     return this;
   }
 
-  public TestMessageFrameBuilder pushStackItem(final Bytes item) {
+  public TestMessageFrameBuilder pushStackItem(final Word256 item) {
     stackItems.add(item);
     return this;
   }

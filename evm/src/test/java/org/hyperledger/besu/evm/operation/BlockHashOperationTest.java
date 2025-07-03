@@ -27,6 +27,7 @@ import org.hyperledger.besu.evm.testutils.TestMessageFrameBuilder;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
+import org.hyperledger.besu.evm.word256.Word256;
 import org.junit.jupiter.api.Test;
 
 class BlockHashOperationTest {
@@ -38,8 +39,8 @@ class BlockHashOperationTest {
   @Test
   void shouldReturnZeroWhenArgIsBiggerThanALong() {
     assertBlockHash(
-        Bytes32.fromHexString("F".repeat(64)),
-        Bytes32.ZERO,
+        Word256.fromHexString("F".repeat(64)),
+        Word256.ZERO,
         100,
         (__, ___) -> Hash.EMPTY_LIST_HASH,
         ENOUGH_GAS);
@@ -50,7 +51,7 @@ class BlockHashOperationTest {
     final Hash blockHash = Hash.hash(Bytes.fromHexString("0x1293487297"));
     assertBlockHash(
         100,
-        blockHash,
+        Word256.fromBytes(blockHash.toArrayUnsafe()),
         200,
         (__, block) -> block == 100 ? blockHash : Hash.EMPTY_LIST_HASH,
         ENOUGH_GAS);
@@ -59,7 +60,7 @@ class BlockHashOperationTest {
   @Test
   void shouldFailWithInsufficientGas() {
     assertFailure(
-        Bytes32.fromHexString("0x64"),
+        Word256.fromLong(0x64),
         ExceptionalHaltReason.INSUFFICIENT_GAS,
         200,
         (__, ___) -> Hash.hash(Bytes.fromHexString("0x1293487297")),
@@ -68,12 +69,12 @@ class BlockHashOperationTest {
 
   private void assertBlockHash(
       final long requestedBlock,
-      final Bytes32 expectedOutput,
+      final Word256 expectedOutput,
       final long currentBlockNumber,
       final BlockHashLookup blockHashLookup,
       final long initialGas) {
     assertBlockHash(
-        UInt256.valueOf(requestedBlock),
+        Word256.fromLong(requestedBlock),
         expectedOutput,
         currentBlockNumber,
         blockHashLookup,
@@ -81,8 +82,8 @@ class BlockHashOperationTest {
   }
 
   private void assertBlockHash(
-      final Bytes32 input,
-      final Bytes32 expectedOutput,
+      final Word256 input,
+      final Word256 expectedOutput,
       final long currentBlockNumber,
       final BlockHashLookup blockHashLookup,
       final long initialGas) {
@@ -90,17 +91,17 @@ class BlockHashOperationTest {
         new TestMessageFrameBuilder()
             .blockHashLookup(blockHashLookup)
             .blockValues(new FakeBlockValues(currentBlockNumber))
-            .pushStackItem(UInt256.fromBytes(input))
+            .pushStackItem(input)
             .initialGas(initialGas)
             .build();
     blockHashOperation.execute(frame, null);
-    final Bytes result = frame.popStackItem();
+    final Word256 result = frame.popStackItem();
     assertThat(result).isEqualTo(expectedOutput);
     assertThat(frame.stackSize()).isZero();
   }
 
   private void assertFailure(
-      final Bytes32 input,
+      final Word256 input,
       final ExceptionalHaltReason haltReason,
       final long currentBlockNumber,
       final BlockHashLookup blockHashLookup,
@@ -109,7 +110,7 @@ class BlockHashOperationTest {
         new TestMessageFrameBuilder()
             .blockHashLookup(blockHashLookup)
             .blockValues(new FakeBlockValues(currentBlockNumber))
-            .pushStackItem(UInt256.fromBytes(input))
+            .pushStackItem(input)
             .initialGas(initialGas)
             .build();
     Operation.OperationResult operationResult = blockHashOperation.execute(frame, null);

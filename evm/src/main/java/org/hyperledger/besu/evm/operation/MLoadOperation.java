@@ -16,14 +16,14 @@ package org.hyperledger.besu.evm.operation;
 
 import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
 
-import org.apache.tuweni.bytes.Bytes32;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import org.apache.tuweni.bytes.Bytes;
-import org.hyperledger.besu.evm.word256.Word256;
+import org.apache.tuweni.bytes.Bytes32;
 
 /** The M load operation. */
 public class MLoadOperation extends AbstractOperation {

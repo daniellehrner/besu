@@ -312,8 +312,8 @@ final class Word256Arithmetic {
     result[2] = hop4[1];
 
     final long z3 =
-      Word256Helpers.unsignedMulAdd3(x3, y0, x2, y1, x0, y3) +
-        Word256Helpers.unsignedMultiplyAndAdd(x1, y2, carry0, carry1, carry2);
+        Word256Helpers.unsignedMulAdd3(x3, y0, x2, y1, x0, y3)
+            + Word256Helpers.unsignedMultiplyAndAdd(x1, y2, carry0, carry1, carry2);
     result[3] = z3;
 
     return new Word256(result[0], result[1], result[2], result[3]);

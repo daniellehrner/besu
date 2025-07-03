@@ -17,8 +17,9 @@ package org.hyperledger.besu.evm.internal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.hyperledger.besu.evm.word256.Word256;
+
 import org.apache.tuweni.bytes.Bytes32;
-import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -39,8 +40,8 @@ class OperandStackTest {
   @Test
   void push_StackOverflow() {
     final OperandStack stack = new OperandStack(1);
-    stack.push(UInt256.fromHexString("0x01"));
-    final UInt256 operand = UInt256.fromHexString("0x02");
+    stack.push(Word256.fromLong(0x01));
+    final Word256 operand = Word256.fromLong(0x02);
     assertThatThrownBy(() -> stack.push(operand)).isInstanceOf(OverflowException.class);
   }
 
@@ -53,9 +54,9 @@ class OperandStackTest {
   @Test
   void pushPop() {
     final OperandStack stack = new OperandStack(1);
-    stack.push(UInt256.fromHexString("0x01"));
+    stack.push(Word256.fromLong(0x01));
     assertThat(stack.size()).isEqualTo(1);
-    assertThat(stack.pop()).isEqualTo(Bytes32.fromHexString("0x01"));
+    assertThat(stack.pop()).isEqualTo(Word256.fromLong(0x01));
   }
 
   @Test
@@ -67,52 +68,52 @@ class OperandStackTest {
   @Test
   void get_IndexGreaterThanSize() {
     final OperandStack stack = new OperandStack(1);
-    stack.push(UInt256.fromHexString("0x01"));
+    stack.push(Word256.fromLong(0x01));
     assertThatThrownBy(() -> stack.get(2)).isInstanceOf(UnderflowException.class);
   }
 
   @Test
   void get() {
     final OperandStack stack = new OperandStack(3);
-    stack.push(UInt256.fromHexString("0x01"));
-    stack.push(UInt256.fromHexString("0x02"));
-    stack.push(UInt256.fromHexString("0x03"));
+    stack.push(Word256.fromLong(0x01));
+    stack.push(Word256.fromLong(0x02));
+    stack.push(Word256.fromLong(0x03));
     assertThat(stack.size()).isEqualTo(3);
-    assertThat(stack.get(0)).isEqualTo(Bytes32.fromHexString("0x03"));
-    assertThat(stack.get(1)).isEqualTo(Bytes32.fromHexString("0x02"));
-    assertThat(stack.get(2)).isEqualTo(Bytes32.fromHexString("0x01"));
+    assertThat(stack.get(0)).isEqualTo(Word256.fromLong(0x03));
+    assertThat(stack.get(1)).isEqualTo(Word256.fromLong(0x02));
+    assertThat(stack.get(2)).isEqualTo(Word256.fromLong(0x01));
   }
 
   @Test
   void set_NegativeOffset() {
     final OperandStack stack = new OperandStack(1);
-    final Bytes32 operand = Bytes32.fromHexString("0x01");
+    final Word256 operand = Word256.fromLong(0x01);
     assertThatThrownBy(() -> stack.set(-1, operand)).isInstanceOf(UnderflowException.class);
   }
 
   @Test
   void set_IndexGreaterThanSize() {
     final OperandStack stack = new OperandStack(1);
-    stack.push(UInt256.fromHexString("0x01"));
-    final Bytes32 operand = Bytes32.fromHexString("0x01");
+    stack.push(Word256.fromLong(0x01));
+    final Word256 operand = Word256.fromLong(0x01);
     assertThatThrownBy(() -> stack.set(2, operand)).isInstanceOf(OverflowException.class);
   }
 
   @Test
   void set_IndexGreaterThanCurrentSize() {
     final OperandStack stack = new OperandStack(1024);
-    stack.push(UInt256.fromHexString("0x01"));
-    final Bytes32 operand = Bytes32.fromHexString("0x01");
+    stack.push(Word256.fromLong(0x01));
+    final Word256 operand = Word256.fromLong(0x01);
     assertThatThrownBy(() -> stack.set(2, operand)).isInstanceOf(OverflowException.class);
   }
 
   @Test
   void set() {
     final OperandStack stack = new OperandStack(3);
-    stack.push(UInt256.fromHexString("0x01"));
-    stack.push(UInt256.fromHexString("0x02"));
-    stack.push(UInt256.fromHexString("0x03"));
-    stack.set(2, UInt256.fromHexString("0x04"));
+    stack.push(Word256.fromLong(0x01));
+    stack.push(Word256.fromLong(0x02));
+    stack.push(Word256.fromLong(0x03));
+    stack.set(2, Word256.fromLong(0x04));
     assertThat(stack.size()).isEqualTo(3);
     assertThat(stack.get(0)).isEqualTo(Bytes32.fromHexString("0x03"));
     assertThat(stack.get(1)).isEqualTo(Bytes32.fromHexString("0x02"));
@@ -122,14 +123,14 @@ class OperandStackTest {
   @Test
   void bulkPop() {
     final OperandStack stack = new OperandStack(8);
-    stack.push(UInt256.fromHexString("0x01"));
-    stack.push(UInt256.fromHexString("0x02"));
-    stack.push(UInt256.fromHexString("0x03"));
-    stack.push(UInt256.fromHexString("0x04"));
-    stack.push(UInt256.fromHexString("0x05"));
-    stack.push(UInt256.fromHexString("0x06"));
-    stack.push(UInt256.fromHexString("0x07"));
-    stack.push(UInt256.fromHexString("0x08"));
+    stack.push(Word256.fromLong(0x01));
+    stack.push(Word256.fromLong(0x02));
+    stack.push(Word256.fromLong(0x03));
+    stack.push(Word256.fromLong(0x04));
+    stack.push(Word256.fromLong(0x05));
+    stack.push(Word256.fromLong(0x06));
+    stack.push(Word256.fromLong(0x07));
+    stack.push(Word256.fromLong(0x08));
     assertThat(stack.size()).isEqualTo(8);
     stack.bulkPop(2);
     assertThat(stack.get(0)).isEqualTo(Bytes32.fromHexString("0x06"));
@@ -137,49 +138,13 @@ class OperandStackTest {
     assertThat(stack.isEmpty()).isTrue();
   }
 
-  @Test
-  void preserveTop() {
-    final OperandStack stack = new OperandStack(8);
-    stack.push(UInt256.fromHexString("0x01"));
-    stack.push(UInt256.fromHexString("0x02"));
-    stack.push(UInt256.fromHexString("0x03"));
-    stack.push(UInt256.fromHexString("0x04"));
-    stack.push(UInt256.fromHexString("0x05"));
-    stack.push(UInt256.fromHexString("0x06"));
-    stack.push(UInt256.fromHexString("0x07"));
-    stack.push(UInt256.fromHexString("0x08"));
-    assertThat(stack.size()).isEqualTo(8);
-    stack.preserveTop(6, 1);
-    assertThat(stack.get(0)).isEqualTo(Bytes32.fromHexString("0x08"));
-    assertThat(stack.get(1)).isEqualTo(Bytes32.fromHexString("0x06"));
-    assertThat(stack.size()).isEqualTo(7);
-    stack.preserveTop(1, 3);
-    assertThat(stack.get(0)).isEqualTo(Bytes32.fromHexString("0x08"));
-    assertThat(stack.get(1)).isEqualTo(Bytes32.fromHexString("0x06"));
-    assertThat(stack.get(2)).isEqualTo(Bytes32.fromHexString("0x05"));
-    assertThat(stack.get(3)).isEqualTo(Bytes32.fromHexString("0x01"));
-    assertThat(stack.size()).isEqualTo(4);
-
-    stack.preserveTop(4, 0);
-    assertThat(stack.size()).isEqualTo(4);
-    assertThatThrownBy(() -> stack.preserveTop(4, 2)).isInstanceOf(UnderflowException.class);
-    stack.preserveTop(2, 2);
-    assertThat(stack.size()).isEqualTo(4);
-    stack.preserveTop(0, 2);
-    assertThat(stack.get(0)).isEqualTo(Bytes32.fromHexString("0x08"));
-    assertThat(stack.get(1)).isEqualTo(Bytes32.fromHexString("0x06"));
-
-    assertThatThrownBy(() -> stack.preserveTop(5, 1)).isInstanceOf(UnderflowException.class);
-    assertThatThrownBy(() -> stack.preserveTop(1, 5)).isInstanceOf(UnderflowException.class);
-  }
-
   @ParameterizedTest
   @ValueSource(ints = {5, 31, 32, 33, 1023, 1024, 1025})
   void largeOverflows(final int n) {
     final OperandStack stack = new OperandStack(n);
     for (int i = 0; i < n; i++) {
-      stack.push(UInt256.ONE);
+      stack.push(Word256.ONE);
     }
-    assertThatThrownBy(() -> stack.push(UInt256.ONE)).isInstanceOf(OverflowException.class);
+    assertThatThrownBy(() -> stack.push(Word256.ONE)).isInstanceOf(OverflowException.class);
   }
 }

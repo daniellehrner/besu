@@ -27,6 +27,7 @@ import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
+import org.hyperledger.besu.evm.word256.Word256;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -172,10 +173,10 @@ class SarOperationTest {
     when(frame.stackSize()).thenReturn(2);
     when(frame.getRemainingGas()).thenReturn(100L);
     when(frame.popStackItem())
-        .thenReturn(Bytes32.fromHexStringLenient(shift))
-        .thenReturn(Bytes.fromHexString(number));
+        .thenReturn(Word256.fromHexString(shift))
+        .thenReturn(Word256.fromHexString(number));
     operation.execute(frame, null);
-    verify(frame).pushStackItem(Bytes.fromHexString(expectedResult));
+    verify(frame).pushStackItem(Word256.fromHexString(expectedResult));
   }
 
   @Test

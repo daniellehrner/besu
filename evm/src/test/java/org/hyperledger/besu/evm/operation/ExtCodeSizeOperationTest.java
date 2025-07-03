@@ -29,6 +29,7 @@ import org.hyperledger.besu.evm.operation.Operation.OperationResult;
 import org.hyperledger.besu.evm.testutils.FakeBlockValues;
 import org.hyperledger.besu.evm.testutils.TestMessageFrameBuilder;
 import org.hyperledger.besu.evm.toy.ToyWorld;
+import org.hyperledger.besu.evm.word256.Word256;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -64,8 +65,8 @@ class ExtCodeSizeOperationTest {
 
   @Test
   void shouldReturnZeroWhenAccountDoesNotExist() {
-    final Bytes result = executeOperation(REQUESTED_ADDRESS);
-    assertThat(result.trimLeadingZeros()).isEqualTo(Bytes.EMPTY);
+    final Word256 result = executeOperation(REQUESTED_ADDRESS);
+    assertThat(result).isEqualTo(Word256.ZERO);
   }
 
   @Test
@@ -77,12 +78,12 @@ class ExtCodeSizeOperationTest {
   @Test
   void shouldReturnZeroWhenAccountExistsButIsEmpty() {
     worldStateUpdater.getOrCreate(REQUESTED_ADDRESS);
-    assertThat(executeOperation(REQUESTED_ADDRESS).trimLeadingZeros()).isEqualTo(Bytes.EMPTY);
+    assertThat(executeOperation(REQUESTED_ADDRESS)).isEqualTo(Word256.ZERO);
   }
 
   @Test
   void shouldReturnZeroWhenPrecompiledContractHasNoBalance() {
-    assertThat(executeOperation(Address.ECREC).trimLeadingZeros()).isEqualTo(Bytes.EMPTY);
+    assertThat(executeOperation(Address.ECREC)).isEqualTo(Word256.ZERO);
   }
 
   @Test
@@ -106,9 +107,9 @@ class ExtCodeSizeOperationTest {
     final Bytes code = Bytes.fromHexString("0xabcdef");
     final MutableAccount account = worldStateUpdater.getOrCreate(REQUESTED_ADDRESS);
     account.setCode(code);
-    final UInt256 value =
-        UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
-            .add(UInt256.valueOf(2).pow(UInt256.valueOf(160)));
+    final Word256 value =
+        Word256.fromBytes(UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
+            .add(UInt256.valueOf(2).pow(UInt256.valueOf(160))).toArrayUnsafe());
     final MessageFrame frame = createMessageFrame(value);
     operation.execute(frame, null);
     assertThat(frame.getStackItem(0).toInt()).isEqualTo(3);
@@ -119,9 +120,9 @@ class ExtCodeSizeOperationTest {
     final Bytes code = Bytes.fromHexString("0xEFF09f918bf09f9fa9");
     final MutableAccount account = worldStateUpdater.getOrCreate(REQUESTED_ADDRESS);
     account.setCode(code);
-    final UInt256 value =
-        UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
-            .add(UInt256.valueOf(2).pow(UInt256.valueOf(160)));
+    final Word256 value =
+      Word256.fromBytes(UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
+            .add(UInt256.valueOf(2).pow(UInt256.valueOf(160))).toArrayUnsafe());
 
     final MessageFrame frame = createMessageFrame(value);
     operation.execute(frame, null);
@@ -141,9 +142,9 @@ class ExtCodeSizeOperationTest {
     final Bytes code = Bytes.fromHexString("0xEF009f918bf09f9fa9");
     final MutableAccount account = worldStateUpdater.getOrCreate(REQUESTED_ADDRESS);
     account.setCode(code);
-    final UInt256 value =
-        UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
-            .add(UInt256.valueOf(2).pow(UInt256.valueOf(160)));
+    final Word256 value =
+      Word256.fromBytes(UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
+            .add(UInt256.valueOf(2).pow(UInt256.valueOf(160))).toArrayUnsafe());
 
     final MessageFrame frame = createMessageFrame(value);
     operation.execute(frame, null);
@@ -158,18 +159,18 @@ class ExtCodeSizeOperationTest {
     assertThat(frameEOF.getStackItem(0).toInt()).isEqualTo(2);
   }
 
-  private Bytes executeOperation(final Address requestedAddress) {
+  private Word256 executeOperation(final Address requestedAddress) {
     final MessageFrame frame = createMessageFrame(requestedAddress);
     operation.execute(frame, null);
     return frame.getStackItem(0);
   }
 
   private MessageFrame createMessageFrame(final Address requestedAddress) {
-    final UInt256 stackItem = Words.fromAddress(requestedAddress);
+    final Word256 stackItem = Word256.fromBytes(requestedAddress.toArrayUnsafe());
     return createMessageFrame(stackItem);
   }
 
-  private MessageFrame createMessageFrame(final UInt256 stackItem) {
+  private MessageFrame createMessageFrame(final Word256 stackItem) {
     final BlockValues blockValues = new FakeBlockValues(1337);
     final MessageFrame frame =
         new TestMessageFrameBuilder()

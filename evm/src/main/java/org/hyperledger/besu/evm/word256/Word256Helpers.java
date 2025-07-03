@@ -51,7 +51,8 @@ final class Word256Helpers {
     return new long[] {hi, loSum};
   }
 
-  static long[] unsignedMultiplyAddWithCarry(final long z, final long x, final long y, final long carry) {
+  static long[] unsignedMultiplyAddWithCarry(
+      final long z, final long x, final long y, final long carry) {
     final long[] m = multiplyHighLowUnsigned(x, y);
     final long loMul = m[1];
     final long hiMul = m[0];
@@ -72,12 +73,11 @@ final class Word256Helpers {
   }
 
   static long unsignedMulAdd3(
-    final long x1, final long y1, final long x2, final long y2, final long x3, final long y3) {
+      final long x1, final long y1, final long x2, final long y2, final long x3, final long y3) {
     return x1 * y1 + x2 * y2 + x3 * y3;
   }
 
-  static long unsignedMultiplyAndAdd(
-    final long x, final long y, final long... extras) {
+  static long unsignedMultiplyAndAdd(final long x, final long y, final long... extras) {
     long result = x * y;
     for (final long e : extras) {
       result = result + e;

@@ -30,6 +30,7 @@ import org.hyperledger.besu.evm.frame.BlockValues;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.ConstantinopleGasCalculator;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
+import org.hyperledger.besu.evm.word256.Word256;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -89,7 +90,7 @@ public class SelfDestructOperationTest {
             .initialGas(100_000L)
             .worldUpdater(worldUpdater)
             .build();
-    messageFrame.pushStackItem(Bytes.fromHexString(beneficiary));
+    messageFrame.pushStackItem(Word256.fromHexString(beneficiary));
     if (newContract) {
       messageFrame.addCreate(originatorAddress);
     }

@@ -36,6 +36,7 @@ import org.hyperledger.besu.evm.log.Log;
 import org.hyperledger.besu.evm.processor.ContractCreationProcessor;
 import org.hyperledger.besu.evm.testutils.TestMessageFrameBuilder;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
+import org.hyperledger.besu.evm.word256.Word256;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
 import java.util.Deque;
@@ -77,9 +78,9 @@ class CreateOperationTest {
   void createFromMemoryMutationSafe() {
 
     // Given: Execute a CREATE operation with a contract that logs in the constructor
-    final UInt256 memoryOffset = UInt256.fromHexString("0xFF");
-    final UInt256 memoryLength = UInt256.valueOf(SIMPLE_CREATE.size());
-    final MessageFrame messageFrame = testMemoryFrame(memoryOffset, memoryLength, UInt256.ZERO, 1);
+    final Word256 memoryOffset = Word256.fromLong(0xFF);
+    final Word256 memoryLength = Word256.fromInt(SIMPLE_CREATE.size());
+    final MessageFrame messageFrame = testMemoryFrame(memoryOffset, memoryLength, Word256.ZERO, 1);
 
     when(account.getNonce()).thenReturn(55L);
     when(account.getBalance()).thenReturn(Wei.ZERO);
@@ -104,7 +105,7 @@ class CreateOperationTest {
 
     // WHEN the memory that the create operation was executed from is altered.
     messageFrame.writeMemory(
-        memoryOffset.trimLeadingZeros().toInt(),
+        memoryOffset.toInt(),
         SIMPLE_CREATE.size(),
         Bytes.random(SIMPLE_CREATE.size()));
 
@@ -115,9 +116,9 @@ class CreateOperationTest {
 
   @Test
   void nonceTooLarge() {
-    final UInt256 memoryOffset = UInt256.fromHexString("0xFF");
-    final UInt256 memoryLength = UInt256.valueOf(SIMPLE_CREATE.size());
-    final MessageFrame messageFrame = testMemoryFrame(memoryOffset, memoryLength, UInt256.ZERO, 1);
+    final Word256 memoryOffset = Word256.fromLong(0xFF);
+    final Word256 memoryLength = Word256.fromInt(SIMPLE_CREATE.size());
+    final MessageFrame messageFrame = testMemoryFrame(memoryOffset, memoryLength, Word256.ZERO, 1);
 
     when(worldUpdater.getAccount(any())).thenReturn(account);
     when(account.getBalance()).thenReturn(Wei.ZERO);
@@ -126,15 +127,15 @@ class CreateOperationTest {
     final EVM evm = MainnetEVMs.london(EvmConfiguration.DEFAULT);
     operation.execute(messageFrame, evm);
 
-    assertThat(messageFrame.getStackItem(0).trimLeadingZeros()).isEqualTo(Bytes.EMPTY);
+    assertThat(messageFrame.getStackItem(0)).isEqualTo(Word256.ZERO);
   }
 
   @Test
   void messageFrameStackTooDeep() {
-    final UInt256 memoryOffset = UInt256.fromHexString("0xFF");
-    final UInt256 memoryLength = UInt256.valueOf(SIMPLE_CREATE.size());
+    final Word256 memoryOffset = Word256.fromLong(0xFF);
+    final Word256 memoryLength = Word256.fromInt(SIMPLE_CREATE.size());
     final MessageFrame messageFrame =
-        testMemoryFrame(memoryOffset, memoryLength, UInt256.ZERO, 1025);
+        testMemoryFrame(memoryOffset, memoryLength, Word256.ZERO, 1025);
 
     when(worldUpdater.getAccount(any())).thenReturn(account);
     when(account.getBalance()).thenReturn(Wei.ZERO);
@@ -143,15 +144,15 @@ class CreateOperationTest {
     final EVM evm = MainnetEVMs.london(EvmConfiguration.DEFAULT);
     operation.execute(messageFrame, evm);
 
-    assertThat(messageFrame.getStackItem(0).trimLeadingZeros()).isEqualTo(Bytes.EMPTY);
+    assertThat(messageFrame.getStackItem(0)).isEqualTo(Word256.ZERO);
   }
 
   @Test
   void notEnoughValue() {
-    final UInt256 memoryOffset = UInt256.fromHexString("0xFF");
-    final UInt256 memoryLength = UInt256.valueOf(SIMPLE_CREATE.size());
+    final Word256 memoryOffset = Word256.fromLong(0xFF);
+    final Word256 memoryLength = Word256.fromInt(SIMPLE_CREATE.size());
     final MessageFrame messageFrame =
-        testMemoryFrame(memoryOffset, memoryLength, UInt256.valueOf(1), 1);
+        testMemoryFrame(memoryOffset, memoryLength, Word256.ONE, 1);
     final Deque<MessageFrame> messageFrameStack = messageFrame.getMessageFrameStack();
     for (int i = 0; i < 1025; i++) {
       messageFrameStack.add(messageFrame);
@@ -164,14 +165,14 @@ class CreateOperationTest {
     final EVM evm = MainnetEVMs.london(EvmConfiguration.DEFAULT);
     operation.execute(messageFrame, evm);
 
-    assertThat(messageFrame.getStackItem(0).trimLeadingZeros()).isEqualTo(Bytes.EMPTY);
+    assertThat(messageFrame.getStackItem(0)).isEqualTo(Word256.ZERO);
   }
 
   @Test
   void shanghaiMaxInitCodeSizeCreate() {
-    final UInt256 memoryOffset = UInt256.fromHexString("0xFF");
-    final UInt256 memoryLength = UInt256.fromHexString("0xc000");
-    final MessageFrame messageFrame = testMemoryFrame(memoryOffset, memoryLength, UInt256.ZERO, 1);
+    final Word256 memoryOffset = Word256.fromLong(0xFF);
+    final Word256 memoryLength = Word256.fromLong(0xc000);
+    final MessageFrame messageFrame = testMemoryFrame(memoryOffset, memoryLength, Word256.ZERO, 1);
 
     when(account.getNonce()).thenReturn(55L);
     when(account.getBalance()).thenReturn(Wei.ZERO);
@@ -198,9 +199,9 @@ class CreateOperationTest {
 
   @Test
   void shanghaiMaxInitCodeSizePlus1Create() {
-    final UInt256 memoryOffset = UInt256.fromHexString("0xFF");
-    final UInt256 memoryLength = UInt256.fromHexString("0xc001");
-    final MessageFrame messageFrame = testMemoryFrame(memoryOffset, memoryLength, UInt256.ZERO, 1);
+    final Word256 memoryOffset = Word256.fromLong(0xFF);
+    final Word256 memoryLength = Word256.fromLong(0xc001);
+    final MessageFrame messageFrame = testMemoryFrame(memoryOffset, memoryLength, Word256.ZERO, 1);
 
     when(account.getNonce()).thenReturn(55L);
     when(account.getBalance()).thenReturn(Wei.ZERO);
@@ -238,14 +239,14 @@ class CreateOperationTest {
     final EVM evm = MainnetEVMs.cancun(DEV_NET_CHAIN_ID, EvmConfiguration.DEFAULT);
     var result = operation.execute(messageFrame, evm);
     assertThat(result.getHaltReason()).isEqualTo(INVALID_OPERATION);
-    assertThat(messageFrame.getStackItem(0).trimLeadingZeros()).isEqualTo(Bytes.EMPTY);
+    assertThat(messageFrame.getStackItem(0)).isEqualTo(Word256.ZERO);
   }
 
   @NotNull
   private MessageFrame testMemoryFrame(
-      final UInt256 memoryOffset,
-      final UInt256 memoryLength,
-      final UInt256 value,
+      final Word256 memoryOffset,
+      final Word256 memoryLength,
+      final Word256 value,
       final int depth) {
     final EVM evm = MainnetEVMs.futureEips(EvmConfiguration.DEFAULT);
     final MessageFrame messageFrame =
@@ -272,7 +273,7 @@ class CreateOperationTest {
     messageFrame.pushStackItem(value);
     messageFrame.expandMemory(0, 500);
     messageFrame.writeMemory(
-        memoryOffset.trimLeadingZeros().toInt(), SIMPLE_CREATE.size(), SIMPLE_CREATE);
+        memoryOffset.toInt(), SIMPLE_CREATE.size(), SIMPLE_CREATE);
     final Deque<MessageFrame> messageFrameStack = messageFrame.getMessageFrameStack();
     while (messageFrameStack.size() < depth) {
       messageFrameStack.push(messageFrame);

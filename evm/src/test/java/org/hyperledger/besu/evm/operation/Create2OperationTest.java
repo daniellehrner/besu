@@ -38,6 +38,7 @@ import org.hyperledger.besu.evm.operation.Operation.OperationResult;
 import org.hyperledger.besu.evm.processor.ContractCreationProcessor;
 import org.hyperledger.besu.evm.testutils.TestMessageFrameBuilder;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
+import org.hyperledger.besu.evm.word256.Word256;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
 import java.util.Deque;
@@ -136,9 +137,9 @@ public class Create2OperationTest {
 
   public void setUp(final String sender, final String salt, final String code) {
 
-    final UInt256 memoryOffset = UInt256.fromHexString("0xFF");
+    final Word256 memoryOffset = Word256.fromLong(0xFF);
     final Bytes codeBytes = Bytes.fromHexString(code);
-    final UInt256 memoryLength = UInt256.valueOf(codeBytes.size());
+    final Word256 memoryLength = Word256.fromInt(codeBytes.size());
     messageFrame =
         MessageFrame.builder()
             .type(MessageFrame.Type.CONTRACT_CREATION)
@@ -158,12 +159,12 @@ public class Create2OperationTest {
             .initialGas(100_000L)
             .worldUpdater(worldUpdater)
             .build();
-    messageFrame.pushStackItem(UInt256.fromHexString(salt));
+    messageFrame.pushStackItem(Word256.fromHexString(salt));
     messageFrame.pushStackItem(memoryLength);
     messageFrame.pushStackItem(memoryOffset);
-    messageFrame.pushStackItem(UInt256.ZERO);
+    messageFrame.pushStackItem(Word256.ZERO);
     messageFrame.expandMemory(0, 500);
-    messageFrame.writeMemory(memoryOffset.trimLeadingZeros().toInt(), code.length(), codeBytes);
+    messageFrame.writeMemory(memoryOffset.toInt(), code.length(), codeBytes);
 
     when(account.getBalance()).thenReturn(Wei.ZERO);
     when(worldUpdater.getAccount(any())).thenReturn(account);
@@ -201,8 +202,8 @@ public class Create2OperationTest {
 
   @Test
   void shanghaiMaxInitCodeSizeCreate() {
-    final UInt256 memoryOffset = UInt256.fromHexString("0xFF");
-    final UInt256 memoryLength = UInt256.fromHexString("0xc000");
+    final Word256 memoryOffset = Word256.fromLong(0xFF);
+    final Word256 memoryLength = Word256.fromLong(0xc000);
     final MessageFrame messageFrame = testMemoryFrame(memoryOffset, memoryLength);
 
     when(account.getNonce()).thenReturn(55L);
@@ -250,7 +251,7 @@ public class Create2OperationTest {
   }
 
   @NotNull
-  private MessageFrame testMemoryFrame(final UInt256 memoryOffset, final UInt256 memoryLength) {
+  private MessageFrame testMemoryFrame(final Word256 memoryOffset, final Word256 memoryLength) {
     final MessageFrame messageFrame =
         MessageFrame.builder()
             .type(MessageFrame.Type.CONTRACT_CREATION)
@@ -270,13 +271,13 @@ public class Create2OperationTest {
             .initialGas(100000L)
             .worldUpdater(worldUpdater)
             .build();
-    messageFrame.pushStackItem(Bytes.EMPTY);
+    messageFrame.pushStackItem(Word256.ZERO);
     messageFrame.pushStackItem(memoryLength);
     messageFrame.pushStackItem(memoryOffset);
-    messageFrame.pushStackItem(UInt256.ZERO);
+    messageFrame.pushStackItem(Word256.ZERO);
     messageFrame.expandMemory(0, 500);
     messageFrame.writeMemory(
-        memoryOffset.trimLeadingZeros().toInt(), SIMPLE_CREATE.size(), SIMPLE_CREATE);
+        memoryOffset.toInt(), SIMPLE_CREATE.size(), SIMPLE_CREATE);
     final Deque<MessageFrame> messageFrameStack = messageFrame.getMessageFrameStack();
     if (messageFrameStack.isEmpty()) {
       messageFrameStack.push(messageFrame);
