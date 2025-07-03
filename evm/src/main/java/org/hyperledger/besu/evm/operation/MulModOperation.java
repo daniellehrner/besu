@@ -14,9 +14,15 @@
  */
 package org.hyperledger.besu.evm.operation;
 
+import org.apache.tuweni.bytes.Bytes32;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+
+import java.math.BigInteger;
+import java.util.Arrays;
+
+import org.apache.tuweni.bytes.Bytes;
 import org.hyperledger.besu.evm.word256.Word256;
 
 /** The Mul mod operation. */
@@ -46,13 +52,29 @@ public class MulModOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    final Word256 a = frame.popStackItem();
-    final Word256 b = frame.popStackItem();
-    final Word256 modulus = frame.popStackItem();
+    final Bytes value0 = Bytes32.wrap(frame.popStackItem().toBytes());
+    final Bytes value1 = Bytes32.wrap(frame.popStackItem().toBytes());
+    final Bytes value2 = Bytes32.wrap(frame.popStackItem().toBytes());
 
-    final Word256 result = modulus.isZero() ? Word256.ZERO : a.mulmod(b, modulus);
+    if (value2.isZero()) {
+      frame.pushStackItem(Word256.ZERO);
+    } else {
+      BigInteger b0 = new BigInteger(1, value0.toArrayUnsafe());
+      BigInteger b1 = new BigInteger(1, value1.toArrayUnsafe());
+      BigInteger b2 = new BigInteger(1, value2.toArrayUnsafe());
 
-    frame.pushStackItem(result);
+      BigInteger result = b0.multiply(b1).mod(b2);
+      Bytes resultBytes = Bytes.wrap(result.toByteArray());
+      if (resultBytes.size() > 32) {
+        resultBytes = resultBytes.slice(resultBytes.size() - 32, 32);
+      }
+
+      final byte[] padding = new byte[32 - resultBytes.size()];
+      Arrays.fill(padding, result.signum() < 0 ? (byte) 0xFF : 0x00);
+
+      frame.pushStackItem(Word256.fromBytes(Bytes.concatenate(Bytes.wrap(padding), resultBytes).toArrayUnsafe()));
+    }
+
     return mulModSuccess;
   }
 }
