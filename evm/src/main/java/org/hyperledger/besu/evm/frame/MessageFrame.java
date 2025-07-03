@@ -609,7 +609,7 @@ public class MessageFrame {
    * @return The bytes in the specified range
    */
   public Bytes readMemory(final long offset, final long length) {
-    return readMemory(offset, length, false);
+    return readMutableMemory(offset, length, false).copy();
   }
 
   /**
@@ -621,7 +621,8 @@ public class MessageFrame {
    * @param explicitMemoryRead true if triggered by a memory opcode, false otherwise
    * @return The bytes in the specified range
    */
-  public Bytes readMemory(final long offset, final long length, final boolean explicitMemoryRead) {
+  public MutableBytes readMutableMemory(
+      final long offset, final long length, final boolean explicitMemoryRead) {
     final MutableBytes memBytes = memory.getMutableBytes(offset, length);
     if (explicitMemoryRead) {
       setUpdatedMemory(offset, memBytes);
@@ -655,18 +656,6 @@ public class MessageFrame {
   }
 
   /**
-   * Write a word to memory
-   *
-   * @param offset The offset in memory
-   * @param value The value to write
-   * @param explicitMemoryUpdate true if triggered by a memory opcode, false otherwise
-   */
-  public void writeMemory(
-      final long offset, final Word256 value, final boolean explicitMemoryUpdate) {
-    writeMemory(offset, 32, Bytes32.wrap(value.toBytes()), explicitMemoryUpdate);
-  }
-
-  /**
    * Write bytes to memory
    *
    * @param offset The offset in memory
@@ -679,6 +668,24 @@ public class MessageFrame {
     memory.setBytes(offset, length, value);
     if (explicitMemoryUpdate) {
       setUpdatedMemory(offset, 0, length, value);
+    }
+  }
+
+  /**
+   * Copy the bytes from the value param into memory at the specified offset. In cases where the
+   * value does not have numBytes bytes the appropriate amount of zero bytes will be added before
+   * writing the value bytes.
+   *
+   * @param offset The offset in memory
+   * @param length The length of the bytes to write
+   * @param value The value to write
+   * @param explicitMemoryUpdate true if triggered by a memory opcode, false otherwise
+   */
+  public void writeMemoryRightAligned(
+      final long offset, final long length, final Bytes value, final boolean explicitMemoryUpdate) {
+    memory.setBytesRightAligned(offset, length, value);
+    if (explicitMemoryUpdate) {
+      setUpdatedMemoryRightAligned(offset, length, value);
     }
   }
 
@@ -749,6 +756,22 @@ public class MessageFrame {
         setUpdatedMemory(offset, paddedAnswer.copy());
       } else {
         setUpdatedMemory(offset, value.slice((int) sourceOffset, (int) length).copy());
+      }
+    }
+  }
+
+  private void setUpdatedMemoryRightAligned(
+      final long offset, final long length, final Bytes value) {
+    if (length > 0) {
+      final int srcSize = value.size();
+      if (length > srcSize) {
+        final MutableBytes paddedAnswer = MutableBytes.create((int) length);
+        if ((long) 0 < srcSize) {
+          value.slice(0, srcSize).copyTo(paddedAnswer, (int) (length - srcSize));
+        }
+        setUpdatedMemory(offset, paddedAnswer.copy());
+      } else {
+        setUpdatedMemory(offset, value.slice(0, (int) length).copy());
       }
     }
   }

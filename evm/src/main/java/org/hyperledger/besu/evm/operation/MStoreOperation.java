@@ -14,6 +14,10 @@
  */
 package org.hyperledger.besu.evm.operation;
 
+import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
+
+import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -34,15 +38,15 @@ public class MStoreOperation extends AbstractOperation {
 
   @Override
   public OperationResult execute(final MessageFrame frame, final EVM evm) {
-    final long location = frame.popStackItem().clampedToLong();
-    final Word256 value = frame.popStackItem();
+    final long location = clampedToLong(Bytes32.wrap(frame.popStackItem().toBytes()));
+    final Bytes value = Bytes32.wrap(frame.popStackItem().toBytes());
 
     final long cost = gasCalculator().mStoreOperationGasCost(frame, location);
     if (frame.getRemainingGas() < cost) {
       return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
     }
 
-    frame.writeMemory(location, value, true);
+    frame.writeMemoryRightAligned(location, 32, value, true);
     return new OperationResult(cost, null);
   }
 }
