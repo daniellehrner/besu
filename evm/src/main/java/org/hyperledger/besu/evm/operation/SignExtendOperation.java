@@ -46,10 +46,19 @@ public class SignExtendOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    final Word256 extByte = frame.popStackItem();
-    final Word256 value = frame.popStackItem();
+    final Word256 value0 = frame.popStackItem();
+    final Word256 value1 = frame.popStackItem();
 
-    frame.pushStackItem(value.signExtend(extByte));
+    if (!value0.fitsLong()) {
+      frame.pushStackItem(value1);
+      return signExtendSuccess;
+    }
+
+    final int byteIndex = (int) value0.toLong();
+    final Word256 result = value1.signExtend(byteIndex);
+
+    frame.pushStackItem(result);
+
     return signExtendSuccess;
   }
 }

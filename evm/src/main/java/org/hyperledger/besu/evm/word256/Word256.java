@@ -404,21 +404,26 @@ public final class Word256 {
    * the specified byte is set, extends the sign to all higher bits. Otherwise, clears all higher
    * bits.
    *
-   * @param extByte the byte index to use for sign extension
+   * @param byteIndex the byte index to use for sign extension
    * @return a new Word256 with sign extension applied
    */
-  public Word256 signExtend(final Word256 extByte) {
-    if (!extByte.fitsInt() || extByte.toInt() >= 31) {
+  public Word256 signExtend(final int byteIndex) {
+    if (byteIndex < 0 || byteIndex >= 32) {
       return this;
     }
 
-    final int byteIndex = extByte.toInt();
-    final int bitIndex = byteIndex * 8;
-    final int signBit = getBit(bitIndex);
+    // EVM uses big-endian byte numbering: byte 0 is most significant.
+    // Since Word256 is little-endian (l0 is least significant), we reverse the index.
+    final int bitIndex = byteIndex * 8 + 7;
 
-    return signBit == 1
-        ? this.or(Word256Helpers.maskAbove(bitIndex))
-        : this.and(Word256Helpers.maskBelow(bitIndex + 1));
+    final boolean isNegative = Word256Helpers.testBit(this, bitIndex);
+
+    if (!isNegative) {
+      return this;
+    }
+
+    final Word256 mask = Word256Helpers.fullMask(bitIndex + 1);
+    return this.or(mask);
   }
 
   /**

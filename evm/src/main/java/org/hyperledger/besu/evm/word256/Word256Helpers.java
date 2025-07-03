@@ -26,6 +26,65 @@ final class Word256Helpers {
     // Prevent instantiation
   }
 
+  static long[] multiplyHighLowUnsigned(final long x, final long y) {
+    final long x0 = x & 0xFFFFFFFFL;
+    final long x1 = x >>> 32;
+    final long y0 = y & 0xFFFFFFFFL;
+    final long y1 = y >>> 32;
+
+    final long w0 = x0 * y0;
+    final long t = x1 * y0 + (w0 >>> 32);
+    final long w1 = t & 0xFFFFFFFFL;
+    final long w2 = t >>> 32;
+
+    final long lo = x * y;
+    final long hi = x1 * y1 + w2 + ((x0 * y1 + w1) >>> 32);
+
+    return new long[] {hi, lo};
+  }
+
+  static long[] unsignedMultiplyAdd(final long z, final long x, final long y) {
+    final long[] m = multiplyHighLowUnsigned(x, y);
+    final long loSum = m[1] + z;
+    final boolean carry = Long.compareUnsigned(loSum, m[1]) < 0;
+    final long hi = m[0] + (carry ? 1 : 0);
+    return new long[] {hi, loSum};
+  }
+
+  static long[] unsignedMultiplyAddWithCarry(final long z, final long x, final long y, final long carry) {
+    final long[] m = multiplyHighLowUnsigned(x, y);
+    final long loMul = m[1];
+    final long hiMul = m[0];
+
+    // lo1 = loMul + carry
+    final long lo1 = loMul + carry;
+    final boolean carry1 = Long.compareUnsigned(lo1, loMul) < 0;
+
+    // lo2 = lo1 + z
+    final long lo2 = lo1 + z;
+    final boolean carry2 = Long.compareUnsigned(lo2, lo1) < 0;
+
+    // hi = hiMul + carry1 + carry2
+    final long hi1 = hiMul + (carry1 ? 1 : 0);
+    final long hi2 = hi1 + (carry2 ? 1 : 0);
+
+    return new long[] {hi2, lo2};
+  }
+
+  static long unsignedMulAdd3(
+    final long x1, final long y1, final long x2, final long y2, final long x3, final long y3) {
+    return x1 * y1 + x2 * y2 + x3 * y3;
+  }
+
+  static long unsignedMultiplyAndAdd(
+    final long x, final long y, final long... extras) {
+    long result = x * y;
+    for (final long e : extras) {
+      result = result + e;
+    }
+    return result;
+  }
+
   static long[] subtract64(final long x, final long y, final long borrowIn) {
     final long diff = x - y - borrowIn;
 
@@ -370,5 +429,38 @@ final class Word256Helpers {
       return 1;
     }
     return Long.compareUnsigned(a, sub) < 0 ? 1 : 0;
+  }
+
+  static boolean testBit(final Word256 b, final int bitIndex) {
+    if (bitIndex < 0 || bitIndex >= 256) {
+      return false;
+    }
+    final int limb = bitIndex >>> 6;
+    final int shift = bitIndex & 63;
+
+    return switch (limb) {
+      case 3 -> (b.l3 & (1L << shift)) != 0;
+      case 2 -> (b.l2 & (1L << shift)) != 0;
+      case 1 -> (b.l1 & (1L << shift)) != 0;
+      default -> (b.l0 & (1L << shift)) != 0;
+    };
+  }
+
+  static Word256 fullMask(final int fromBit) {
+    if (fromBit <= 0) {
+      return Word256Constants.ZERO;
+    } else if (fromBit >= 256) {
+      return Word256Constants.FULL_MASK; // all bits set
+    }
+
+    int limb = fromBit >>> 6;
+    int shift = fromBit & 63;
+
+    final long m0 = (limb == 0) ? ~0L << shift : 0;
+    final long m1 = (limb < 1) ? ~0L : (limb == 1 ? ~0L << shift : 0);
+    final long m2 = (limb < 2) ? ~0L : (limb == 2 ? ~0L << shift : 0);
+    final long m3 = (limb < 3) ? ~0L : (limb == 3 ? ~0L << shift : 0);
+
+    return new Word256(m0, m1, m2, m3);
   }
 }

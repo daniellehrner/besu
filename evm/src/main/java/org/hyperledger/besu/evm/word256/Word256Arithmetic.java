@@ -278,32 +278,45 @@ final class Word256Arithmetic {
    * @return the product of a and b as a new Word256
    */
   static Word256 mul(final Word256 a, final Word256 b) {
-    final long[] x = {a.l0, a.l1, a.l2, a.l3}; // LSB to MSB
-    final long[] y = {b.l0, b.l1, b.l2, b.l3};
+    final long x0 = a.l0, x1 = a.l1, x2 = a.l2, x3 = a.l3;
+    final long y0 = b.l0, y1 = b.l1, y2 = b.l2, y3 = b.l3;
 
-    final long[] r = new long[4]; // 256-bit result only
+    final long[] result = new long[4];
 
-    for (int i = 0; i < 4; i++) {
-      long carry = 0;
-      for (int j = 0; j + i < 4; j++) {
-        int k = i + j;
-        long xj = x[j];
-        long yi = y[i];
-        long lo = xj * yi;
-        long hi = Math.multiplyHigh(xj, yi);
+    long carry0, r0, res1, res2;
+    long carry1, carry2;
 
-        long sum = r[k] + lo;
-        boolean carry0 = Long.compareUnsigned(sum, lo) < 0;
+    final long[] mul0 = Word256Helpers.multiplyHighLowUnsigned(x0, y0);
+    carry0 = mul0[0];
+    r0 = mul0[1];
+    result[0] = r0;
 
-        r[k] = sum;
-        long nextCarry = hi + (carry0 ? 1 : 0) + carry;
+    final long[] hop1 = Word256Helpers.unsignedMultiplyAdd(carry0, x1, y0);
+    carry0 = hop1[0];
+    res1 = hop1[1];
 
-        carry = nextCarry;
-      }
-      // drop overflow (k >= 4)
-    }
+    final long[] hop2 = Word256Helpers.unsignedMultiplyAdd(carry0, x2, y0);
+    carry0 = hop2[0];
+    res2 = hop2[1];
 
-    return new Word256(r[0], r[1], r[2], r[3]);
+    final long[] hop3 = Word256Helpers.unsignedMultiplyAdd(res1, x0, y1);
+    carry1 = hop3[0];
+    result[1] = hop3[1];
+
+    final long[] step1 = Word256Helpers.unsignedMultiplyAddWithCarry(res2, x1, y1, carry1);
+    carry1 = step1[0];
+    res2 = step1[1];
+
+    final long[] hop4 = Word256Helpers.unsignedMultiplyAdd(res2, x0, y2);
+    carry2 = hop4[0];
+    result[2] = hop4[1];
+
+    final long z3 =
+      Word256Helpers.unsignedMulAdd3(x3, y0, x2, y1, x0, y3) +
+        Word256Helpers.unsignedMultiplyAndAdd(x1, y2, carry0, carry1, carry2);
+    result[3] = z3;
+
+    return new Word256(result[0], result[1], result[2], result[3]);
   }
 
   /**
