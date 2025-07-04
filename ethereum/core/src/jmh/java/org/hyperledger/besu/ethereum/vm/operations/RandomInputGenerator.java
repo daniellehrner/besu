@@ -32,11 +32,17 @@ public final class RandomInputGenerator {
    */
   public static void fillPools(final Word256[] aPool, final Word256[] bPool) {
     final ThreadLocalRandom random = ThreadLocalRandom.current();
+
     for (int i = 0; i < aPool.length; i++) {
-      final byte[] a = new byte[32];
-      final byte[] b = new byte[32];
+      final int aSize = 1 + random.nextInt(32); // [1, 32]
+      final int bSize = 1 + random.nextInt(32);
+
+      final byte[] a = new byte[aSize];
+      final byte[] b = new byte[bSize];
+
       random.nextBytes(a);
       random.nextBytes(b);
+
       aPool[i] = Word256.fromBytes(a);
       bPool[i] = Word256.fromBytes(b);
     }
