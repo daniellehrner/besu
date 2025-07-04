@@ -636,7 +636,7 @@ subprojects {
       warmupIterations = _intCmdArg('wi', 1)
       fork = _intCmdArg('f', 2)
       iterations = _intCmdArg('i', 10)
-      benchmarkMode = _strListCmdArg('bm', ['thrpt', 'ss'])
+      benchmarkMode = _strListCmdArg('bm', ['avgt'])
       includes = _strListCmdArg('include', [''])
       //      humanOutputFile = project.file("${project.buildDir}/reports/jmh/results.txt")
       //      resultFormat = 'JSON'
