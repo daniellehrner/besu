@@ -19,18 +19,11 @@ import org.hyperledger.besu.evm.operation.AndOperation;
 import org.hyperledger.besu.evm.operation.Operation;
 
 import org.apache.tuweni.bytes.Bytes;
-import org.hyperledger.besu.evm.word256.Word256;
 
 public class AndOperationBenchmark extends BinaryOperationBenchmark {
   @Override
   protected Operation.OperationResult invoke(
-    final MessageFrame frame, final Word256 a, final Word256 b) {
-    frame.pushStackItem(b);
-    frame.pushStackItem(a);
-
-    final Operation.OperationResult result = AndOperation.staticOperation(frame);
-
-    frame.popStackItem();
-    return result;
+      final MessageFrame frame) {
+    return AndOperation.staticOperation(frame);
   }
 }

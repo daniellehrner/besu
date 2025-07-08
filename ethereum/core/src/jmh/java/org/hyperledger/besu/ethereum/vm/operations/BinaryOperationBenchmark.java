@@ -21,17 +21,14 @@ import org.hyperledger.besu.evm.operation.Operation;
 
 import org.hyperledger.besu.evm.word256.Word256;
 import org.openjdk.jmh.annotations.Benchmark;
-import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Level;
-import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 
-@BenchmarkMode(Mode.Throughput)
 @State(Scope.Thread)
-@OutputTimeUnit(value = TimeUnit.MICROSECONDS)
+@OutputTimeUnit(value = TimeUnit.NANOSECONDS)
 public abstract class BinaryOperationBenchmark {
 
   protected static final int SAMPLE_SIZE = 30_000;
@@ -54,8 +51,16 @@ public abstract class BinaryOperationBenchmark {
   public Operation.OperationResult benchmark() {
     final int i = index;
     index = (index + 1) % SAMPLE_SIZE;
-    return invoke(frame, aPool[i], bPool[i]);
+
+    frame.pushStackItem(bPool[i]);
+    frame.pushStackItem(aPool[i]);
+
+    final Operation.OperationResult result = invoke(frame);
+
+    frame.popStackItem();
+
+    return result;
   }
 
-  protected abstract Operation.OperationResult invoke(MessageFrame frame, Word256 a, Word256 b);
+  protected abstract Operation.OperationResult invoke(MessageFrame frame);
 }
