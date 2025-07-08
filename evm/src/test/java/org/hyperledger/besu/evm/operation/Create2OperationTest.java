@@ -276,8 +276,7 @@ public class Create2OperationTest {
     messageFrame.pushStackItem(memoryOffset);
     messageFrame.pushStackItem(Word256.ZERO);
     messageFrame.expandMemory(0, 500);
-    messageFrame.writeMemory(
-        memoryOffset.toInt(), SIMPLE_CREATE.size(), SIMPLE_CREATE);
+    messageFrame.writeMemory(memoryOffset.toInt(), SIMPLE_CREATE.size(), SIMPLE_CREATE);
     final Deque<MessageFrame> messageFrameStack = messageFrame.getMessageFrameStack();
     if (messageFrameStack.isEmpty()) {
       messageFrameStack.push(messageFrame);

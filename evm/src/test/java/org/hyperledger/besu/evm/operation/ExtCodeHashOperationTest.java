@@ -99,7 +99,8 @@ class ExtCodeHashOperationTest {
     final Bytes code = Bytes.fromHexString("0xabcdef");
     final MutableAccount account = worldStateUpdater.getOrCreate(REQUESTED_ADDRESS);
     account.setCode(code);
-    assertThat(executeOperation(REQUESTED_ADDRESS)).isEqualTo(Word256.fromBytes(Hash.hash(code).toArrayUnsafe()));
+    assertThat(executeOperation(REQUESTED_ADDRESS))
+        .isEqualTo(Word256.fromBytes(Hash.hash(code).toArrayUnsafe()));
   }
 
   @Test
@@ -109,8 +110,10 @@ class ExtCodeHashOperationTest {
     final MutableAccount account = worldStateUpdater.getOrCreate(REQUESTED_ADDRESS);
     account.setCode(code);
     final Word256 value =
-        Word256.fromBytes(UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
-            .add(UInt256.valueOf(2).pow(UInt256.valueOf(160))).toArrayUnsafe());
+        Word256.fromBytes(
+            UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
+                .add(UInt256.valueOf(2).pow(UInt256.valueOf(160)))
+                .toArrayUnsafe());
     final MessageFrame frame = createMessageFrame(value);
     operation.execute(frame, null);
     assertThat(frame.getStackItem(0)).isEqualTo(Word256.fromBytes(Hash.hash(code).toArrayUnsafe()));
@@ -122,8 +125,10 @@ class ExtCodeHashOperationTest {
     final MutableAccount account = worldStateUpdater.getOrCreate(REQUESTED_ADDRESS);
     account.setCode(code);
     final Word256 value =
-      Word256.fromBytes(UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
-            .add(UInt256.valueOf(2).pow(UInt256.valueOf(160))).toArrayUnsafe());
+        Word256.fromBytes(
+            UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
+                .add(UInt256.valueOf(2).pow(UInt256.valueOf(160)))
+                .toArrayUnsafe());
 
     final MessageFrame frame = createMessageFrame(value);
     operation.execute(frame, null);
@@ -131,11 +136,13 @@ class ExtCodeHashOperationTest {
 
     final MessageFrame frameIstanbul = createMessageFrame(value);
     operationIstanbul.execute(frameIstanbul, null);
-    assertThat(frameIstanbul.getStackItem(0)).isEqualTo(Word256.fromBytes(Hash.hash(code).toArrayUnsafe()));
+    assertThat(frameIstanbul.getStackItem(0))
+        .isEqualTo(Word256.fromBytes(Hash.hash(code).toArrayUnsafe()));
 
     final MessageFrame frameEOF = createMessageFrame(value);
     operationEOF.execute(frameEOF, null);
-    assertThat(frameEOF.getStackItem(0)).isEqualTo(Word256.fromBytes(Hash.hash(code).toArrayUnsafe()));
+    assertThat(frameEOF.getStackItem(0))
+        .isEqualTo(Word256.fromBytes(Hash.hash(code).toArrayUnsafe()));
   }
 
   @Test
@@ -144,8 +151,10 @@ class ExtCodeHashOperationTest {
     final MutableAccount account = worldStateUpdater.getOrCreate(REQUESTED_ADDRESS);
     account.setCode(code);
     final Word256 value =
-        Word256.fromBytes(UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
-            .add(UInt256.valueOf(2).pow(UInt256.valueOf(160))).toArrayUnsafe());
+        Word256.fromBytes(
+            UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
+                .add(UInt256.valueOf(2).pow(UInt256.valueOf(160)))
+                .toArrayUnsafe());
 
     final MessageFrame frame = createMessageFrame(value);
     operation.execute(frame, null);
@@ -153,11 +162,13 @@ class ExtCodeHashOperationTest {
 
     final MessageFrame frameIstanbul = createMessageFrame(value);
     operationIstanbul.execute(frameIstanbul, null);
-    assertThat(frameIstanbul.getStackItem(0)).isEqualTo(Word256.fromBytes(Hash.hash(code).toArrayUnsafe()));
+    assertThat(frameIstanbul.getStackItem(0))
+        .isEqualTo(Word256.fromBytes(Hash.hash(code).toArrayUnsafe()));
 
     final MessageFrame frameEOF = createMessageFrame(value);
     operationEOF.execute(frameEOF, null);
-    assertThat(frameEOF.getStackItem(0)).isEqualTo(Word256.fromBytes(Hash.hash(Bytes.fromHexString("0xef00")).toArrayUnsafe()));
+    assertThat(frameEOF.getStackItem(0))
+        .isEqualTo(Word256.fromBytes(Hash.hash(Bytes.fromHexString("0xef00")).toArrayUnsafe()));
   }
 
   private Word256 executeOperation(final Address requestedAddress) {

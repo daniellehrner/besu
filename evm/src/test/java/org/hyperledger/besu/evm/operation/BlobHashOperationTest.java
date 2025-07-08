@@ -25,15 +25,14 @@ import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.CancunGasCalculator;
 import org.hyperledger.besu.evm.gascalculator.LondonGasCalculator;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
-import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
-import org.hyperledger.besu.evm.word256.Word256;
 import org.junit.jupiter.api.Test;
 
 class BlobHashOperationTest {
@@ -99,7 +98,8 @@ class BlobHashOperationTest {
     List<VersionedHash> versionedHashes = Arrays.asList(version0Hash);
     BlobHashOperation getHash = new BlobHashOperation(new CancunGasCalculator());
     MessageFrame frame = mock(MessageFrame.class);
-    when(frame.popStackItem()).thenReturn(Word256.fromBytes(Bytes32.repeat((byte) 0x2C).toArrayUnsafe()));
+    when(frame.popStackItem())
+        .thenReturn(Word256.fromBytes(Bytes32.repeat((byte) 0x2C).toArrayUnsafe()));
     when(frame.getVersionedHashes()).thenReturn(Optional.of(versionedHashes));
     EVM fakeEVM = mock(EVM.class);
     Operation.OperationResult r = getHash.execute(frame, fakeEVM);

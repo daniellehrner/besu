@@ -20,8 +20,7 @@ import org.hyperledger.besu.evm.operation.SubOperation;
 
 public class SubOperationBenchmark extends BinaryOperationBenchmark {
   @Override
-  protected Operation.OperationResult invoke(
-      final MessageFrame frame) {
+  protected Operation.OperationResult invoke(final MessageFrame frame) {
     return SubOperation.staticOperation(frame);
   }
 }

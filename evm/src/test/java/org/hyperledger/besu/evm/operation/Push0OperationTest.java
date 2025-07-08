@@ -26,11 +26,10 @@ import org.hyperledger.besu.evm.gascalculator.BerlinGasCalculator;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation.OperationResult;
 import org.hyperledger.besu.evm.testutils.FakeBlockValues;
+import org.hyperledger.besu.evm.word256.Word256;
 
 import java.util.Optional;
 
-import org.apache.tuweni.bytes.Bytes;
-import org.hyperledger.besu.evm.word256.Word256;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 

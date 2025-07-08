@@ -14,12 +14,12 @@
  */
 package org.hyperledger.besu.ethereum.vm.operations;
 
-import java.util.concurrent.TimeUnit;
-
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.operation.Operation;
-
 import org.hyperledger.besu.evm.word256.Word256;
+
+import java.util.concurrent.TimeUnit;
+
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.Level;
 import org.openjdk.jmh.annotations.OutputTimeUnit;

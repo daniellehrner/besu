@@ -108,8 +108,10 @@ class ExtCodeSizeOperationTest {
     final MutableAccount account = worldStateUpdater.getOrCreate(REQUESTED_ADDRESS);
     account.setCode(code);
     final Word256 value =
-        Word256.fromBytes(UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
-            .add(UInt256.valueOf(2).pow(UInt256.valueOf(160))).toArrayUnsafe());
+        Word256.fromBytes(
+            UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
+                .add(UInt256.valueOf(2).pow(UInt256.valueOf(160)))
+                .toArrayUnsafe());
     final MessageFrame frame = createMessageFrame(value);
     operation.execute(frame, null);
     assertThat(frame.getStackItem(0).toInt()).isEqualTo(3);
@@ -121,8 +123,10 @@ class ExtCodeSizeOperationTest {
     final MutableAccount account = worldStateUpdater.getOrCreate(REQUESTED_ADDRESS);
     account.setCode(code);
     final Word256 value =
-      Word256.fromBytes(UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
-            .add(UInt256.valueOf(2).pow(UInt256.valueOf(160))).toArrayUnsafe());
+        Word256.fromBytes(
+            UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
+                .add(UInt256.valueOf(2).pow(UInt256.valueOf(160)))
+                .toArrayUnsafe());
 
     final MessageFrame frame = createMessageFrame(value);
     operation.execute(frame, null);
@@ -143,8 +147,10 @@ class ExtCodeSizeOperationTest {
     final MutableAccount account = worldStateUpdater.getOrCreate(REQUESTED_ADDRESS);
     account.setCode(code);
     final Word256 value =
-      Word256.fromBytes(UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
-            .add(UInt256.valueOf(2).pow(UInt256.valueOf(160))).toArrayUnsafe());
+        Word256.fromBytes(
+            UInt256.fromBytes(Words.fromAddress(REQUESTED_ADDRESS))
+                .add(UInt256.valueOf(2).pow(UInt256.valueOf(160)))
+                .toArrayUnsafe());
 
     final MessageFrame frame = createMessageFrame(value);
     operation.execute(frame, null);

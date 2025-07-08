@@ -105,9 +105,7 @@ class CreateOperationTest {
 
     // WHEN the memory that the create operation was executed from is altered.
     messageFrame.writeMemory(
-        memoryOffset.toInt(),
-        SIMPLE_CREATE.size(),
-        Bytes.random(SIMPLE_CREATE.size()));
+        memoryOffset.toInt(), SIMPLE_CREATE.size(), Bytes.random(SIMPLE_CREATE.size()));
 
     // THEN the logs still have the expected topic
     final String calculatedTopicAfter = log.getTopics().get(0).toUnprefixedHexString();
@@ -151,8 +149,7 @@ class CreateOperationTest {
   void notEnoughValue() {
     final Word256 memoryOffset = Word256.fromLong(0xFF);
     final Word256 memoryLength = Word256.fromInt(SIMPLE_CREATE.size());
-    final MessageFrame messageFrame =
-        testMemoryFrame(memoryOffset, memoryLength, Word256.ONE, 1);
+    final MessageFrame messageFrame = testMemoryFrame(memoryOffset, memoryLength, Word256.ONE, 1);
     final Deque<MessageFrame> messageFrameStack = messageFrame.getMessageFrameStack();
     for (int i = 0; i < 1025; i++) {
       messageFrameStack.add(messageFrame);
@@ -272,8 +269,7 @@ class CreateOperationTest {
     messageFrame.pushStackItem(memoryOffset);
     messageFrame.pushStackItem(value);
     messageFrame.expandMemory(0, 500);
-    messageFrame.writeMemory(
-        memoryOffset.toInt(), SIMPLE_CREATE.size(), SIMPLE_CREATE);
+    messageFrame.writeMemory(memoryOffset.toInt(), SIMPLE_CREATE.size(), SIMPLE_CREATE);
     final Deque<MessageFrame> messageFrameStack = messageFrame.getMessageFrameStack();
     while (messageFrameStack.size() < depth) {
       messageFrameStack.push(messageFrame);

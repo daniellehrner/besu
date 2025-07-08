@@ -150,7 +150,8 @@ public final class Word256 {
   public static Word256 fromHexString(final String hex) {
     final String cleanHex = hex.startsWith("0x") || hex.startsWith("0X") ? hex.substring(2) : hex;
     if (cleanHex.length() > 64) {
-      throw new IllegalArgumentException("Hex string too long for Word256: " + cleanHex.length() + " hex chars");
+      throw new IllegalArgumentException(
+          "Hex string too long for Word256: " + cleanHex.length() + " hex chars");
     }
 
     final String paddedHex = String.format("%64s", cleanHex).replace(' ', '0');

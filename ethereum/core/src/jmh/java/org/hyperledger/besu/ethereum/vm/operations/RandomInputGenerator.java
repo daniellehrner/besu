@@ -14,10 +14,9 @@
  */
 package org.hyperledger.besu.ethereum.vm.operations;
 
-import java.util.concurrent.ThreadLocalRandom;
-
-import org.apache.tuweni.bytes.Bytes;
 import org.hyperledger.besu.evm.word256.Word256;
+
+import java.util.concurrent.ThreadLocalRandom;
 
 /** Utility for generating random 256-bit (32-byte) values for benchmarking or testing. */
 public final class RandomInputGenerator {
