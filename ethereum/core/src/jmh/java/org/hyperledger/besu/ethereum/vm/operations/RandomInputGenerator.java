@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.vm.operations;
 
+import java.math.BigInteger;
 import java.util.concurrent.ThreadLocalRandom;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -82,6 +83,24 @@ public final class RandomInputGenerator {
 
       aPool[i] = Word256Int.fromBytes(a);
       bPool[i] = Word256Int.fromBytes(b);
+    }
+  }
+
+  public static void fillPoolsBigInteger(final BigInteger[] aPool, final BigInteger[] bPool) {
+    final ThreadLocalRandom random = ThreadLocalRandom.current();
+
+    for (int i = 0; i < aPool.length; i++) {
+      final int aSize = 1 + random.nextInt(32); // [1, 32]
+      final int bSize = 1 + random.nextInt(32);
+
+      final byte[] a = new byte[aSize];
+      final byte[] b = new byte[bSize];
+
+      random.nextBytes(a);
+      random.nextBytes(b);
+
+      aPool[i] = new BigInteger(1, a);
+      bPool[i] = new BigInteger(1, b);
     }
   }
 }
