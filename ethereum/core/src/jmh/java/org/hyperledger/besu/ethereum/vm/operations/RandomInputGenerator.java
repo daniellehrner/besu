@@ -17,6 +17,8 @@ package org.hyperledger.besu.ethereum.vm.operations;
 import java.util.concurrent.ThreadLocalRandom;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.word256.Word256;
+import org.hyperledger.besu.evm.word256.Word256Int;
 
 /** Utility for generating random 256-bit (32-byte) values for benchmarking or testing. */
 public final class RandomInputGenerator {
@@ -44,6 +46,42 @@ public final class RandomInputGenerator {
 
       aPool[i] = Bytes.wrap(a);
       bPool[i] = Bytes.wrap(b);
+    }
+  }
+
+  public static void fillPoolsWord256(final Word256[] aPool, final Word256[] bPool) {
+    final ThreadLocalRandom random = ThreadLocalRandom.current();
+
+    for (int i = 0; i < aPool.length; i++) {
+      final int aSize = 1 + random.nextInt(32); // [1, 32]
+      final int bSize = 1 + random.nextInt(32);
+
+      final byte[] a = new byte[aSize];
+      final byte[] b = new byte[bSize];
+
+      random.nextBytes(a);
+      random.nextBytes(b);
+
+      aPool[i] = Word256.fromBytes(a);
+      bPool[i] = Word256.fromBytes(b);
+    }
+  }
+
+  public static void fillPoolsWord256Int(final Word256Int[] aPool, final Word256Int[] bPool) {
+    final ThreadLocalRandom random = ThreadLocalRandom.current();
+
+    for (int i = 0; i < aPool.length; i++) {
+      final int aSize = 1 + random.nextInt(32); // [1, 32]
+      final int bSize = 1 + random.nextInt(32);
+
+      final byte[] a = new byte[aSize];
+      final byte[] b = new byte[bSize];
+
+      random.nextBytes(a);
+      random.nextBytes(b);
+
+      aPool[i] = Word256Int.fromBytes(a);
+      bPool[i] = Word256Int.fromBytes(b);
     }
   }
 }
