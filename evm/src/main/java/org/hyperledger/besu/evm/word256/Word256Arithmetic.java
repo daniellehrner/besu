@@ -22,6 +22,8 @@ package org.hyperledger.besu.evm.word256;
  */
 final class Word256Arithmetic {
 
+  private static final ThreadLocal<long[]> THREAD_LOCAL_LONG_4 = ThreadLocal.withInitial(() -> new long[4]);
+
   private Word256Arithmetic() {}
 
   /**
@@ -97,9 +99,9 @@ final class Word256Arithmetic {
     // Step 1: Multiply x0 * y0 (least significant words)
     //         This gives the lowest 128 bits of the full result.
     //         Store lower 64 bits in result[0], keep upper 64 bits as carry0
-    final long[] mul0 = Word256Helpers.multiplyHighLowUnsigned(x0, y0);
-    carry0 = mul0[0];
-    r0 = mul0[1];
+    final Word256Helpers.MultiplyResult mul0 = Word256Helpers.multiplyHighLowUnsigned(x0, y0);
+    carry0 = mul0.hi();
+    r0 = mul0.lo();
     result[0] = r0;
 
     // Step 2: Add partial products x1*y0 and x2*y0 with carry propagation
@@ -121,9 +123,9 @@ final class Word256Arithmetic {
 
     // Step 5: Compute (x1 * y1) + res2 + carry1
     //         Continue accumulation into next limb
-    final long[] step1 = Word256Helpers.unsignedMultiplyAddWithCarry(res2, x1, y1, carry1);
-    carry1 = step1[0];
-    res2 = step1[1];
+    final Word256Helpers.MultiplyResult step1 = Word256Helpers.unsignedMultiplyAddWithCarry(res2, x1, y1, carry1);
+    carry1 = step1.hi();
+    res2 = step1.lo();
 
     // Step 6: Compute x0 * y2 + res2
     //         Final step before computing result[3]
@@ -144,6 +146,42 @@ final class Word256Arithmetic {
     result[3] = z3;
 
     return new Word256(result[0], result[1], result[2], result[3]);
+  }
+
+  /**
+   * Divides one Word256 value by another.
+   *
+   * @param dividend the Word256 value to be divided
+   * @param divisor the Word256 value to divide by
+   * @return the quotient of dividend / divisor as a new Word256
+   * @throws ArithmeticException if divisor is zero
+   */
+  public static Word256 divide(final Word256 dividend, final Word256 divisor) {
+    if (divisor.isZero()) {
+      return Word256.ZERO;
+    }
+
+    if (divisor.isOne()) {
+      return dividend;
+    }
+
+    final int comparisonResult = Word256Comparison.compareUnsigned(dividend, divisor);
+    if (comparisonResult < 0) {
+      return Word256.ZERO;
+    }
+
+    if (comparisonResult == 0) {
+      return Word256.ONE;
+    }
+
+    if (dividend.fitsInLong()) {
+      return Word256.fromLong(Long.divideUnsigned(dividend.toLong(), divisor.toLong()));
+    }
+
+
+    final long[] quotient = getScratchLong4();
+    Word256Helpers.divideWithRemainder(quotient, null, dividend.toLongs(), divisor.toLongs());
+    return Word256.fromLongs(quotient);
   }
 
   /**
@@ -188,5 +226,9 @@ final class Word256Arithmetic {
     }
 
     return result;
+  }
+
+  static long[] getScratchLong4() {
+    return THREAD_LOCAL_LONG_4.get();
   }
 }

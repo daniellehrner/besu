@@ -14,6 +14,8 @@
  */
 package org.hyperledger.besu.evm.word256;
 
+import java.util.Arrays;
+
 import org.apache.tuweni.bytes.Bytes;
 
 /**
@@ -124,6 +126,29 @@ public final class Word256 {
     return setFromByteArray(padded);
   }
 
+  public static Word256 fromBytes(final byte[] bytes, final int offset) {
+    final int length = bytes.length - offset;
+    if (length > 32) {
+      throw new IllegalArgumentException("Word256 input must be at most 32 bytes from offset");
+    }
+
+    if (length == 32 && offset == 0) {
+      // Direct path, avoid copy
+      return setFromByteArray(bytes);
+    }
+
+    if (length == 32) {
+      // Directly pass the slice, no extra array allocation
+      final byte[] slice = Arrays.copyOfRange(bytes, offset, offset + 32);
+      return setFromByteArray(slice);
+    }
+
+    // Fallback for <32 bytes: allocate padded array
+    final byte[] tmp = new byte[32];
+    System.arraycopy(bytes, offset, tmp, 32 - length, length);
+    return setFromByteArray(tmp);
+  }
+
   /**
    * Creates a Word256 from a Bytes object.
    *
@@ -154,6 +179,19 @@ public final class Word256 {
    */
   private static Word256 fromBytesUnsafe(final byte[] bytes) {
     return setFromByteArray(bytes);
+  }
+
+  public static Word256 fromLong(final long value) {
+    return new Word256(value, 0, 0, 0);
+  }
+
+  static Word256 fromLongs(final long[] longs) {
+    return new Word256(longs[0], longs[1], longs[2], longs[3]);
+  }
+
+
+  long[] toLongs() {
+    return new long[] {l0, l1, l2, l3};
   }
 
   /**
@@ -199,6 +237,10 @@ public final class Word256 {
     return bytesCache;
   }
 
+  public long toLong() {
+    return l0;
+  }
+
   /**
    * Adds this Word256 to another Word256.
    *
@@ -230,6 +272,16 @@ public final class Word256 {
   }
 
   /**
+   * Divides this Word256 by another Word256.
+   *
+   * @param divisor the Word256 to divide by
+   * @return a new Word256 representing the quotient of this and divisor
+   */
+  public Word256 div(final Word256 divisor) {
+    return Word256Arithmetic.divide(this, divisor);
+  }
+
+  /**
    * Raises this Word256 to the power of another Word256.
    *
    * @param exponent the Word256 exponent
@@ -257,6 +309,18 @@ public final class Word256 {
    */
   public boolean isZero() {
     return Word256Comparison.isZero(this);
+  }
+
+  public boolean isOne() {
+    return Word256Comparison.isOne(this);
+  }
+
+  public int compareUnsigned(final Word256 other) {
+    return Word256Comparison.compareUnsigned(this, other);
+  }
+
+  public boolean fitsInLong() {
+    return Word256Comparison.fitsInLong(this);
   }
 
   /**
@@ -299,5 +363,32 @@ public final class Word256 {
     }
 
     return 0;
+  }
+
+  @Override
+  public boolean equals(final Object obj) {
+    if (this == obj) {
+      return true;
+    }
+
+    if (obj instanceof Word256 other) {
+      return l0 == other.l0 && l1 == other.l1 && l2 == other.l2 && l3 == other.l3;
+    }
+
+    return false;
+  }
+
+  @Override
+  public int hashCode() {
+    int result = Long.hashCode(l0);
+    result = 31 * result + Long.hashCode(l1);
+    result = 31 * result + Long.hashCode(l2);
+    result = 31 * result + Long.hashCode(l3);
+    return result;
+  }
+
+  @Override
+  public String toString() {
+    return String.format("Word256{l0=%016x, l1=%016x, l2=%016x, l3=%016x}", l0, l1, l2, l3);
   }
 }

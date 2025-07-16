@@ -30,4 +30,28 @@ final class Word256Comparison {
   static boolean isZero(final Word256 w) {
     return w.l0 == 0 && w.l1 == 0 && w.l2 == 0 && w.l3 == 0;
   }
+
+  static boolean isOne(final Word256 w) {
+    return w.l0 == 1 && w.l1 == 0 && w.l2 == 0 && w.l3 == 0;
+  }
+
+  public static int compareUnsigned(final Word256 a, final Word256 b) {
+    if (a.l3 != b.l3) {
+      return Long.compareUnsigned(a.l3, b.l3);
+    }
+
+    if (a.l2 != b.l2) {
+      return Long.compareUnsigned(a.l2, b.l2);
+    }
+
+    if (a.l1 != b.l1) {
+      return Long.compareUnsigned(a.l1, b.l1);
+    }
+
+    return Long.compareUnsigned(a.l0, b.l0);
+  }
+
+  public static boolean fitsInLong(final Word256 w) {
+    return w.l3 == 0 && w.l2 == 0 && w.l1 == 0;
+  }
 }

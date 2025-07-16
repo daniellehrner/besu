@@ -14,13 +14,15 @@
  */
 package org.hyperledger.besu.evm.operation;
 
-import org.hyperledger.besu.evm.EVM;
-import org.hyperledger.besu.evm.frame.MessageFrame;
-import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-
 import java.math.BigInteger;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.hyperledger.besu.evm.EVM;
+import org.hyperledger.besu.evm.frame.MessageFrame;
+import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.word256.Word256;
+
+import org.apache.tuweni.bytes.Bytes32;
 
 /** The Div operation. */
 public class DivOperation extends AbstractFixedCostOperation {
@@ -50,25 +52,25 @@ public class DivOperation extends AbstractFixedCostOperation {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
+    final Word256 a = Word256.fromBytes(frame.popStackItem().toArrayUnsafe());
+    final Word256 b = Word256.fromBytes(frame.popStackItem().toArrayUnsafe());
 
-    final Bytes value0 = frame.popStackItem();
-    final Bytes value1 = frame.popStackItem();
+    if (b.isZero()) {
+      frame.pushStackItem(Bytes32.EMPTY);
 
-    if (value1.isZero()) {
-      frame.pushStackItem(Bytes.EMPTY);
     } else {
-      BigInteger b1 = new BigInteger(1, value0.toArrayUnsafe());
-      BigInteger b2 = new BigInteger(1, value1.toArrayUnsafe());
-      final BigInteger result = b1.divide(b2);
+      final BigInteger aBi = new BigInteger(1, a.toBytesArray());
+      final BigInteger bBi = new BigInteger(1, b.toBytesArray());
+      final BigInteger result = aBi.divide(bBi);
 
       // because it's unsigned there is a change a 33 byte result will occur
       // there is no toByteArrayUnsigned so we have to check and trim
       byte[] resultArray = result.toByteArray();
       int length = resultArray.length;
       if (length > 32) {
-        frame.pushStackItem(Bytes.wrap(resultArray, length - 32, 32));
+        frame.pushStackItem(Bytes32.wrap(Word256.fromBytes(resultArray, length - 32).toBytesArray()));
       } else {
-        frame.pushStackItem(Bytes.wrap(resultArray));
+        frame.pushStackItem(Bytes.wrap(Word256.fromBytes(resultArray).toBytesArray()));
       }
     }
 
