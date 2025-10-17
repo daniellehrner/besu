@@ -375,16 +375,20 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
   public void finalizeProposalById(final PayloadIdentifier payloadId) {
     LOG.debug("Finalizing block proposal for payload id {}", payloadId);
 
-    // Signal graceful cancellation to the block creator
+    // Signal to stop new iterations, but allow current iteration to complete
+    // This enables awaitCurrentBuildCompletion to actually wait for a better block
     blockCreationTasks.computeIfPresent(
         payloadId,
         (pid, task) -> {
-          task.blockCreator.cancel();
-          LOG.debug("Signaled block creator to cancel gracefully for payload {}", payloadId);
+          task.cancelled.set(true);
+          LOG.debug(
+              "Signaled block creation to finalize after current iteration for payload {}",
+              payloadId);
           return task;
         });
 
-    // Schedule cleanup after a short delay to allow graceful completion
+    // Schedule cleanup after a delay - this will actually cancel the block creator
+    // and remove the task from the map
     ethScheduler.scheduleFutureTask(
         () -> cleanupBlockCreationTask(payloadId),
         Duration.ofMillis(miningConfiguration.getUnstable().getPosBlockFinalizationTimeoutMs()));
