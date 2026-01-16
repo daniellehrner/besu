@@ -19,6 +19,8 @@ import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConf
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.DEFAULT_PARALLEL_TX_PROCESSING;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.DEFAULT_TRIE_LOG_PRUNING_WINDOW_SIZE;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.MINIMUM_TRIE_LOG_RETENTION_LIMIT;
+import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_ACCOUNT_CACHE_ENABLED;
+import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_ACCOUNT_CACHE_SIZE_MB;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_CODE_USING_CODE_HASH_ENABLED;
 import static org.hyperledger.besu.ethereum.worldstate.PathBasedExtraStorageConfiguration.PathBasedUnstable.DEFAULT_FULL_FLAT_DB_ENABLED;
 
@@ -105,6 +107,25 @@ public class PathBasedExtraStorageOptions
             "Enables code storage using code hash instead of by account hash. (default: ${DEFAULT-VALUE})")
     private boolean codeUsingCodeHashEnabled = DEFAULT_CODE_USING_CODE_HASH_ENABLED;
 
+    @Option(
+        hidden = true,
+        names = {"--Xbonsai-account-cache-enabled"},
+        arity = "1",
+        description =
+            "EXPERIMENTAL: Enables account caching for Bonsai to reduce database reads. "
+                + "The cache is reorg-resistant and automatically invalidated on chain reorganizations. "
+                + "(default: ${DEFAULT-VALUE})")
+    private boolean accountCacheEnabled = DEFAULT_ACCOUNT_CACHE_ENABLED;
+
+    @Option(
+        hidden = true,
+        names = {"--Xbonsai-account-cache-size-mb"},
+        paramLabel = "<LONG>",
+        description =
+            "EXPERIMENTAL: Maximum size of account cache in MB. Only used when --Xbonsai-account-cache-enabled=true. "
+                + "(default: ${DEFAULT-VALUE})")
+    private long accountCacheSizeMB = DEFAULT_ACCOUNT_CACHE_SIZE_MB;
+
     /** Default Constructor. */
     Unstable() {}
   }
@@ -172,6 +193,10 @@ public class PathBasedExtraStorageOptions
         domainObject.getUnstable().getFullFlatDbEnabled();
     dataStorageOptions.unstableOptions.codeUsingCodeHashEnabled =
         domainObject.getUnstable().getCodeStoredByCodeHashEnabled();
+    dataStorageOptions.unstableOptions.accountCacheEnabled =
+        domainObject.getUnstable().getAccountCacheEnabled();
+    dataStorageOptions.unstableOptions.accountCacheSizeMB =
+        domainObject.getUnstable().getAccountCacheSizeMB();
     dataStorageOptions.isParallelTxProcessingEnabled =
         domainObject.getParallelTxProcessingEnabled();
 
@@ -189,6 +214,8 @@ public class PathBasedExtraStorageOptions
             ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
                 .fullFlatDbEnabled(unstableOptions.fullFlatDbEnabled)
                 .codeStoredByCodeHashEnabled(unstableOptions.codeUsingCodeHashEnabled)
+                .accountCacheEnabled(unstableOptions.accountCacheEnabled)
+                .accountCacheSizeMB(unstableOptions.accountCacheSizeMB)
                 .build())
         .build();
   }

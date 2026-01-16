@@ -76,10 +76,13 @@ public interface PathBasedExtraStorageConfiguration {
         ImmutablePathBasedExtraStorageConfiguration.PathBasedUnstable.builder()
             .fullFlatDbEnabled(false)
             .codeStoredByCodeHashEnabled(false)
+            .accountCacheEnabled(false)
             .build();
 
     boolean DEFAULT_FULL_FLAT_DB_ENABLED = true;
     boolean DEFAULT_CODE_USING_CODE_HASH_ENABLED = true;
+    boolean DEFAULT_ACCOUNT_CACHE_ENABLED = false;
+    long DEFAULT_ACCOUNT_CACHE_SIZE_MB = 50L;
 
     @Value.Default
     default boolean getFullFlatDbEnabled() {
@@ -89,6 +92,16 @@ public interface PathBasedExtraStorageConfiguration {
     @Value.Default
     default boolean getCodeStoredByCodeHashEnabled() {
       return DEFAULT_CODE_USING_CODE_HASH_ENABLED;
+    }
+
+    @Value.Default
+    default boolean getAccountCacheEnabled() {
+      return DEFAULT_ACCOUNT_CACHE_ENABLED;
+    }
+
+    @Value.Default
+    default long getAccountCacheSizeMB() {
+      return DEFAULT_ACCOUNT_CACHE_SIZE_MB;
     }
   }
 }

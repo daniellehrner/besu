@@ -89,6 +89,7 @@ import org.hyperledger.besu.ethereum.transaction.TransactionSimulator;
 import org.hyperledger.besu.ethereum.trie.forest.ForestWorldStateArchive;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiArchiveWorldStateProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.BonsaiWorldStateProvider;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.AccountCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
@@ -229,6 +230,9 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
 
   /** The global code cache */
   protected CodeCache codeCache;
+
+  /** The global account cache (optional, enabled via config) */
+  protected AccountCache accountCache;
 
   /** Instantiates a new Besu controller builder. */
   protected BesuControllerBuilder() {}
@@ -614,6 +618,15 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
 
     this.codeCache = besuComponent.map(BesuComponent::getCodeCache).orElse(new CodeCache());
     this.codeCache.setupMetricsSystem(metricsSystem);
+
+    // Create account cache if enabled in configuration
+    final PathBasedExtraStorageConfiguration.PathBasedUnstable unstableConfig =
+        dataStorageConfiguration.getPathBasedExtraStorageConfiguration().getUnstable();
+    if (unstableConfig.getAccountCacheEnabled()) {
+      final long cacheSizeBytes = unstableConfig.getAccountCacheSizeMB() * 1024 * 1024;
+      this.accountCache = new AccountCache(cacheSizeBytes);
+      this.accountCache.setupMetricsSystem(metricsSystem);
+    }
 
     prepForBuild();
 
@@ -1271,7 +1284,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             besuComponent.map(BesuComponent::getBesuPluginContext).orElse(null),
             evmConfiguration,
             worldStateHealerSupplier,
-            codeCache);
+            codeCache,
+            accountCache);
       }
       case X_BONSAI_ARCHIVE -> {
         final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage =
@@ -1288,7 +1302,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             besuComponent.map(BesuComponent::getBesuPluginContext).orElse(null),
             evmConfiguration,
             worldStateHealerSupplier,
-            codeCache);
+            codeCache,
+            accountCache);
       }
       case FOREST -> {
         final WorldStatePreimageStorage preimageStorage =

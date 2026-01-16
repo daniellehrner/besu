@@ -19,6 +19,7 @@ import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.MutableWorldState;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.AccountCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedWorldStorageManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
@@ -49,6 +50,28 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
       final EvmConfiguration evmConfiguration,
       final Supplier<WorldStateHealer> worldStateHealerSupplier,
       final CodeCache codeCache) {
+    this(
+        worldStateKeyValueStorage,
+        blockchain,
+        maxLayersToLoad,
+        bonsaiCachedMerkleTrieLoader,
+        pluginContext,
+        evmConfiguration,
+        worldStateHealerSupplier,
+        codeCache,
+        null);
+  }
+
+  public BonsaiArchiveWorldStateProvider(
+      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
+      final Blockchain blockchain,
+      final Optional<Long> maxLayersToLoad,
+      final BonsaiCachedMerkleTrieLoader bonsaiCachedMerkleTrieLoader,
+      final ServiceManager pluginContext,
+      final EvmConfiguration evmConfiguration,
+      final Supplier<WorldStateHealer> worldStateHealerSupplier,
+      final CodeCache codeCache,
+      final AccountCache accountCache) {
     super(
         worldStateKeyValueStorage,
         blockchain,
@@ -57,7 +80,8 @@ public class BonsaiArchiveWorldStateProvider extends BonsaiWorldStateProvider {
         pluginContext,
         evmConfiguration,
         worldStateHealerSupplier,
-        codeCache);
+        codeCache,
+        accountCache);
   }
 
   @VisibleForTesting

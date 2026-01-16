@@ -109,4 +109,18 @@ public class MemoryBoundCache<K, V> {
   public long requestCount() {
     return cache.stats().requestCount();
   }
+
+  /**
+   * Invalidates the entry for the specified key.
+   *
+   * @param key the key to invalidate
+   */
+  public void invalidate(final K key) {
+    cache.invalidate(key);
+  }
+
+  /** Invalidates all entries in the cache. */
+  public void invalidateAll() {
+    cache.invalidateAll();
+  }
 }

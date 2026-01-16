@@ -25,6 +25,7 @@ import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.AccountCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFlatDbStrategyProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
@@ -51,6 +52,7 @@ import org.apache.tuweni.bytes.Bytes32;
 public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValueStorage
     implements WorldStateKeyValueStorage {
   protected final BonsaiFlatDbStrategyProvider flatDbStrategyProvider;
+  private AccountCache accountCache;
 
   public BonsaiWorldStateKeyValueStorage(
       final StorageProvider provider,
@@ -74,6 +76,28 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
     this.flatDbStrategyProvider = flatDbStrategyProvider;
   }
 
+  /**
+   * Sets the account cache for this storage. The cache must be subscribed as a StorageSubscriber to
+   * receive invalidation events.
+   *
+   * @param accountCache the account cache to use, or null to disable caching
+   */
+  public void setAccountCache(final AccountCache accountCache) {
+    this.accountCache = accountCache;
+    if (accountCache != null) {
+      subscribe(accountCache);
+    }
+  }
+
+  /**
+   * Gets the account cache if one is configured.
+   *
+   * @return the account cache, or null if not configured
+   */
+  public AccountCache getAccountCache() {
+    return accountCache;
+  }
+
   @Override
   public DataStorageFormat getDataStorageFormat() {
     return DataStorageFormat.BONSAI;
@@ -93,12 +117,29 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
   }
 
   public Optional<Bytes> getAccount(final Hash accountHash) {
-    return getFlatDbStrategy()
-        .getFlatAccount(
-            this::getWorldStateRootHash,
-            this::getAccountStateTrieNode,
-            accountHash,
-            composedWorldStateStorage);
+    // Try cache first if available
+    if (accountCache != null) {
+      Optional<Bytes> cached = accountCache.getIfPresent(accountHash);
+      if (cached.isPresent()) {
+        return cached;
+      }
+    }
+
+    // Cache miss or no cache - fetch from storage
+    Optional<Bytes> result =
+        getFlatDbStrategy()
+            .getFlatAccount(
+                this::getWorldStateRootHash,
+                this::getAccountStateTrieNode,
+                accountHash,
+                composedWorldStateStorage);
+
+    // Populate cache on successful fetch
+    if (accountCache != null && result.isPresent()) {
+      accountCache.put(accountHash, result.get());
+    }
+
+    return result;
   }
 
   public Optional<Bytes> getAccountStateTrieNode(final Bytes location, final Bytes32 nodeHash) {
@@ -188,7 +229,8 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
         composedWorldStateStorage.startTransaction(),
         trieLogStorage.startTransaction(),
         getFlatDbStrategy(),
-        composedWorldStateStorage);
+        composedWorldStateStorage,
+        accountCache);
   }
 
   public static class Updater implements PathBasedWorldStateKeyValueStorage.Updater {
@@ -197,12 +239,14 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
     private final KeyValueStorageTransaction trieLogStorageTransaction;
     private final FlatDbStrategy flatDbStrategy;
     private final SegmentedKeyValueStorage worldStorage;
+    private final AccountCache accountCache;
 
     public Updater(
         final SegmentedKeyValueStorageTransaction composedWorldStateTransaction,
         final KeyValueStorageTransaction trieLogStorageTransaction,
         final FlatDbStrategy flatDbStrategy,
-        final SegmentedKeyValueStorage worldStorage) {
+        final SegmentedKeyValueStorage worldStorage,
+        final AccountCache accountCache) {
 
       this.composedWorldStateTransaction = composedWorldStateTransaction;
       this.trieLogStorageTransaction = trieLogStorageTransaction;
@@ -210,6 +254,7 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
       this.worldStorage =
           worldStorage; // An update could need to read from world storage to decide how to PUT to
       // it (i.e. Bonsai archive)
+      this.accountCache = accountCache;
     }
 
     public Updater removeCode(final Hash accountHash, final Hash codeHash) {
@@ -236,6 +281,10 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
 
     public Updater removeAccountInfoState(final Hash accountHash) {
       flatDbStrategy.removeFlatAccount(worldStorage, composedWorldStateTransaction, accountHash);
+      // Invalidate cache synchronously with DB removal
+      if (accountCache != null) {
+        accountCache.invalidate(accountHash);
+      }
       return this;
     }
 
@@ -246,6 +295,10 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
       }
       flatDbStrategy.putFlatAccount(
           worldStorage, composedWorldStateTransaction, accountHash, accountValue);
+      // Update cache synchronously with DB write
+      if (accountCache != null) {
+        accountCache.put(accountHash, accountValue);
+      }
       return this;
     }
 

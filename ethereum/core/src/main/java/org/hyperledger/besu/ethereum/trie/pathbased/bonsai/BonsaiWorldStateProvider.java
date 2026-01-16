@@ -19,6 +19,7 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.AccountCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.BonsaiCachedWorldStorageManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.cache.CodeCache;
@@ -46,6 +47,7 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
   private static final Logger LOG = LoggerFactory.getLogger(BonsaiWorldStateProvider.class);
   private final BonsaiCachedMerkleTrieLoader bonsaiCachedMerkleTrieLoader;
   private final Supplier<WorldStateHealer> worldStateHealerSupplier;
+  private final AccountCache accountCache;
 
   public BonsaiWorldStateProvider(
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
@@ -56,10 +58,34 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
       final EvmConfiguration evmConfiguration,
       final Supplier<WorldStateHealer> worldStateHealerSupplier,
       final CodeCache codeCache) {
+    this(
+        worldStateKeyValueStorage,
+        blockchain,
+        maxLayersToLoad,
+        bonsaiCachedMerkleTrieLoader,
+        pluginContext,
+        evmConfiguration,
+        worldStateHealerSupplier,
+        codeCache,
+        null);
+  }
+
+  public BonsaiWorldStateProvider(
+      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
+      final Blockchain blockchain,
+      final Optional<Long> maxLayersToLoad,
+      final BonsaiCachedMerkleTrieLoader bonsaiCachedMerkleTrieLoader,
+      final ServiceManager pluginContext,
+      final EvmConfiguration evmConfiguration,
+      final Supplier<WorldStateHealer> worldStateHealerSupplier,
+      final CodeCache codeCache,
+      final AccountCache accountCache) {
     super(worldStateKeyValueStorage, blockchain, maxLayersToLoad, pluginContext);
     this.bonsaiCachedMerkleTrieLoader = bonsaiCachedMerkleTrieLoader;
     this.worldStateHealerSupplier = worldStateHealerSupplier;
     this.evmConfiguration = evmConfiguration;
+    this.accountCache = accountCache;
+    setupAccountCache(worldStateKeyValueStorage, blockchain);
     provideCachedWorldStorageManager(
         new BonsaiCachedWorldStorageManager(
             this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache));
@@ -82,10 +108,34 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
     this.bonsaiCachedMerkleTrieLoader = bonsaiCachedMerkleTrieLoader;
     this.worldStateHealerSupplier = worldStateHealerSupplier;
     this.evmConfiguration = evmConfiguration;
+    this.accountCache = null; // No account cache in test constructor
     provideCachedWorldStorageManager(bonsaiCachedWorldStorageManager);
     loadHeadWorldState(
         new BonsaiWorldState(
             this, worldStateKeyValueStorage, evmConfiguration, worldStateConfig, codeCache));
+  }
+
+  /**
+   * Sets up the account cache by subscribing it to the necessary event sources.
+   *
+   * @param worldStateKeyValueStorage the storage to set the cache on
+   * @param blockchain the blockchain to observe for reorg events
+   */
+  private void setupAccountCache(
+      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
+      final Blockchain blockchain) {
+    if (accountCache != null) {
+      // Set cache on storage (also subscribes to StorageSubscriber events)
+      worldStateKeyValueStorage.setAccountCache(accountCache);
+
+      // Subscribe to TrieLog events for cache updates
+      trieLogManager.subscribe(accountCache);
+
+      // Subscribe to blockchain events for reorg handling
+      blockchain.observeBlockAdded(accountCache);
+
+      LOG.info("AccountCache enabled and subscribed to TrieLog and blockchain events");
+    }
   }
 
   public BonsaiCachedMerkleTrieLoader getCachedMerkleTrieLoader() {
