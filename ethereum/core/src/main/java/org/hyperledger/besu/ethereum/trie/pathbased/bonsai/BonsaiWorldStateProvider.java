@@ -134,7 +134,10 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
       // Subscribe to blockchain events for reorg handling
       blockchain.observeBlockAdded(accountCache);
 
-      LOG.info("AccountCache enabled and subscribed to TrieLog and blockchain events");
+      // Set dependencies for selective reorg invalidation
+      accountCache.setChainDependencies(blockchain, trieLogManager);
+
+      LOG.info("AccountCache enabled with selective reorg invalidation");
     }
   }
 

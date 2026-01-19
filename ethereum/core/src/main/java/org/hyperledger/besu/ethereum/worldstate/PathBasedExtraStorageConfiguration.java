@@ -82,7 +82,7 @@ public interface PathBasedExtraStorageConfiguration {
     boolean DEFAULT_FULL_FLAT_DB_ENABLED = true;
     boolean DEFAULT_CODE_USING_CODE_HASH_ENABLED = true;
     boolean DEFAULT_ACCOUNT_CACHE_ENABLED = false;
-    long DEFAULT_ACCOUNT_CACHE_SIZE_MB = 50L;
+    long DEFAULT_ACCOUNT_CACHE_SIZE_MB = 128L;
 
     @Value.Default
     default boolean getFullFlatDbEnabled() {
@@ -96,6 +96,7 @@ public interface PathBasedExtraStorageConfiguration {
 
     @Value.Default
     default boolean getAccountCacheEnabled() {
+
       return DEFAULT_ACCOUNT_CACHE_ENABLED;
     }
 

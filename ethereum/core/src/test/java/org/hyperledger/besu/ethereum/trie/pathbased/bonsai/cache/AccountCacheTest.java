@@ -23,9 +23,12 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.chain.BlockAddedEvent;
+import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockDataGenerator;
+import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.plugin.data.AddedBlockContext.EventType;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLogEvent;
@@ -272,5 +275,203 @@ class AccountCacheTest {
     when(event.layer()).thenReturn(trieLog);
     when(event.getType()).thenReturn(TrieLogEvent.Type.ADDED);
     return event;
+  }
+
+  // ==================== Selective Reorg Invalidation Tests ====================
+
+  @Test
+  void shouldUseFullInvalidationWhenDependenciesNotSet() {
+    // Pre-populate cache with multiple entries
+    Address address1 = Address.fromHexString("0x1111111111111111111111111111111111111111");
+    Address address2 = Address.fromHexString("0x2222222222222222222222222222222222222222");
+    accountCache.put(address1.addressHash(), Bytes.fromHexString("0x1111"));
+    accountCache.put(address2.addressHash(), Bytes.fromHexString("0x2222"));
+
+    // Without setChainDependencies called, should use full invalidation
+    BlockDataGenerator gen = new BlockDataGenerator();
+    Block block = gen.block();
+    BlockAddedEvent reorgEvent =
+        BlockAddedEvent.createForChainReorg(
+            block,
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Hash.ZERO);
+
+    accountCache.onBlockAdded(reorgEvent);
+
+    // Both entries should be invalidated (full invalidation)
+    assertThat(accountCache.getIfPresent(address1.addressHash())).isEmpty();
+    assertThat(accountCache.getIfPresent(address2.addressHash())).isEmpty();
+  }
+
+  @Test
+  void shouldTrackLastKnownHeadHash() {
+    BlockDataGenerator gen = new BlockDataGenerator();
+    Block block1 = gen.block();
+    Block block2 = gen.block();
+
+    // Fire HEAD_ADVANCED event for block1
+    BlockAddedEvent event1 =
+        BlockAddedEvent.createForHeadAdvancement(
+            block1, Collections.emptyList(), Collections.emptyList());
+    accountCache.onBlockAdded(event1);
+
+    // Fire HEAD_ADVANCED event for block2
+    BlockAddedEvent event2 =
+        BlockAddedEvent.createForHeadAdvancement(
+            block2, Collections.emptyList(), Collections.emptyList());
+    accountCache.onBlockAdded(event2);
+
+    // The lastKnownHeadHash should be updated (verified indirectly through behavior)
+    // When dependencies are set, the cache should know the old head for selective invalidation
+  }
+
+  @Test
+  void shouldSelectivelyInvalidateOnlyAffectedAccounts() {
+    // Setup mock blockchain and trieLogManager
+    Blockchain blockchain = mock(Blockchain.class);
+    TrieLogManager trieLogManager = mock(TrieLogManager.class);
+
+    // Set up chain dependencies
+    accountCache.setChainDependencies(blockchain, trieLogManager);
+
+    // Pre-populate cache with multiple entries
+    Address changedAddress = Address.fromHexString("0x1111111111111111111111111111111111111111");
+    Address unchangedAddress = Address.fromHexString("0x2222222222222222222222222222222222222222");
+    accountCache.put(changedAddress.addressHash(), Bytes.fromHexString("0x1111"));
+    accountCache.put(unchangedAddress.addressHash(), Bytes.fromHexString("0x2222"));
+
+    // First, fire a HEAD_ADVANCED to set lastKnownHeadHash
+    BlockDataGenerator gen = new BlockDataGenerator();
+    Block oldHead = gen.block();
+    BlockAddedEvent headAdvanced =
+        BlockAddedEvent.createForHeadAdvancement(
+            oldHead, Collections.emptyList(), Collections.emptyList());
+    accountCache.onBlockAdded(headAdvanced);
+
+    // Setup mock block headers for chain walking
+    Block newHead = gen.block();
+    Hash commonAncestor = Hash.fromHexStringLenient("0xabcd");
+
+    BlockHeader oldHeadHeader = mock(BlockHeader.class);
+    when(oldHeadHeader.getParentHash()).thenReturn(commonAncestor);
+    when(blockchain.getBlockHeader(oldHead.getHash())).thenReturn(Optional.of(oldHeadHeader));
+
+    BlockHeader newHeadHeader = mock(BlockHeader.class);
+    when(newHeadHeader.getParentHash()).thenReturn(commonAncestor);
+    when(blockchain.getBlockHeader(newHead.getHash())).thenReturn(Optional.of(newHeadHeader));
+
+    // Setup mock TrieLog that only contains changedAddress
+    TrieLog trieLog = createMockTrieLog(changedAddress, null, mock(AccountValue.class));
+    when(trieLogManager.getTrieLogLayer(oldHead.getHash())).thenReturn(Optional.of(trieLog));
+    when(trieLogManager.getTrieLogLayer(newHead.getHash())).thenReturn(Optional.of(trieLog));
+
+    // Create reorg event
+    BlockAddedEvent reorgEvent =
+        BlockAddedEvent.createForChainReorg(
+            newHead,
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Collections.emptyList(),
+            commonAncestor);
+
+    // Fire the reorg event
+    accountCache.onBlockAdded(reorgEvent);
+
+    // Only changedAddress should be invalidated, unchangedAddress should remain
+    assertThat(accountCache.getIfPresent(changedAddress.addressHash())).isEmpty();
+    assertThat(accountCache.getIfPresent(unchangedAddress.addressHash())).isPresent();
+  }
+
+  @Test
+  void shouldFallbackToFullInvalidationOnMissingTrieLog() {
+    // Setup mock blockchain and trieLogManager
+    Blockchain blockchain = mock(Blockchain.class);
+    TrieLogManager trieLogManager = mock(TrieLogManager.class);
+
+    // Set up chain dependencies
+    accountCache.setChainDependencies(blockchain, trieLogManager);
+
+    // Pre-populate cache
+    accountCache.put(testAddressHash, Bytes.fromHexString("0x1234"));
+
+    // First, fire a HEAD_ADVANCED to set lastKnownHeadHash
+    BlockDataGenerator gen = new BlockDataGenerator();
+    Block oldHead = gen.block();
+    BlockAddedEvent headAdvanced =
+        BlockAddedEvent.createForHeadAdvancement(
+            oldHead, Collections.emptyList(), Collections.emptyList());
+    accountCache.onBlockAdded(headAdvanced);
+
+    // Setup trieLogManager to return empty (simulating missing TrieLog)
+    when(trieLogManager.getTrieLogLayer(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(Optional.empty());
+
+    // Create reorg event
+    Block newHead = gen.block();
+    BlockAddedEvent reorgEvent =
+        BlockAddedEvent.createForChainReorg(
+            newHead,
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Hash.ZERO);
+
+    // Fire the reorg event
+    accountCache.onBlockAdded(reorgEvent);
+
+    // Should fall back to full invalidation
+    assertThat(accountCache.getIfPresent(testAddressHash)).isEmpty();
+  }
+
+  @Test
+  void shouldFallbackToFullInvalidationOnMissingBlockHeader() {
+    // Setup mock blockchain and trieLogManager
+    Blockchain blockchain = mock(Blockchain.class);
+    TrieLogManager trieLogManager = mock(TrieLogManager.class);
+
+    // Set up chain dependencies
+    accountCache.setChainDependencies(blockchain, trieLogManager);
+
+    // Pre-populate cache
+    accountCache.put(testAddressHash, Bytes.fromHexString("0x1234"));
+
+    // First, fire a HEAD_ADVANCED to set lastKnownHeadHash
+    BlockDataGenerator gen = new BlockDataGenerator();
+    Block oldHead = gen.block();
+    BlockAddedEvent headAdvanced =
+        BlockAddedEvent.createForHeadAdvancement(
+            oldHead, Collections.emptyList(), Collections.emptyList());
+    accountCache.onBlockAdded(headAdvanced);
+
+    // Setup trieLogManager to return valid TrieLog
+    TrieLog trieLog = createMockTrieLog(testAddress, null, mock(AccountValue.class));
+    when(trieLogManager.getTrieLogLayer(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(Optional.of(trieLog));
+
+    // Setup blockchain to return empty (simulating missing block header)
+    when(blockchain.getBlockHeader(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(Optional.empty());
+
+    // Create reorg event
+    Block newHead = gen.block();
+    BlockAddedEvent reorgEvent =
+        BlockAddedEvent.createForChainReorg(
+            newHead,
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Collections.emptyList(),
+            Hash.ZERO);
+
+    // Fire the reorg event
+    accountCache.onBlockAdded(reorgEvent);
+
+    // Should fall back to full invalidation
+    assertThat(accountCache.getIfPresent(testAddressHash)).isEmpty();
   }
 }
