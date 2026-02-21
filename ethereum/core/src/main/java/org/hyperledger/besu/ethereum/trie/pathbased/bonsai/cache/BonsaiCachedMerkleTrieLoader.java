@@ -42,8 +42,8 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
 
   private static final ExecutorService VIRTUAL_POOL = Executors.newVirtualThreadPerTaskExecutor();
 
-  private static final int ACCOUNT_CACHE_SIZE = 100_000;
-  private static final int STORAGE_CACHE_SIZE = 200_000;
+  private static final int ACCOUNT_CACHE_SIZE = 500_000;
+  private static final int STORAGE_CACHE_SIZE = 1_000_000;
   private final Cache<Bytes, Bytes> accountNodes =
       CacheBuilder.newBuilder().recordStats().maximumSize(ACCOUNT_CACHE_SIZE).build();
   private final Cache<Bytes, Bytes> storageNodes =
@@ -140,8 +140,10 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
     if (nodeHash.equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
       return Optional.of(MerkleTrie.EMPTY_TRIE_NODE);
     } else {
+      // Cache lookup uses nodeHash (keccak of data) as key, so cache hits validate integrity.
+      // On cache miss, skip keccak verification for trusted local DB reads.
       return Optional.ofNullable(accountNodes.getIfPresent(nodeHash))
-          .or(() -> worldStateKeyValueStorage.getAccountStateTrieNode(location, nodeHash));
+          .or(() -> worldStateKeyValueStorage.getAccountStateTrieNodeUnsafe(location));
     }
   }
 
@@ -153,11 +155,12 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
     if (nodeHash.equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
       return Optional.of(MerkleTrie.EMPTY_TRIE_NODE);
     } else {
+      // Cache lookup uses nodeHash (keccak of data) as key, so cache hits validate integrity.
+      // On cache miss, skip keccak verification for trusted local DB reads.
       return Optional.ofNullable(storageNodes.getIfPresent(nodeHash))
           .or(
               () ->
-                  worldStateKeyValueStorage.getAccountStorageTrieNode(
-                      accountHash, location, nodeHash));
+                  worldStateKeyValueStorage.getAccountStorageTrieNodeUnsafe(accountHash, location));
     }
   }
 }

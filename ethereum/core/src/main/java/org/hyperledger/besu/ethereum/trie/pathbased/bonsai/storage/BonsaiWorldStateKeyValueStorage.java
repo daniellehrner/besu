@@ -126,6 +126,21 @@ public class BonsaiWorldStateKeyValueStorage extends PathBasedWorldStateKeyValue
     }
   }
 
+  public Optional<Bytes> getAccountStateTrieNodeUnsafe(final Bytes location) {
+    return composedWorldStateStorage
+        .get(TRIE_BRANCH_STORAGE, location.toArrayUnsafe())
+        .map(Bytes::wrap);
+  }
+
+  public Optional<Bytes> getAccountStorageTrieNodeUnsafe(
+      final Hash accountHash, final Bytes location) {
+    return composedWorldStateStorage
+        .get(
+            TRIE_BRANCH_STORAGE,
+            Bytes.concatenate(accountHash.getBytes(), location).toArrayUnsafe())
+        .map(Bytes::wrap);
+  }
+
   public Optional<Bytes> getTrieNodeUnsafe(final Bytes key) {
     return composedWorldStateStorage.get(TRIE_BRANCH_STORAGE, key.toArrayUnsafe()).map(Bytes::wrap);
   }

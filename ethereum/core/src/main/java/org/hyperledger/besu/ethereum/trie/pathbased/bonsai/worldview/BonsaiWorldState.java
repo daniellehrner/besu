@@ -48,6 +48,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -133,16 +134,18 @@ public class BonsaiWorldState extends PathBasedWorldState {
 
     // This must be done before updating the accounts so
     // that we can get the storage state hash
-    Stream<Map.Entry<Address, StorageConsumingMap<StorageSlotKey, PathBasedValue<UInt256>>>>
-        storageStream = worldStateUpdater.getStorageToUpdate().entrySet().stream();
-    if (maybeStateUpdater.isEmpty()) {
-      storageStream =
-          storageStream
-              .parallel(); // if we are not updating the state updater we can use parallel stream
-    }
+    // Buffer writes for thread safety during parallel processing.
+    // The underlying DB transaction is not thread-safe, so we collect writes during the
+    // parallel phase and flush them sequentially after all trie computations complete.
+    final ConcurrentLinkedQueue<Runnable> pendingStorageWrites = new ConcurrentLinkedQueue<>();
+    final Stream<Map.Entry<Address, StorageConsumingMap<StorageSlotKey, PathBasedValue<UInt256>>>>
+        storageStream = worldStateUpdater.getStorageToUpdate().entrySet().stream().parallel();
     storageStream.forEach(
         addressMapEntry ->
-            updateAccountStorageState(maybeStateUpdater, worldStateUpdater, addressMapEntry));
+            updateAccountStorageState(
+                maybeStateUpdater, worldStateUpdater, addressMapEntry, pendingStorageWrites));
+    // Flush buffered storage writes sequentially to the transaction
+    pendingStorageWrites.forEach(Runnable::run);
 
     // Third update the code.  This has the side effect of ensuring a code hash is calculated.
     updateCode(maybeStateUpdater, worldStateUpdater);
@@ -234,7 +237,8 @@ public class BonsaiWorldState extends PathBasedWorldState {
       final Optional<BonsaiWorldStateKeyValueStorage.Updater> maybeStateUpdater,
       final BonsaiWorldStateUpdateAccumulator worldStateUpdater,
       final Map.Entry<Address, StorageConsumingMap<StorageSlotKey, PathBasedValue<UInt256>>>
-          storageAccountUpdate) {
+          storageAccountUpdate,
+      final ConcurrentLinkedQueue<Runnable> pendingStorageWrites) {
     final Address updatedAddress = storageAccountUpdate.getKey();
     final Hash updatedAddressHash = updatedAddress.addressHash();
     if (worldStateUpdater.getAccountsToUpdate().containsKey(updatedAddress)) {
@@ -264,13 +268,18 @@ public class BonsaiWorldState extends PathBasedWorldState {
             if (updatedStorage == null || updatedStorage.equals(UInt256.ZERO)) {
               maybeStateUpdater.ifPresent(
                   bonsaiUpdater ->
-                      bonsaiUpdater.removeStorageValueBySlotHash(updatedAddressHash, slotHash));
+                      pendingStorageWrites.add(
+                          () ->
+                              bonsaiUpdater.removeStorageValueBySlotHash(
+                                  updatedAddressHash, slotHash)));
               storageTrie.remove(slotHash.getBytes());
             } else {
               maybeStateUpdater.ifPresent(
                   bonsaiUpdater ->
-                      bonsaiUpdater.putStorageValueBySlotHash(
-                          updatedAddressHash, slotHash, updatedStorage));
+                      pendingStorageWrites.add(
+                          () ->
+                              bonsaiUpdater.putStorageValueBySlotHash(
+                                  updatedAddressHash, slotHash, updatedStorage)));
               storageTrie.put(slotHash.getBytes(), encodeTrieValue(updatedStorage));
             }
           }
@@ -287,8 +296,14 @@ public class BonsaiWorldState extends PathBasedWorldState {
             bonsaiUpdater ->
                 storageTrie.commit(
                     (location, nodeHash, value) ->
-                        writeStorageTrieNode(
-                            bonsaiUpdater, updatedAddressHash, location, nodeHash, value)));
+                        pendingStorageWrites.add(
+                            () ->
+                                writeStorageTrieNode(
+                                    bonsaiUpdater,
+                                    updatedAddressHash,
+                                    location,
+                                    nodeHash,
+                                    value))));
         // only use storage root of the trie when trie is enabled
         if (!worldStateConfig.isTrieDisabled()) {
           final Hash newStorageRoot = Hash.wrap(storageTrie.getRootHash());
