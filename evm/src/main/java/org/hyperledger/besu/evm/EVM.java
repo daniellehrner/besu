@@ -108,10 +108,11 @@ public class EVM {
   private final EvmConfiguration evmConfiguration;
   private final EvmSpecVersion evmSpecVersion;
 
-  // Optimized operation flags
+  // Optimized operation flags - cached to avoid accessor calls in hot loop
   private final boolean enableShanghai;
   private final boolean enableAmsterdam;
   private final boolean enableOsaka;
+  private final boolean enableOptimizedOpcodes;
 
   private final JumpDestOnlyCodeCache jumpDestOnlyCodeCache;
 
@@ -138,6 +139,7 @@ public class EVM {
     enableShanghai = EvmSpecVersion.SHANGHAI.ordinal() <= evmSpecVersion.ordinal();
     enableAmsterdam = EvmSpecVersion.AMSTERDAM.ordinal() <= evmSpecVersion.ordinal();
     enableOsaka = EvmSpecVersion.OSAKA.ordinal() <= evmSpecVersion.ordinal();
+    enableOptimizedOpcodes = evmConfiguration.enableOptimizedOpcodes();
   }
 
   /**
@@ -213,13 +215,17 @@ public class EVM {
   public void runToHalt(final MessageFrame frame, final OperationTracer tracing) {
     evmSpecVersion.maybeWarnVersion();
 
-    var operationTracer = tracing == OperationTracer.NO_TRACING ? null : tracing;
-    byte[] code = frame.getCode().getBytes().toArrayUnsafe();
-    Operation[] operationArray = operations.getOperations();
+    final var operationTracer = tracing == OperationTracer.NO_TRACING ? null : tracing;
+    final byte[] code = frame.getCode().getBytes().toArrayUnsafe();
+    final Operation[] operationArray = operations.getOperations();
+
+    // Keep PC as a local variable to avoid heap field reads/writes per opcode.
+    // Only sync to frame when operations need it (JUMP, default path, tracing, halt).
+    int pc = frame.getPC();
+
     while (frame.getState() == MessageFrame.State.CODE_EXECUTING) {
       Operation currentOperation;
       int opcode;
-      int pc = frame.getPC();
       try {
         opcode = code[pc] & 0xff;
         currentOperation = operationArray[opcode];
@@ -227,8 +233,9 @@ public class EVM {
         opcode = 0;
         currentOperation = endOfScriptStop;
       }
-      frame.setCurrentOperation(currentOperation);
       if (operationTracer != null) {
+        frame.setPC(pc);
+        frame.setCurrentOperation(currentOperation);
         operationTracer.tracePreExecution(frame);
       }
 
@@ -238,7 +245,7 @@ public class EVM {
             switch (opcode) {
               case 0x00 -> StopOperation.staticOperation(frame);
               case 0x01 ->
-                  evmConfiguration.enableOptimizedOpcodes()
+                  enableOptimizedOpcodes
                       ? AddOperationOptimized.staticOperation(frame)
                       : AddOperation.staticOperation(frame);
               case 0x02 -> MulOperation.staticOperation(frame);
@@ -246,19 +253,19 @@ public class EVM {
               case 0x04 -> DivOperation.staticOperation(frame);
               case 0x05 -> SDivOperation.staticOperation(frame);
               case 0x06 ->
-                  evmConfiguration.enableOptimizedOpcodes()
+                  enableOptimizedOpcodes
                       ? ModOperationOptimized.staticOperation(frame)
                       : ModOperation.staticOperation(frame);
               case 0x07 ->
-                  evmConfiguration.enableOptimizedOpcodes()
+                  enableOptimizedOpcodes
                       ? SModOperationOptimized.staticOperation(frame)
                       : SModOperation.staticOperation(frame);
               case 0x08 ->
-                  evmConfiguration.enableOptimizedOpcodes()
+                  enableOptimizedOpcodes
                       ? AddModOperationOptimized.staticOperation(frame)
                       : AddModOperation.staticOperation(frame);
               case 0x09 ->
-                  evmConfiguration.enableOptimizedOpcodes()
+                  enableOptimizedOpcodes
                       ? MulModOperationOptimized.staticOperation(frame)
                       : MulModOperation.staticOperation(frame);
               case 0x0a -> ExpOperation.staticOperation(frame, gasCalculator);
@@ -270,32 +277,32 @@ public class EVM {
               case 0x13 -> SGtOperation.staticOperation(frame);
               case 0x15 -> IsZeroOperation.staticOperation(frame);
               case 0x16 ->
-                  evmConfiguration.enableOptimizedOpcodes()
+                  enableOptimizedOpcodes
                       ? AndOperationOptimized.staticOperation(frame)
                       : AndOperation.staticOperation(frame);
               case 0x17 ->
-                  evmConfiguration.enableOptimizedOpcodes()
+                  enableOptimizedOpcodes
                       ? OrOperationOptimized.staticOperation(frame)
                       : OrOperation.staticOperation(frame);
               case 0x18 ->
-                  evmConfiguration.enableOptimizedOpcodes()
+                  enableOptimizedOpcodes
                       ? XorOperationOptimized.staticOperation(frame)
                       : XorOperation.staticOperation(frame);
               case 0x19 ->
-                  evmConfiguration.enableOptimizedOpcodes()
+                  enableOptimizedOpcodes
                       ? NotOperationOptimized.staticOperation(frame)
                       : NotOperation.staticOperation(frame);
               case 0x1a -> ByteOperation.staticOperation(frame);
               case 0x1b ->
-                  evmConfiguration.enableOptimizedOpcodes()
+                  enableOptimizedOpcodes
                       ? ShlOperationOptimized.staticOperation(frame)
                       : ShlOperation.staticOperation(frame);
               case 0x1c ->
-                  evmConfiguration.enableOptimizedOpcodes()
+                  enableOptimizedOpcodes
                       ? ShrOperationOptimized.staticOperation(frame)
                       : ShrOperation.staticOperation(frame);
               case 0x1d ->
-                  evmConfiguration.enableOptimizedOpcodes()
+                  enableOptimizedOpcodes
                       ? SarOperationOptimized.staticOperation(frame)
                       : SarOperation.staticOperation(frame);
               case 0x1e ->
@@ -389,7 +396,9 @@ public class EVM {
                   enableAmsterdam
                       ? ExchangeOperation.staticOperation(frame, code, pc)
                       : InvalidOperation.invalidOperationResult(opcode);
-              default -> { // unoptimized operations
+              default -> {
+                // Sync PC to frame for unoptimized operations that may read it
+                frame.setPC(pc);
                 frame.setCurrentOperation(currentOperation);
                 yield currentOperation.execute(frame, this);
               }
@@ -402,21 +411,35 @@ public class EVM {
       final ExceptionalHaltReason haltReason = result.getHaltReason();
       if (haltReason != null) {
         LOG.trace("MessageFrame evaluation halted because of {}", haltReason);
+        frame.setPC(pc);
         frame.setExceptionalHaltReason(Optional.of(haltReason));
         frame.setState(State.EXCEPTIONAL_HALT);
       } else if (frame.decrementRemainingGas(result.getGasCost()) < 0) {
+        frame.setPC(pc);
         frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
         frame.setState(State.EXCEPTIONAL_HALT);
       }
       if (frame.getState() == State.CODE_EXECUTING) {
-        final int currentPC = frame.getPC();
-        final int opSize = result.getPcIncrement();
-        frame.setPC(currentPC + opSize);
+        final int pcIncrement = result.getPcIncrement();
+        if (pcIncrement == 0) {
+          // JUMP/JUMPI set the PC directly on the frame
+          pc = frame.getPC();
+        } else if (opcode >= 0x60 && opcode <= 0x7f) {
+          // PUSH ops: advance past opcode + pushSize data bytes.
+          // PushOperation sets frame.setPC(pc + pushSize) internally with pcIncrement=1,
+          // so we compute the total advance directly: (opcode - PUSH_BASE) + 1.
+          pc += (opcode - PUSH_BASE) + 1;
+        } else {
+          pc += pcIncrement;
+        }
       }
       if (operationTracer != null) {
+        frame.setPC(pc);
         operationTracer.tracePostExecution(frame, result);
       }
     }
+    // Sync final PC back to frame for callers that read it after execution
+    frame.setPC(pc);
   }
 
   /**
