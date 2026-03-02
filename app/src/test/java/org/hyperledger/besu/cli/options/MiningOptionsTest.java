@@ -379,7 +379,7 @@ public class MiningOptionsTest extends AbstractCLIOptionsTest<MiningConfiguratio
   public void maxBlobsOption() {
     internalTestSuccess(
         miningParams -> assertThat(miningParams.getMaxBlobsPerTransaction()).hasValue(3),
-        "--max-blobs",
+        "--max-blobs-per-transaction",
         "3");
   }
 
@@ -387,13 +387,16 @@ public class MiningOptionsTest extends AbstractCLIOptionsTest<MiningConfiguratio
   public void maxBlobsOptionWithZero() {
     internalTestSuccess(
         miningParams -> assertThat(miningParams.getMaxBlobsPerTransaction()).hasValue(0),
-        "--max-blobs",
+        "--max-blobs-per-transaction",
         "0");
   }
 
   @Test
   public void maxBlobsOptionWithNegativeValue() {
-    internalTestFailure("--max-blobs must be a positive value", "--max-blobs", "-9");
+    internalTestFailure(
+        "--max-blobs-per-transaction must be a positive value",
+        "--max-blobs-per-transaction",
+        "-9");
   }
 
   @Override

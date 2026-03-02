@@ -115,7 +115,7 @@ public class MiningOptions implements CLIOptions<MiningConfiguration> {
       DEFAULT_PLUGIN_BLOCK_TXS_SELECTION_MAX_TIME;
 
   @Option(
-      names = {"--max-blobs"},
+      names = {"--max-blobs-per-transaction"},
       description =
           "Maximum number of blobs allowed per transaction during block building. "
               + "Only applies from Osaka hardfork onwards. (default: 6)",
@@ -231,7 +231,8 @@ public class MiningOptions implements CLIOptions<MiningConfiguration> {
         singletonList("--poa-block-txs-selection-max-time"));
 
     if (maxBlobsPerTransaction != null && maxBlobsPerTransaction < 0) {
-      throw new ParameterException(commandLine, "--max-blobs must be a positive value");
+      throw new ParameterException(
+          commandLine, "--max-blobs-per-transaction must be a positive value");
     }
   }
 
