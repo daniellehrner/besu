@@ -26,7 +26,9 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 
@@ -145,6 +147,60 @@ public class BackwardChain {
     }
 
     updateFirstStoredAncestor(Optional.of(blockHeader));
+  }
+
+  /**
+   * Batch version of prependAncestorsHeader that stores multiple headers in a minimal number of
+   * RocksDB transactions instead of one per header.
+   */
+  public synchronized void prependAncestorsHeaders(final List<BlockHeader> blockHeaders) {
+    prependAncestorsHeaders(blockHeaders, false);
+  }
+
+  /**
+   * Batch version of prependAncestorsHeader that stores multiple headers in a minimal number of
+   * RocksDB transactions instead of one per header.
+   *
+   * @param blockHeaders the headers to prepend
+   * @param alreadyStored if true, skip writing to the headers storage (they already exist)
+   */
+  public synchronized void prependAncestorsHeaders(
+      final List<BlockHeader> blockHeaders, final boolean alreadyStored) {
+    if (blockHeaders.isEmpty()) {
+      return;
+    }
+
+    final Map<Hash, BlockHeader> headerMap = new LinkedHashMap<>();
+    final Map<Hash, Hash> chainMap = new LinkedHashMap<>();
+
+    for (final BlockHeader blockHeader : blockHeaders) {
+      if (!alreadyStored) {
+        headerMap.put(blockHeader.getHash(), blockHeader);
+      }
+
+      if (firstStoredAncestor.isEmpty()) {
+        updateLastStoredPivot(Optional.of(blockHeader));
+      } else {
+        final BlockHeader firstHeader = firstStoredAncestor.get();
+        chainMap.put(blockHeader.getHash(), firstHeader.getHash());
+        LOG.atDebug()
+            .setMessage("Added header {} to backward chain led by pivot {} on height {}")
+            .addArgument(blockHeader::toLogString)
+            .addArgument(() -> lastStoredPivot.orElseThrow().toLogString())
+            .addArgument(firstHeader::getNumber)
+            .log();
+      }
+
+      firstStoredAncestor = Optional.of(blockHeader);
+    }
+
+    if (!headerMap.isEmpty()) {
+      headers.putAll(headerMap);
+    }
+    if (!chainMap.isEmpty()) {
+      chainStorage.putAll(chainMap);
+    }
+    sessionDataStorage.put(FIRST_STORED_ANCESTOR_KEY, firstStoredAncestor.get());
   }
 
   private void updateFirstStoredAncestor(final Optional<BlockHeader> maybeHeader) {

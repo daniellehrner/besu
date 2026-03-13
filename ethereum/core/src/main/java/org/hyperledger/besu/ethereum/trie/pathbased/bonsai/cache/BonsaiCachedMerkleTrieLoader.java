@@ -22,7 +22,6 @@ import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
-import org.hyperledger.besu.ethereum.trie.pathbased.common.StorageSubscriber;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.metrics.ObservableMetricsSystem;
 
@@ -38,7 +37,7 @@ import com.google.common.cache.CacheBuilder;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 
-public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
+public class BonsaiCachedMerkleTrieLoader {
 
   private static final ExecutorService VIRTUAL_POOL = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -68,7 +67,9 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
       final Hash worldStateRootHash,
       final Address account) {
-    final long storageSubscriberId = worldStateKeyValueStorage.subscribe(this);
+    if (worldStateKeyValueStorage.isClosed()) {
+      return;
+    }
     try {
       final StoredMerklePatriciaTrie<Bytes, Bytes> accountTrie =
           new StoredMerklePatriciaTrie<>(
@@ -84,8 +85,6 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
       accountTrie.get(account.addressHash().getBytes());
     } catch (MerkleTrieException e) {
       // ignore exception for the cache
-    } finally {
-      worldStateKeyValueStorage.unSubscribe(storageSubscriberId);
     }
   }
 
@@ -102,8 +101,10 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
       final Address account,
       final StorageSlotKey slotKey) {
+    if (worldStateKeyValueStorage.isClosed()) {
+      return;
+    }
     final Hash accountHash = account.addressHash();
-    final long storageSubscriberId = worldStateKeyValueStorage.subscribe(this);
     try {
       worldStateKeyValueStorage
           .getStateTrieNode(Bytes.concatenate(accountHash.getBytes(), Bytes.EMPTY))
@@ -128,8 +129,8 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
                   // ignore exception for the cache
                 }
               });
-    } finally {
-      worldStateKeyValueStorage.unSubscribe(storageSubscriberId);
+    } catch (Exception e) {
+      // storage may have closed during operation, ignore
     }
   }
 

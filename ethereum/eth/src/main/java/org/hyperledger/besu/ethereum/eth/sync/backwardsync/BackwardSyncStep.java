@@ -21,6 +21,7 @@ import org.hyperledger.besu.ethereum.eth.manager.peertask.PeerTaskExecutorResult
 import org.hyperledger.besu.ethereum.eth.manager.peertask.task.GetHeadersFromPeerTask;
 import org.hyperledger.besu.ethereum.eth.manager.peertask.task.GetHeadersFromPeerTask.Direction;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -49,11 +50,15 @@ public class BackwardSyncStep {
   @VisibleForTesting
   protected Hash possibleRestoreOldNodes(final BlockHeader firstAncestor) {
     Hash lastHash = firstAncestor.getParentHash();
+    final List<BlockHeader> toRestore = new ArrayList<>();
     Optional<BlockHeader> iterator = backwardChain.getHeader(lastHash);
     while (iterator.isPresent()) {
-      backwardChain.prependAncestorsHeader(iterator.get(), true);
+      toRestore.add(iterator.get());
       lastHash = iterator.get().getParentHash();
       iterator = backwardChain.getHeader(lastHash);
+    }
+    if (!toRestore.isEmpty()) {
+      backwardChain.prependAncestorsHeaders(toRestore, true);
     }
     return lastHash;
   }
@@ -113,9 +118,7 @@ public class BackwardSyncStep {
 
   @VisibleForTesting
   protected Void saveHeaders(final List<BlockHeader> blockHeaders) {
-    for (BlockHeader blockHeader : blockHeaders) {
-      saveHeader(blockHeader);
-    }
+    backwardChain.prependAncestorsHeaders(blockHeaders);
 
     if (!blockHeaders.isEmpty()) {
       logProgress(blockHeaders.get(blockHeaders.size() - 1).getNumber());

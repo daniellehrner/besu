@@ -409,6 +409,10 @@ public abstract class PathBasedWorldStateKeyValueStorage
     tx.commit();
   }
 
+  public boolean isClosed() {
+    return isClosed.get();
+  }
+
   @Override
   public synchronized void close() throws Exception {
     // when the storage clears, close
