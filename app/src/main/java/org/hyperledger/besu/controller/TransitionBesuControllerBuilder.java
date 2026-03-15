@@ -43,6 +43,7 @@ import org.hyperledger.besu.ethereum.eth.sync.DefaultSynchronizer;
 import org.hyperledger.besu.ethereum.eth.sync.PivotBlockSelector;
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.backwardsync.BackwardSyncContext;
+import org.hyperledger.besu.ethereum.eth.sync.fullsync.SyncTerminationCondition;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.eth.transactions.TransactionPool;
 import org.hyperledger.besu.ethereum.eth.transactions.TransactionPoolConfiguration;
@@ -219,6 +220,11 @@ public class TransitionBesuControllerBuilder extends BesuControllerBuilder {
   protected PluginServiceFactory createAdditionalPluginServices(
       final Blockchain blockchain, final ProtocolContext protocolContext) {
     return new NoopPluginServiceFactory();
+  }
+
+  @Override
+  protected SyncTerminationCondition getFullSyncTerminationCondition(final Blockchain blockchain) {
+    return mergeBesuControllerBuilder.getFullSyncTerminationCondition(blockchain);
   }
 
   @Override

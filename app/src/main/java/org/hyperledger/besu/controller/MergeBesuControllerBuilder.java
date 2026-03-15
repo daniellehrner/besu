@@ -39,6 +39,7 @@ import org.hyperledger.besu.ethereum.eth.peervalidation.RequiredBlocksPeerValida
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.backwardsync.BackwardChain;
 import org.hyperledger.besu.ethereum.eth.sync.backwardsync.BackwardSyncContext;
+import org.hyperledger.besu.ethereum.eth.sync.fullsync.SyncTerminationCondition;
 import org.hyperledger.besu.ethereum.eth.sync.state.SyncState;
 import org.hyperledger.besu.ethereum.eth.transactions.TransactionPool;
 import org.hyperledger.besu.ethereum.forkid.ForkIdManager;
@@ -225,6 +226,19 @@ public class MergeBesuControllerBuilder extends BesuControllerBuilder {
                 .ifPresent(mergeContext::setIsPostMerge));
 
     return mergeContext;
+  }
+
+  @Override
+  protected SyncTerminationCondition getFullSyncTerminationCondition(final Blockchain blockchain) {
+    final boolean isPostMergeAtGenesis =
+        genesisConfigOptions.getTerminalTotalDifficulty().isPresent()
+            && genesisConfigOptions.getShanghaiTime().orElse(-1L) == 0L;
+
+    if (isPostMergeAtGenesis) {
+      LOG.info("PoS-at-genesis chain detected, full sync will run until caught up");
+      return SyncTerminationCondition.never();
+    }
+    return super.getFullSyncTerminationCondition(blockchain);
   }
 
   @Override

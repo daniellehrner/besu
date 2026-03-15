@@ -46,6 +46,7 @@ import org.hyperledger.besu.ethereum.core.MiningConfiguration;
 import org.hyperledger.besu.ethereum.eth.EthProtocolConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.SyncMode;
 import org.hyperledger.besu.ethereum.eth.sync.SynchronizerConfiguration;
+import org.hyperledger.besu.ethereum.eth.sync.fullsync.SyncTerminationCondition;
 import org.hyperledger.besu.ethereum.eth.transactions.TransactionPoolConfiguration;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.mainnet.feemarket.BaseFeeMarket;
@@ -130,7 +131,6 @@ public class MergeBesuControllerBuilderTest {
     lenient().when(genesisConfigOptions.getCheckpointOptions()).thenReturn(checkpointConfigOptions);
     when(genesisConfigOptions.getTerminalTotalDifficulty())
         .thenReturn((Optional.of(UInt256.valueOf(100L))));
-    when(genesisConfigOptions.getTerminalBlockHash()).thenReturn(Optional.of(Hash.ZERO));
     lenient().when(genesisConfigOptions.getTerminalBlockNumber()).thenReturn(OptionalLong.of(1L));
     lenient()
         .when(storageProvider.createBlockchainStorage(any(), any(), any()))
@@ -199,6 +199,7 @@ public class MergeBesuControllerBuilderTest {
 
   @Test
   public void assertTerminalTotalDifficultyInMergeContext() {
+    when(genesisConfigOptions.getTerminalBlockHash()).thenReturn(Optional.of(Hash.ZERO));
     when(genesisConfigOptions.getTerminalTotalDifficulty())
         .thenReturn(Optional.of(UInt256.valueOf(1500L)));
 
@@ -214,6 +215,7 @@ public class MergeBesuControllerBuilderTest {
 
   @Test
   public void assertConfiguredBlock() {
+    when(genesisConfigOptions.getTerminalBlockHash()).thenReturn(Optional.of(Hash.ZERO));
     final Blockchain mockChain = mock(Blockchain.class);
     when(mockChain.getBlockHeader(anyLong())).thenReturn(Optional.of(mock(BlockHeader.class)));
     final MergeContext mergeContext =
@@ -227,6 +229,7 @@ public class MergeBesuControllerBuilderTest {
 
   @Test
   public void assertBuiltContextMonitorsTTD() {
+    when(genesisConfigOptions.getTerminalBlockHash()).thenReturn(Optional.of(Hash.ZERO));
     final GenesisState genesisState =
         GenesisState.fromConfig(
             genesisConfig, this.besuControllerBuilder.createProtocolSchedule(), new CodeCache());
@@ -266,6 +269,7 @@ public class MergeBesuControllerBuilderTest {
 
   @Test
   public void assertNoFinalizedBlockWhenNotStored() {
+    when(genesisConfigOptions.getTerminalBlockHash()).thenReturn(Optional.of(Hash.ZERO));
     final Blockchain mockChain = mock(Blockchain.class);
     when(mockChain.getFinalized()).thenReturn(Optional.empty());
     final MergeContext mergeContext =
@@ -279,6 +283,7 @@ public class MergeBesuControllerBuilderTest {
 
   @Test
   public void assertFinalizedBlockIsPresentWhenStored() {
+    when(genesisConfigOptions.getTerminalBlockHash()).thenReturn(Optional.of(Hash.ZERO));
     final BlockHeader finalizedHeader = finalizedBlockHeader();
 
     final Blockchain mockChain = mock(Blockchain.class);
@@ -292,6 +297,40 @@ public class MergeBesuControllerBuilderTest {
             this.besuControllerBuilder.createProtocolSchedule());
     assertThat(mergeContext).isNotNull();
     assertThat(mergeContext.getFinalized().get()).isEqualTo(finalizedHeader);
+  }
+
+  @Test
+  public void posAtGenesisReturnsSyncTerminationNever() {
+    when(genesisConfigOptions.getTerminalTotalDifficulty()).thenReturn(Optional.of(UInt256.ZERO));
+    when(genesisConfigOptions.getShanghaiTime()).thenReturn(OptionalLong.of(0L));
+
+    final MergeBesuControllerBuilder builder =
+        visitWithMockConfigs(new MergeBesuControllerBuilder());
+    final SyncTerminationCondition condition =
+        builder.getFullSyncTerminationCondition(mock(Blockchain.class));
+
+    assertThat(condition.shouldContinueDownload()).isTrue();
+    assertThat(condition.shouldStopDownload()).isFalse();
+  }
+
+  @Test
+  public void nonZeroTTDFallsThroughToStandardCondition() {
+    when(genesisConfigOptions.getTerminalTotalDifficulty())
+        .thenReturn(Optional.of(UInt256.valueOf(100L)));
+    when(genesisConfigOptions.getShanghaiTime()).thenReturn(OptionalLong.of(1681338455L));
+
+    final Blockchain mockChain = mock(Blockchain.class);
+    final BlockHeader chainHeadHeader = mock(BlockHeader.class);
+    final org.hyperledger.besu.ethereum.chain.ChainHead chainHead =
+        new org.hyperledger.besu.ethereum.chain.ChainHead(chainHeadHeader, Difficulty.ZERO, 0);
+    when(mockChain.getChainHead()).thenReturn(chainHead);
+
+    final MergeBesuControllerBuilder builder =
+        visitWithMockConfigs(new MergeBesuControllerBuilder());
+    final SyncTerminationCondition condition = builder.getFullSyncTerminationCondition(mockChain);
+
+    // Non-zero shanghaiTime, so falls through to standard difficulty-based condition
+    assertThat(condition.shouldContinueDownload()).isTrue();
   }
 
   private BlockHeader finalizedBlockHeader() {

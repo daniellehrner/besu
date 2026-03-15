@@ -261,12 +261,7 @@ public class DefaultSynchronizer implements Synchronizer, UnverifiedForkchoiceLi
     return fullSyncDownloader
         .map(FullSyncDownloader::start)
         .orElse(CompletableFuture.completedFuture(null))
-        .thenRun(
-            () -> {
-              if (terminationCondition.shouldStopDownload()) {
-                syncState.setReachedTerminalDifficulty(true);
-              }
-            });
+        .thenRun(() -> syncState.setReachedTerminalDifficulty(true));
   }
 
   @Override
