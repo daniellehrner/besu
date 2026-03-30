@@ -59,7 +59,10 @@ import org.apache.tuweni.units.bigints.UInt256;
 
 public class DebugTraceBlockStreamer {
 
-  private static final int BUF_SIZE = 256 * 1024;
+  // Sized to stay below Netty's default high watermark (64 KB). This ensures each
+  // flush does not overshoot the backpressure threshold in JsonResponseStreamer, allowing
+  // the drain/resume cycle to regulate direct-memory usage smoothly.
+  private static final int BUF_SIZE = 32 * 1024;
 
   private static final byte[] HEX = {
     '0', '1', '2', '3', '4', '5', '6', '7',
@@ -432,12 +435,12 @@ public class DebugTraceBlockStreamer {
                 if (!firstEntry) writeByte(COMMA);
                 firstEntry = false;
                 writeByte(QUOTE);
-                final int kLen = compactHexBytes(entry.getKey(), false);
+                final int kLen = compactHexBytes(entry.getKey().toArrayUnsafe(), true, false);
                 writeBytes(hexBuf, 0, kLen);
                 writeByte(QUOTE);
                 writeByte(COLON);
                 writeByte(QUOTE);
-                final int vLen = compactHexBytes(entry.getValue(), false);
+                final int vLen = compactHexBytes(entry.getValue().toArrayUnsafe(), true, false);
                 writeBytes(hexBuf, 0, vLen);
                 writeByte(QUOTE);
               }

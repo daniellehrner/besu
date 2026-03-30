@@ -61,6 +61,8 @@ public class JsonResponseStreamer extends OutputStream {
       chunked = true;
     }
 
+    StreamBackpressure.awaitDrain(response);
+
     Buffer buf = Buffer.buffer(len);
     buf.appendBytes(bbuf, off, len);
     response.write(buf).onFailure(this::handleFailure);
