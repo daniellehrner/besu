@@ -64,11 +64,6 @@ public class DebugTraceBlockStreamer {
   // the drain/resume cycle to regulate direct-memory usage smoothly.
   private static final int BUF_SIZE = 32 * 1024;
 
-  private static final byte[] HEX = {
-    '0', '1', '2', '3', '4', '5', '6', '7',
-    '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'
-  };
-
   private static final byte[] TX_OPEN = "{\"txHash\":\"".getBytes(StandardCharsets.US_ASCII);
   private static final byte[] TX_RESULT_STRUCT_OPEN =
       "\",\"result\":{\"structLogs\":[".getBytes(StandardCharsets.US_ASCII);
@@ -102,7 +97,6 @@ public class DebugTraceBlockStreamer {
   private final ProtocolSchedule protocolSchedule;
   private final BlockchainQueries blockchainQueries;
 
-  private byte[] hexBuf = new byte[130];
   private final byte[] numBuf = new byte[20];
   private final byte[] writeBuf = new byte[BUF_SIZE];
   private final TreeMap<UInt256, UInt256> sortedStorage = new TreeMap<>();
@@ -400,8 +394,7 @@ public class DebugTraceBlockStreamer {
         for (int s = 0; s < stack.length; s++) {
           if (s > 0) writeByte(COMMA);
           writeByte(QUOTE);
-          final int len = compactHexBytes(stack[s], true);
-          writeBytes(hexBuf, 0, len);
+          writeHex(stack[s].toArrayUnsafe(), true);
           writeByte(QUOTE);
         }
         writeByte(ARR_CLOSE);
@@ -413,8 +406,7 @@ public class DebugTraceBlockStreamer {
         for (int i = 0; i < wordCount; i++) {
           if (i > 0) writeByte(COMMA);
           writeByte(QUOTE);
-          final int len = compactHexBytes(frame.readMutableMemory(i * 32L, 32), true);
-          writeBytes(hexBuf, 0, len);
+          writeHex(frame.readMutableMemory(i * 32L, 32).toArrayUnsafe(), true);
           writeByte(QUOTE);
         }
         writeByte(ARR_CLOSE);
@@ -435,13 +427,11 @@ public class DebugTraceBlockStreamer {
                 if (!firstEntry) writeByte(COMMA);
                 firstEntry = false;
                 writeByte(QUOTE);
-                final int kLen = compactHexBytes(entry.getKey().toArrayUnsafe(), true, false);
-                writeBytes(hexBuf, 0, kLen);
+                writeHex(entry.getKey().toArrayUnsafe(), false);
                 writeByte(QUOTE);
                 writeByte(COLON);
                 writeByte(QUOTE);
-                final int vLen = compactHexBytes(entry.getValue().toArrayUnsafe(), true, false);
-                writeBytes(hexBuf, 0, vLen);
+                writeHex(entry.getValue().toArrayUnsafe(), false);
                 writeByte(QUOTE);
               }
               writeByte(OBJ_CLOSE);
@@ -454,8 +444,7 @@ public class DebugTraceBlockStreamer {
 
       if (revertReason != null) {
         writeBytes(SL_REASON);
-        final int len = compactHexBytes(revertReason.toArrayUnsafe(), true, false);
-        writeBytes(hexBuf, 0, len);
+        writeHex(revertReason.toArrayUnsafe(), false);
         writeByte(QUOTE);
       }
 
@@ -473,88 +462,26 @@ public class DebugTraceBlockStreamer {
 
   // ── primitives ────────────────────────────────────────────────────
 
-  private int compactHexBytes(final Bytes abytes, final boolean prefix) {
-    final byte[] bytes = abytes.toArrayUnsafe();
-    final int size = bytes.length;
-    if (size == 0) {
-      if (prefix) {
-        hexBuf[0] = '0';
-        hexBuf[1] = 'x';
-        hexBuf[2] = '0';
-        return 3;
-      } else {
-        hexBuf[0] = '0';
-        return 1;
-      }
-    }
-    int pos = 0;
-    if (prefix) {
-      hexBuf[pos++] = '0';
-      hexBuf[pos++] = 'x';
-    }
-    boolean leadingZero = true;
-    for (int i = 0; i < size; i++) {
-      final byte b = bytes[i];
-      final int hi = (b >> 4) & 0xF;
-      if (!leadingZero || hi != 0) {
-        hexBuf[pos++] = HEX[hi];
-        leadingZero = false;
-      }
-      final int lo = b & 0xF;
-      if (!leadingZero || lo != 0 || i == size - 1) {
-        hexBuf[pos++] = HEX[lo];
-        leadingZero = false;
-      }
-    }
-    return pos;
-  }
-
-  private int compactHexBytes(
-      final byte[] bytes, final boolean prefix, final boolean stripLeading) {
-    final int needed = (prefix ? 2 : 0) + bytes.length * 2;
-    if (needed > hexBuf.length) {
-      hexBuf = new byte[needed];
-    }
-    final int size = bytes.length;
-    if (size == 0) {
-      if (prefix) {
-        hexBuf[0] = '0';
-        hexBuf[1] = 'x';
-        hexBuf[2] = '0';
-        return 3;
-      } else {
-        hexBuf[0] = '0';
-        return 1;
-      }
-    }
-    int pos = 0;
-    if (prefix) {
-      hexBuf[pos++] = '0';
-      hexBuf[pos++] = 'x';
-    }
-    if (stripLeading) {
-      boolean leadingZero = true;
-      for (int i = 0; i < size; i++) {
-        final byte b = bytes[i];
-        final int hi = (b >> 4) & 0xF;
-        if (!leadingZero || hi != 0) {
-          hexBuf[pos++] = HEX[hi];
-          leadingZero = false;
-        }
-        final int lo = b & 0xF;
-        if (!leadingZero || lo != 0 || i == size - 1) {
-          hexBuf[pos++] = HEX[lo];
-          leadingZero = false;
-        }
-      }
+  /**
+   * Encodes {@code bytes} as {@code 0x}-prefixed hex directly into {@link #writeBuf}, flushing
+   * first if needed to guarantee room. For values whose hex exceeds the buffer size, writes in
+   * chunks.
+   */
+  private void writeHex(final byte[] bytes, final boolean stripLeading) throws IOException {
+    final int maxLen = 2 + bytes.length * 2;
+    if (maxLen <= BUF_SIZE) {
+      if (writePos + maxLen > BUF_SIZE) flushBuf();
+      writePos = HexWriter.encodeTo(bytes, bytes.length, writeBuf, writePos, stripLeading);
     } else {
-      for (int i = 0; i < size; i++) {
-        final byte b = bytes[i];
-        hexBuf[pos++] = HEX[(b >> 4) & 0xF];
-        hexBuf[pos++] = HEX[b & 0xF];
+      // Value too large for writeBuf — write prefix + hex in chunks via rawOut
+      flushBuf();
+      rawOut.write('0');
+      rawOut.write('x');
+      for (final byte b : bytes) {
+        rawOut.write(HexWriter.HEX_PAIR[(b & 0xFF) << 1]);
+        rawOut.write(HexWriter.HEX_PAIR[((b & 0xFF) << 1) + 1]);
       }
     }
-    return pos;
   }
 
   private byte[] opcodeToBytes(final String opcode) {

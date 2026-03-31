@@ -127,7 +127,9 @@ class JsonRpcExecutorHandlerTest {
 
   // --- Streaming error handling tests ---
 
-  /** Set up the mock context so the handler creates a JsonRpcObjectExecutor for a streaming method. */
+  /**
+   * Set up the mock context so the handler creates a JsonRpcObjectExecutor for a streaming method.
+   */
   private void setUpStreamingContext() {
     final JsonObject jsonRequest =
         new JsonObject()
@@ -169,8 +171,7 @@ class JsonRpcExecutorHandlerTest {
 
     // executeStreaming returns a validation error (e.g., bad request) before any data is written
     when(mockExecutor.executeStreaming(any(), any(), any(), any(), any(), any(), any(), any()))
-        .thenReturn(
-            Optional.of(new JsonRpcErrorResponse(1, RpcErrorType.INVALID_REQUEST)));
+        .thenReturn(Optional.of(new JsonRpcErrorResponse(1, RpcErrorType.INVALID_REQUEST)));
 
     Handler<RoutingContext> handler =
         JsonRpcExecutorHandler.handler(mockExecutor, mockTracer, mockConfig);
@@ -218,7 +219,8 @@ class JsonRpcExecutorHandlerTest {
 
     // Headers already sent → cannot change status code, must reset the connection
     verify(mockResponse).reset();
-    // setStatusCode is only called once by prepareHttpResponse for Content-Type setup, not for error
+    // setStatusCode is only called once by prepareHttpResponse for Content-Type setup, not for
+    // error
     verify(mockResponse, never()).setStatusCode(anyInt());
   }
 

@@ -32,8 +32,8 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
 /**
- * Compares the four hex-encoding strategies in {@link HexWriter}. Each invocation encodes {@link
- * #N} values to simulate a realistic per-opcode workload (stack entries).
+ * Benchmarks {@link HexWriter#encodeTo}. Each invocation encodes {@link #N} values to simulate a
+ * realistic per-opcode workload (stack entries).
  *
  * <p>Run with: {@code ./gradlew :ethereum:api:jmh -Pincludes=CompactHexBenchmark}
  */
@@ -65,7 +65,6 @@ public class CompactHexBenchmark {
   private ValueSize valueSize;
 
   private byte[][] values;
-  private byte[] hexBuf;
   private byte[] writeBuf;
 
   @Setup
@@ -80,46 +79,15 @@ public class CompactHexBenchmark {
         values[i][0] = 0;
       }
     }
-    hexBuf = new byte[130];
     writeBuf = new byte[BUF_SIZE];
   }
 
   @Benchmark
   @OperationsPerInvocation(N)
-  public void nibblePair(final Blackhole bh) {
+  public void encodeTo(final Blackhole bh) {
     int pos = 0;
     for (final byte[] bytes : values) {
-      pos = HexWriter.nibblePair(bytes, bytes.length, hexBuf, writeBuf, pos);
-    }
-    bh.consume(pos);
-  }
-
-  @Benchmark
-  @OperationsPerInvocation(N)
-  public void bytePair(final Blackhole bh) {
-    int pos = 0;
-    for (final byte[] bytes : values) {
-      pos = HexWriter.bytePair(bytes, bytes.length, writeBuf, pos);
-    }
-    bh.consume(pos);
-  }
-
-  @Benchmark
-  @OperationsPerInvocation(N)
-  public void shortPack(final Blackhole bh) {
-    int pos = 0;
-    for (final byte[] bytes : values) {
-      pos = HexWriter.shortPack(bytes, bytes.length, writeBuf, pos);
-    }
-    bh.consume(pos);
-  }
-
-  @Benchmark
-  @OperationsPerInvocation(N)
-  public void intPack(final Blackhole bh) {
-    int pos = 0;
-    for (final byte[] bytes : values) {
-      pos = HexWriter.intPack(bytes, bytes.length, writeBuf, pos);
+      pos = HexWriter.encodeTo(bytes, bytes.length, writeBuf, pos, true);
     }
     bh.consume(pos);
   }
