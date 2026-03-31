@@ -70,20 +70,8 @@ public class BaseJsonRpcProcessor implements JsonRpcProcessor {
       final OutputStream out,
       final ObjectMapper mapper)
       throws IOException {
-    try {
-      ((StreamingJsonRpcMethod) method).streamResponse(request, out, mapper);
-    } catch (final InvalidJsonRpcParameters e) {
-      LOG.debug(
-          "Invalid Params {} for method: {}, error: {}",
-          Arrays.toString(request.getRequest().getParams()),
-          method.getName(),
-          e.getRpcErrorType().getMessage(),
-          e);
-      mapper.writeValue(out, new JsonRpcErrorResponse(id, e.getRpcErrorType()));
-    } catch (final RuntimeException e) {
-      final JsonArray params = JsonObject.mapFrom(request.getRequest()).getJsonArray("params");
-      LOG.error(String.format("Error processing method: %s %s", method.getName(), params), e);
-      mapper.writeValue(out, new JsonRpcErrorResponse(id, RpcErrorType.INTERNAL_ERROR));
-    }
+    // Let exceptions propagate — the caller decides how to handle them based on
+    // whether the response headers have already been flushed.
+    ((StreamingJsonRpcMethod) method).streamResponse(request, out, mapper);
   }
 }

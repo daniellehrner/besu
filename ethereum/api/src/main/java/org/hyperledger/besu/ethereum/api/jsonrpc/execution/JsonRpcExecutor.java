@@ -86,7 +86,14 @@ public class JsonRpcExecutor {
     return method != null && method.isStreaming();
   }
 
-  public void executeStreaming(
+  /**
+   * Executes a streaming JSON-RPC method. If the request fails validation (bad params, missing
+   * method, notification, etc.) the error response is returned without writing to {@code out},
+   * allowing the caller to send a proper HTTP error before headers are flushed.
+   *
+   * @return an error/no-op response if streaming did not start, or empty on success
+   */
+  public Optional<JsonRpcResponse> executeStreaming(
       final Optional<User> optionalUser,
       final Tracer tracer,
       final Context spanContext,
@@ -100,14 +107,14 @@ public class JsonRpcExecutor {
         prepareExecution(
             optionalUser, tracer, spanContext, alive, jsonRpcRequest, requestBodyProvider);
     if (prepared == null) {
-      return;
+      return Optional.of(new JsonRpcNoResponse());
     }
     if (prepared instanceof JsonRpcResponse response) {
-      mapper.writeValue(out, response);
-      return;
+      return Optional.of(response);
     }
     final PreparedRequest req = (PreparedRequest) prepared;
     rpcProcessor.streamProcess(req.id(), req.method(), req.span(), req.context(), out, mapper);
+    return Optional.empty();
   }
 
   /**

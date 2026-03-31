@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.api.jsonrpc.execution;
 
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.JsonRpcRequestContext;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.JsonRpcRequestId;
+import org.hyperledger.besu.ethereum.api.jsonrpc.internal.exception.InvalidJsonRpcRequestException;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.JsonRpcMethod;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcErrorResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcResponse;
@@ -154,7 +155,11 @@ public class TracedJsonRpcProcessor implements JsonRpcProcessor {
     try {
       rpcProcessor.streamProcess(id, method, metricSpan, request, out, mapper);
     } catch (final IOException | RuntimeException e) {
-      rpcErrorsCounter.labels(method.getName(), "INTERNAL_ERROR").inc();
+      final String errorLabel =
+          e instanceof InvalidJsonRpcRequestException ijrp
+              ? ijrp.getRpcErrorType().name()
+              : "INTERNAL_ERROR";
+      rpcErrorsCounter.labels(method.getName(), errorLabel).inc();
       metricSpan.setStatus(StatusCode.ERROR, "Error processing JSON-RPC requestBody");
       throw e;
     } finally {

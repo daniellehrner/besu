@@ -97,9 +97,16 @@ public abstract class AbstractJsonRpcExecutor {
       final RoutingContext routingContext, final Object id, final RpcErrorType error) {
     final HttpServerResponse response = routingContext.response();
     if (!response.closed()) {
-      response
-          .setStatusCode(statusCodeFromError(error).code())
-          .end(Json.encode(new JsonRpcErrorResponse(id, error)));
+      if (response.headWritten()) {
+        // Streaming already started — cannot change status code or headers.
+        // Reset the connection so the client sees a transport error rather than
+        // silently receiving truncated JSON.
+        response.reset();
+      } else {
+        response
+            .setStatusCode(statusCodeFromError(error).code())
+            .end(Json.encode(new JsonRpcErrorResponse(id, error)));
+      }
     }
   }
 
@@ -107,6 +114,7 @@ public abstract class AbstractJsonRpcExecutor {
     return switch (error) {
       case INVALID_REQUEST, PARSE_ERROR -> HttpResponseStatus.BAD_REQUEST;
       case TIMEOUT_ERROR -> HttpResponseStatus.REQUEST_TIMEOUT;
+      case UNAUTHORIZED -> HttpResponseStatus.UNAUTHORIZED;
       default -> HttpResponseStatus.OK;
     };
   }

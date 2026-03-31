@@ -19,6 +19,7 @@ import org.hyperledger.besu.ethereum.api.jsonrpc.JsonRpcConfiguration;
 import org.hyperledger.besu.ethereum.api.jsonrpc.context.ContextKey;
 import org.hyperledger.besu.ethereum.api.jsonrpc.execution.JsonRpcExecutor;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.JsonRpcRequest;
+import org.hyperledger.besu.ethereum.api.jsonrpc.internal.exception.InvalidJsonRpcRequestException;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcErrorResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.RpcErrorType;
@@ -54,21 +55,7 @@ public class JsonRpcObjectExecutor extends AbstractJsonRpcExecutor {
     final JsonObject jsonRequest = ctx.get(ContextKey.REQUEST_BODY_AS_JSON_OBJECT.name());
 
     if (jsonRpcExecutor.isStreamingMethod(jsonRequest.getString("method"))) {
-      response.setStatusCode(HttpResponseStatus.OK.code());
-      try (final JsonResponseStreamer streamer =
-          new JsonResponseStreamer(response, ctx.request().remoteAddress())) {
-        final Optional<User> user = ContextKey.AUTHENTICATED_USER.extractFrom(ctx, Optional::empty);
-        final Context spanContext = ctx.get(SPAN_CONTEXT);
-        jsonRpcExecutor.executeStreaming(
-            user,
-            tracer,
-            spanContext,
-            () -> !ctx.response().closed(),
-            jsonRequest,
-            req -> req.mapTo(JsonRpcRequest.class),
-            streamer,
-            getJsonObjectMapper());
-      }
+      executeStreamingMethod(response, jsonRequest);
       return;
     }
 
@@ -76,6 +63,56 @@ public class JsonRpcObjectExecutor extends AbstractJsonRpcExecutor {
     final JsonRpcResponse jsonRpcResponse =
         executeRequest(jsonRpcExecutor, tracer, jsonRequest, ctx);
     handleJsonObjectResponse(response, jsonRpcResponse, ctx);
+  }
+
+  private void executeStreamingMethod(
+      final HttpServerResponse response, final JsonObject jsonRequest) throws IOException {
+    // Do NOT set the status code eagerly — let JsonResponseStreamer flush headers
+    // on first write.  This keeps the response uncommitted so that pre-stream
+    // errors (bad params, auth failures, missing blocks) can still produce a
+    // proper HTTP error with the correct status code.
+    final JsonResponseStreamer streamer =
+        new JsonResponseStreamer(response, ctx.request().remoteAddress());
+    try {
+      final Optional<User> user = ContextKey.AUTHENTICATED_USER.extractFrom(ctx, Optional::empty);
+      final Context spanContext = ctx.get(SPAN_CONTEXT);
+      final Optional<JsonRpcResponse> preStreamError =
+          jsonRpcExecutor.executeStreaming(
+              user,
+              tracer,
+              spanContext,
+              () -> !ctx.response().closed(),
+              jsonRequest,
+              req -> req.mapTo(JsonRpcRequest.class),
+              streamer,
+              getJsonObjectMapper());
+      if (preStreamError.isPresent()) {
+        // Validation failed before any data was written to the stream.
+        // The streamer's close() is a no-op (chunked never set), so we can
+        // send a proper error response with the correct HTTP status code.
+        handleJsonObjectResponse(response, preStreamError.get(), ctx);
+        return;
+      }
+      // Streaming completed — end the chunked response.
+      streamer.close();
+    } catch (final Exception e) {
+      if (!response.headWritten()) {
+        // Headers not flushed yet — send a proper HTTP error response.
+        final Object id = jsonRequest.getValue("id");
+        final RpcErrorType errorType =
+            e instanceof InvalidJsonRpcRequestException ijrp
+                ? ijrp.getRpcErrorType()
+                : RpcErrorType.INTERNAL_ERROR;
+        handleJsonRpcError(ctx, id, errorType);
+      } else if (!response.ended()) {
+        // Streaming started but failed mid-stream — reset the connection so the
+        // client sees a transport error rather than truncated JSON.
+        response.reset();
+      }
+      if (e instanceof IOException ioe) {
+        throw ioe;
+      }
+    }
   }
 
   @Override
