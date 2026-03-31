@@ -35,7 +35,8 @@ public class HandlerFactory {
     assert methods != null && globalOptions != null;
     // Only explicitly registered non-streaming methods get a
     // timeout from this handler.  Streaming methods are excluded because they can
-    // run much longer than the default 30s. Their timeout is managed by JsonRpcExecutorHandler instead.
+    // run much longer than the default 30s. Their timeout is managed by JsonRpcExecutorHandler
+    // instead.
     return TimeoutHandler.handler(
         Optional.empty(),
         methods.entrySet().stream()
