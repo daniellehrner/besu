@@ -20,6 +20,7 @@ import org.hyperledger.besu.ethereum.api.jsonrpc.internal.exception.InvalidJsonR
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.parameters.BlockParameter;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.parameters.JsonRpcParameter.JsonRpcParameterException;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.parameters.TransactionTraceParams;
+import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcErrorResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcSuccessResponse;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.RpcErrorType;
@@ -69,6 +70,11 @@ public class DebugTraceBlockByNumber extends AbstractBlockParameterMethod
     final Optional<Block> maybeBlock =
         getBlockchainQueries().getBlockchain().getBlockByNumber(blockNumber);
 
+    if (blockNumber == 0L) {
+      return new JsonRpcErrorResponse(
+          request.getRequest().getId(), RpcErrorType.GENESIS_BLOCK_NOT_TRACEABLE);
+    }
+
     return maybeBlock
         .map(
             block ->
@@ -83,6 +89,11 @@ public class DebugTraceBlockByNumber extends AbstractBlockParameterMethod
       throws IOException {
     final Object result = findResultByParamType(requestContext);
 
+    if (result instanceof JsonRpcErrorResponse errorResponse) {
+      mapper.writeValue(out, errorResponse);
+      return;
+    }
+
     final DebugTraceBlockStreamer streamer = result instanceof DebugTraceBlockStreamer s ? s : null;
     AbstractDebugTraceBlock.writeStreamingResponse(
         requestContext.getRequest().getId(), streamer, out, mapper);
@@ -95,6 +106,9 @@ public class DebugTraceBlockByNumber extends AbstractBlockParameterMethod
   @Override
   public JsonRpcResponse response(final JsonRpcRequestContext requestContext) {
     final Object result = findResultByParamType(requestContext);
+    if (result instanceof JsonRpcErrorResponse errorResponse) {
+      return errorResponse;
+    }
     if (!(result instanceof DebugTraceBlockStreamer streamer)) {
       return new JsonRpcSuccessResponse(requestContext.getRequest().getId(), null);
     }
