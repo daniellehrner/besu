@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.charset.StandardCharsets;
 import java.util.stream.Stream;
@@ -298,6 +299,37 @@ class HexWriterTest {
     final int end = HexWriter.encodeTo(input, input.length, tight, 0, false);
     assertThat(end).isEqualTo(6);
     assertThat(new String(tight, StandardCharsets.US_ASCII)).isEqualTo("0x0001");
+  }
+
+  // ── regression: empty input writes 3 bytes, not 2 ──────────────────
+  //
+  // writeHex computed maxLen = 2 + bytes.length * 2.  For an empty byte[]
+  // (Bytes.EMPTY.toArrayUnsafe()) that evaluates to 2, but encodeTo always
+  // emits "0x0" — three bytes.  When the write buffer had exactly two bytes
+  // of headroom the third byte wrote past the array end, producing an
+  // ArrayIndexOutOfBoundsException that corrupted the streaming JSON output.
+  // Fix: maxLen = Math.max(3, 2 + bytes.length * 2).
+
+  @Test
+  void regression_emptyInputNeedsThreeNotTwoBytes() {
+    // Simulate a buffer with only 2 bytes of space remaining.
+    // Before the fix, the caller would think 2 bytes were enough.
+    final byte[] buf = new byte[10];
+    final int destPos = buf.length - 2; // only 2 bytes left
+
+    // encodeTo writes 3 bytes ("0x0") — one past the end → AIOOBE
+    assertThatThrownBy(() -> HexWriter.encodeTo(new byte[] {}, 0, buf, destPos, true))
+        .isInstanceOf(ArrayIndexOutOfBoundsException.class);
+  }
+
+  @Test
+  void regression_emptyInputSucceedsWithThreeBytesOfRoom() {
+    // With 3 bytes of space, the same call succeeds.
+    final byte[] buf = new byte[10];
+    final int destPos = buf.length - 3;
+    final int end = HexWriter.encodeTo(new byte[] {}, 0, buf, destPos, true);
+    assertThat(end).isEqualTo(buf.length);
+    assertThat(new String(buf, destPos, end - destPos, StandardCharsets.US_ASCII)).isEqualTo("0x0");
   }
 
   // ── helpers ────────────────────────────────────────────────────────

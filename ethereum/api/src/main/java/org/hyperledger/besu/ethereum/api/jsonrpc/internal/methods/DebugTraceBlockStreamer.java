@@ -79,12 +79,12 @@ public class DebugTraceBlockStreamer {
   private static final byte[] SL_GAS = "\",\"gas\":".getBytes(StandardCharsets.US_ASCII);
   private static final byte[] SL_GAS_COST = ",\"gasCost\":".getBytes(StandardCharsets.US_ASCII);
   private static final byte[] SL_DEPTH = ",\"depth\":".getBytes(StandardCharsets.US_ASCII);
+  private static final byte[] SL_REFUND = ",\"refund\":".getBytes(StandardCharsets.US_ASCII);
   private static final byte[] SL_STACK = ",\"stack\":[".getBytes(StandardCharsets.US_ASCII);
   private static final byte[] SL_MEMORY = ",\"memory\":[".getBytes(StandardCharsets.US_ASCII);
   private static final byte[] SL_STORAGE = ",\"storage\":{".getBytes(StandardCharsets.US_ASCII);
   private static final byte[] SL_REASON = ",\"reason\":\"".getBytes(StandardCharsets.US_ASCII);
-  private static final byte[] SL_ERROR = ",\"error\":[\"".getBytes(StandardCharsets.US_ASCII);
-  private static final byte[] QUOTE_BRACKET = "\"]".getBytes(StandardCharsets.US_ASCII);
+  private static final byte[] SL_ERROR = ",\"error\":\"".getBytes(StandardCharsets.US_ASCII);
 
   private static final byte COMMA = ',';
   private static final byte QUOTE = '"';
@@ -389,6 +389,12 @@ public class DebugTraceBlockStreamer {
       writeBytes(SL_DEPTH);
       writeInt(depth + 1);
 
+      final long refund = frame.getGasRefund();
+      if (refund > 0) {
+        writeBytes(SL_REFUND);
+        writeLong(refund);
+      }
+
       if (stack != null) {
         writeBytes(SL_STACK);
         for (int s = 0; s < stack.length; s++) {
@@ -444,14 +450,14 @@ public class DebugTraceBlockStreamer {
 
       if (revertReason != null) {
         writeBytes(SL_REASON);
-        writeHex(revertReason.toArrayUnsafe(), false);
+        writeHex(revertReason.toArrayUnsafe(), true);
         writeByte(QUOTE);
       }
 
       if (haltReason != null) {
         writeBytes(SL_ERROR);
         writeBytes(haltReason.name().getBytes(StandardCharsets.US_ASCII));
-        writeBytes(QUOTE_BRACKET);
+        writeByte(QUOTE);
       }
 
       writeByte(OBJ_CLOSE);
@@ -468,7 +474,9 @@ public class DebugTraceBlockStreamer {
    * chunks.
    */
   private void writeHex(final byte[] bytes, final boolean stripLeading) throws IOException {
-    final int maxLen = 2 + bytes.length * 2;
+    // encodeTo always writes the "0x" prefix (2 bytes) plus at least one hex digit,
+    // even when the input is empty (producing "0x0" = 3 bytes).
+    final int maxLen = Math.max(3, 2 + bytes.length * 2);
     if (maxLen <= BUF_SIZE) {
       if (writePos + maxLen > BUF_SIZE) flushBuf();
       writePos = HexWriter.encodeTo(bytes, bytes.length, writeBuf, writePos, stripLeading);

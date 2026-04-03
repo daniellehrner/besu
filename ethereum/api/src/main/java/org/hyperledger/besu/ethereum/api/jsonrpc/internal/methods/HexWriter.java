@@ -23,7 +23,8 @@ import java.nio.ByteOrder;
  * store via {@link VarHandle}, writing two hex ASCII chars per input byte in a single store
  * instruction.
  *
- * <p>The caller must ensure {@code dest} has enough room: at most {@code 2 + len * 2} bytes.
+ * <p>The caller must ensure {@code dest} has enough room: at most {@code max(3, 2 + len * 2)}
+ * bytes. When {@code len == 0}, three bytes are written ({@code 0x0}).
  */
 public final class HexWriter {
 

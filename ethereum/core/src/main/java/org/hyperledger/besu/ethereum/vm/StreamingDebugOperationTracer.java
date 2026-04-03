@@ -105,7 +105,7 @@ public class StreamingDebugOperationTracer extends AbstractDebugOperationTracer 
           frame.getPC(),
           "",
           frame.getRemainingGas(),
-          gasRequirement,
+          0L,
           frame.getDepth(),
           null,
           frame,

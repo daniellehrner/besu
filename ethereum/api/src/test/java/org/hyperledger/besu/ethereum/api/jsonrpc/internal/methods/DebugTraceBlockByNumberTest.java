@@ -185,14 +185,28 @@ public class DebugTraceBlockByNumberTest {
   }
 
   @Test
-  public void batchResponseShouldReturnSuccessWithArrayResult() {
+  public void batchResponseShouldMatchStreamingOutput() throws IOException {
     final Object[] params = new Object[] {"0x1"};
-    final JsonRpcRequestContext request =
-        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_traceBlockByNumber", params));
 
-    final JsonRpcResponse response = debugTraceBlockByNumber.response(request);
+    // batch (accumulating) path
+    final JsonRpcRequestContext batchRequest =
+        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_traceBlockByNumber", params));
+    final JsonRpcResponse response = debugTraceBlockByNumber.response(batchRequest);
     assertThat(response).isInstanceOf(JsonRpcSuccessResponse.class);
-    assertThat(((JsonRpcSuccessResponse) response).getResult()).isNotNull();
+    final Object batchResult = ((JsonRpcSuccessResponse) response).getResult();
+    assertThat(batchResult).isNotNull();
+    final JsonNode batchJson = mapper.readTree(mapper.writeValueAsBytes(batchResult));
+
+    // streaming path
+    final JsonRpcRequestContext streamRequest =
+        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_traceBlockByNumber", params));
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    debugTraceBlockByNumber.streamResponse(streamRequest, out, mapper);
+    final JsonNode streamJson = mapper.readTree(out.toByteArray()).get("result");
+
+    assertThat(batchJson)
+        .as("batch (accumulating) and streaming paths must produce identical result JSON")
+        .isEqualTo(streamJson);
   }
 
   @Test

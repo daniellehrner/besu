@@ -104,8 +104,8 @@ public class DebugTraceBlockStreamerPrecompileTest {
   }
 
   /**
-   * Streaming and accumulating paths must produce the same number of struct logs for a direct
-   * precompile call.
+   * Streaming and accumulating paths must produce structurally identical JSON for a direct
+   * precompile call — not just the same struct log count but the same fields and values.
    */
   @Test
   public void streamingAndAccumulatingPathsMatchForPrecompileCall() throws Exception {
@@ -117,15 +117,15 @@ public class DebugTraceBlockStreamerPrecompileTest {
     // streaming path
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     streamer.streamTo(out, mapper);
-    final int streamingLogCount = getStructLogs(out).size();
+    final JsonNode streamedRoot = mapper.readTree(out.toByteArray());
 
     // accumulating path
     final List<Object> accumulated = streamer.accumulateAll();
-    final JsonNode accResult =
-        mapper.readTree(mapper.writeValueAsBytes(accumulated.get(0))).get("result");
-    final int accLogCount = accResult.get("structLogs").size();
+    final JsonNode accRoot = mapper.readTree(mapper.writeValueAsBytes(accumulated));
 
-    assertThat(streamingLogCount).isEqualTo(accLogCount);
+    assertThat(streamedRoot)
+        .as("streaming and accumulating paths must produce identical JSON")
+        .isEqualTo(accRoot);
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────

@@ -37,6 +37,8 @@ import org.hyperledger.besu.ethereum.debug.TraceOptions;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 
 import java.io.ByteArrayOutputStream;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.math.BigInteger;
 import java.util.Collections;
 import java.util.List;
@@ -49,7 +51,7 @@ import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-public class DebugTraceBlockStreamerRevertReasonTest {
+public class DebugTraceBlockStreamerHexEncodingTest {
 
   private static final String GENESIS_RESOURCE =
       "/org/hyperledger/besu/ethereum/api/jsonrpc/trace/chain-data/genesis-osaka.json";
@@ -79,6 +81,11 @@ public class DebugTraceBlockStreamerRevertReasonTest {
               + "0000000000000000000000000000000000000000000000000000000000000006"
               + "7265766572740000000000000000000000000000000000000000000000000000");
 
+  // Init code that loops PUSH0/POP until gas runs out:
+  //   JUMPDEST PUSH0 POP PUSH1 0x00 JUMP
+  // Each iteration pushes Bytes.EMPTY (0x0) onto the stack, generating thousands of struct logs.
+  private static final Bytes PUSH0_INIT_CODE = Bytes.fromHexString("0x5b5f506000560000");
+
   private ExecutionContextTestFixture fixture;
   private BlockchainQueries blockchainQueries;
   private final ObjectMapper mapper = new ObjectMapper();
@@ -98,6 +105,8 @@ public class DebugTraceBlockStreamerRevertReasonTest {
             MiningConfiguration.MINING_DISABLED);
   }
 
+  // ── revert reason tests ───────────────────────────────────────────
+
   /**
    * A 68-byte revert reason requires 138 chars (2 for "0x" + 136 hex digits). The old hexBuf was
    * only 130 bytes — this test verifies no ArrayIndexOutOfBoundsException is thrown.
@@ -114,11 +123,11 @@ public class DebugTraceBlockStreamerRevertReasonTest {
   }
 
   /**
-   * The first byte of an ABI Error selector is 0x08. The high nibble (0) must not be stripped, so
-   * the reason must start with "0x08" not "0x8".
+   * The first byte of an ABI Error selector is 0x08. Leading zeros are stripped (compact hex
+   * format), matching the accumulating path's StructLog.toCompactHex behaviour.
    */
   @Test
-  public void revertReasonPreservesLeadingZeroNibble() throws Exception {
+  public void revertReasonUsesCompactHex() throws Exception {
     final Block block = buildBlockWithCalldata(ABI_ERROR_EMPTY, 0);
     final DebugTraceBlockStreamer streamer =
         new DebugTraceBlockStreamer(
@@ -130,13 +139,11 @@ public class DebugTraceBlockStreamerRevertReasonTest {
     final JsonNode structLogs = getStructLogs(out);
     final String reason = findRevertReason(structLogs);
     assertThat(reason).isNotNull();
-    assertThat(reason).startsWith("0x08c379a0");
+    // 0x08 → high nibble stripped → "0x8c379a0..."
+    assertThat(reason).startsWith("0x8c379a0");
   }
 
-  /**
-   * A 100-byte revert reason also exceeds the old buffer and exercises the resize path. Verifies
-   * the full hex encoding is correct.
-   */
+  /** Verifies the full hex encoding length for a 100-byte revert reason in compact format. */
   @Test
   public void revertReasonEncodedCorrectlyFor100BytePayload() throws Exception {
     final Block block = buildBlockWithCalldata(ABI_ERROR_WITH_MESSAGE, 0);
@@ -150,9 +157,148 @@ public class DebugTraceBlockStreamerRevertReasonTest {
     final JsonNode structLogs = getStructLogs(out);
     final String reason = findRevertReason(structLogs);
     assertThat(reason).isNotNull();
-    assertThat(reason).startsWith("0x08c379a0");
-    // full encoding must be exactly 2 + 100*2 = 202 chars
-    assertThat(reason).hasSize(202);
+    assertThat(reason).startsWith("0x8c379a0");
+    // compact hex: "0x" + 1 (stripped high nibble of 0x08) + 99*2 = 201 chars
+    assertThat(reason).hasSize(201);
+  }
+
+  /**
+   * Streaming and accumulating paths must produce structurally identical JSON for a transaction
+   * with a revert reason.
+   */
+  @Test
+  public void streamingAndAccumulatingPathsMatchForRevertReason() throws Exception {
+    final Block block = buildBlockWithCalldata(ABI_ERROR_WITH_MESSAGE, 0);
+    final DebugTraceBlockStreamer streamer =
+        new DebugTraceBlockStreamer(
+            block, TraceOptions.DEFAULT, fixture.getProtocolSchedule(), blockchainQueries);
+
+    // streaming path
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    streamer.streamTo(out, mapper);
+    final JsonNode streamedRoot = mapper.readTree(out.toByteArray());
+
+    // accumulating path
+    final List<Object> accumulated = streamer.accumulateAll();
+    final JsonNode accRoot = mapper.readTree(mapper.writeValueAsBytes(accumulated));
+
+    assertThat(streamedRoot)
+        .as("streaming and accumulating paths must produce identical JSON")
+        .isEqualTo(accRoot);
+  }
+
+  // ── zero-stack / writeHex buffer boundary tests ───────────────────
+
+  /**
+   * Directly tests writeHex at the buffer boundary that triggers the off-by-one bug.
+   *
+   * <p>Uses reflection to position writePos at BUF_SIZE - 2, then calls writeHex with an empty
+   * byte[]. Without the fix (maxLen = 2), writeHex does not flush and encodeTo writes 3 bytes past
+   * the 2-byte headroom → ArrayIndexOutOfBoundsException. With the fix (maxLen = max(3, ...)),
+   * writeHex flushes first, leaving room for all 3 bytes.
+   */
+  @Test
+  public void writeHexAtBufferBoundaryWithEmptyBytes() throws Exception {
+    final Block block = buildBlockWithPush0();
+    final DebugTraceBlockStreamer streamer =
+        new DebugTraceBlockStreamer(
+            block, TraceOptions.DEFAULT, fixture.getProtocolSchedule(), blockchainQueries);
+
+    // Use reflection to access private internals
+    final Field rawOutField = DebugTraceBlockStreamer.class.getDeclaredField("rawOut");
+    rawOutField.setAccessible(true);
+
+    final Field writePosField = DebugTraceBlockStreamer.class.getDeclaredField("writePos");
+    writePosField.setAccessible(true);
+
+    final Field bufSizeField = DebugTraceBlockStreamer.class.getDeclaredField("BUF_SIZE");
+    bufSizeField.setAccessible(true);
+    final int bufSize = (int) bufSizeField.get(null);
+
+    final Method writeHexMethod =
+        DebugTraceBlockStreamer.class.getDeclaredMethod("writeHex", byte[].class, boolean.class);
+    writeHexMethod.setAccessible(true);
+
+    // Set up the streamer with a real output stream and position at the boundary
+    rawOutField.set(streamer, new ByteArrayOutputStream());
+    writePosField.set(streamer, bufSize - 2); // exactly 2 bytes of headroom
+
+    // This call exercises the exact condition: empty byte[] with maxLen=2 vs 3
+    assertThatCode(() -> writeHexMethod.invoke(streamer, new byte[0], true))
+        .as("writeHex with empty byte[] at BUF_SIZE-2 must not throw")
+        .doesNotThrowAnyException();
+  }
+
+  /**
+   * Streaming a block trace with stack tracing enabled must produce valid JSON even when the stack
+   * contains zero values (empty Bytes).
+   */
+  @Test
+  public void streamingWithZeroStackValuesProducesValidJson() {
+    final Block block = buildBlockWithPush0();
+    final DebugTraceBlockStreamer streamer =
+        new DebugTraceBlockStreamer(
+            block, TraceOptions.DEFAULT, fixture.getProtocolSchedule(), blockchainQueries);
+
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    assertThatCode(() -> streamer.streamTo(out, mapper)).doesNotThrowAnyException();
+
+    // Must be valid JSON
+    assertThatCode(() -> mapper.readTree(out.toByteArray())).doesNotThrowAnyException();
+  }
+
+  /**
+   * Streaming and accumulating paths must produce structurally identical JSON — not just the same
+   * struct log count but the same fields and values for every entry.
+   */
+  @Test
+  public void streamingAndAccumulatingPathsMatchForZeroStackValues() throws Exception {
+    final Block block = buildBlockWithPush0();
+    final DebugTraceBlockStreamer streamer =
+        new DebugTraceBlockStreamer(
+            block, TraceOptions.DEFAULT, fixture.getProtocolSchedule(), blockchainQueries);
+
+    // streaming path
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    streamer.streamTo(out, mapper);
+    final JsonNode streamedRoot = mapper.readTree(out.toByteArray());
+
+    // accumulating path
+    final List<Object> accumulated = streamer.accumulateAll();
+    final JsonNode accRoot = mapper.readTree(mapper.writeValueAsBytes(accumulated));
+
+    assertThat(streamedRoot)
+        .as("streaming and accumulating paths must produce identical JSON")
+        .isEqualTo(accRoot);
+  }
+
+  /** Stack arrays for PUSH0 operations must contain "0x0" entries. */
+  @Test
+  public void zeroStackEntriesAreEncodedAsHexZero() throws Exception {
+    final Block block = buildBlockWithPush0();
+    final DebugTraceBlockStreamer streamer =
+        new DebugTraceBlockStreamer(
+            block, TraceOptions.DEFAULT, fixture.getProtocolSchedule(), blockchainQueries);
+
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    streamer.streamTo(out, mapper);
+    final JsonNode root = mapper.readTree(out.toByteArray());
+    final JsonNode structLogs = root.get(0).get("result").get("structLogs");
+
+    // Find a struct log whose stack contains "0x0" (from PUSH0)
+    boolean foundZero = false;
+    for (final JsonNode log : structLogs) {
+      if (log.has("stack")) {
+        for (final JsonNode item : log.get("stack")) {
+          if ("0x0".equals(item.asText())) {
+            foundZero = true;
+            break;
+          }
+        }
+      }
+      if (foundZero) break;
+    }
+    assertThat(foundZero).as("Expected at least one 0x0 stack entry from PUSH0").isTrue();
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -171,6 +317,27 @@ public class DebugTraceBlockStreamerRevertReasonTest {
             .chainId(BigInteger.valueOf(42))
             .signAndBuild(KEY_PAIR);
 
+    return buildBlock(tx);
+  }
+
+  private Block buildBlockWithPush0() {
+    // Contract creation tx whose init code uses PUSH0 opcodes
+    final Transaction tx =
+        Transaction.builder()
+            .type(TransactionType.EIP1559)
+            .nonce(0)
+            .maxPriorityFeePerGas(Wei.of(5))
+            .maxFeePerGas(Wei.of(7))
+            .gasLimit(200_000L)
+            .value(Wei.ZERO)
+            .payload(PUSH0_INIT_CODE)
+            .chainId(BigInteger.valueOf(42))
+            .signAndBuild(KEY_PAIR);
+
+    return buildBlock(tx);
+  }
+
+  private Block buildBlock(final Transaction tx) {
     final BlockHeader genesis = fixture.getBlockchain().getChainHeadHeader();
     final BlockHeader header =
         new BlockHeaderTestFixture()
