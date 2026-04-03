@@ -161,7 +161,7 @@ public class DebugTraceBlockByNumberTest {
     assertThat(traceResult.get("gas").asLong()).isGreaterThan(0);
     // Contract increments input (5) by 1, returns 6 as 32-byte value
     assertThat(traceResult.get("returnValue").asText())
-        .isEqualTo("0000000000000000000000000000000000000000000000000000000000000006");
+        .isEqualTo("0x0000000000000000000000000000000000000000000000000000000000000006");
 
     // Verify structLogs contains the expected opcode sequence
     final JsonNode structLogs = traceResult.get("structLogs");

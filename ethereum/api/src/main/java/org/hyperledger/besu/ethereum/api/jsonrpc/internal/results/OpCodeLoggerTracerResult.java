@@ -36,7 +36,7 @@ public class OpCodeLoggerTracerResult {
   public OpCodeLoggerTracerResult(final TransactionTrace transactionTrace) {
     gas = transactionTrace.getGas();
     final Bytes output = transactionTrace.getResult().getOutput();
-    returnValue = output.isEmpty() ? "" : output.toUnprefixedHexString();
+    returnValue = output.isEmpty() ? "" : output.toHexString();
     structLogs = new ArrayList<>(transactionTrace.getTraceFrames().size());
     transactionTrace.getTraceFrames().parallelStream()
         .map(OpCodeLoggerTracerResult::createStructLog)
