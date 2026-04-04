@@ -34,6 +34,8 @@ import org.hyperledger.besu.ethereum.core.ExecutionContextTestFixture;
 import org.hyperledger.besu.ethereum.core.MiningConfiguration;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.debug.TraceOptions;
+import org.hyperledger.besu.ethereum.debug.TracerType;
+import org.hyperledger.besu.evm.tracing.OpCodeTracerConfigBuilder;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 
 import java.io.ByteArrayOutputStream;
@@ -299,6 +301,69 @@ public class DebugTraceBlockStreamerHexEncodingTest {
       if (foundZero) break;
     }
     assertThat(foundZero).as("Expected at least one 0x0 stack entry from PUSH0").isTrue();
+  }
+
+  /**
+   * Memory words must be 32-byte zero-padded hex (66 chars each), not compact. Streaming and
+   * accumulating paths must agree on the format when memory tracing is enabled.
+   */
+  @Test
+  public void streamingAndAccumulatingPathsMatchWithMemoryEnabled() throws Exception {
+    final TraceOptions withMemory =
+        new TraceOptions(
+            TracerType.OPCODE_TRACER,
+            OpCodeTracerConfigBuilder.createFrom(TraceOptions.DEFAULT.opCodeTracerConfig())
+                .traceMemory(true)
+                .build(),
+            java.util.Map.of());
+    // Call the increment contract (uses MSTORE) with input=5
+    final Address incrementContract =
+        Address.fromHexString("0x0030000000000000000000000000000000000000");
+    final Transaction tx =
+        Transaction.builder()
+            .type(TransactionType.EIP1559)
+            .nonce(0)
+            .maxPriorityFeePerGas(Wei.of(5))
+            .maxFeePerGas(Wei.of(7))
+            .gasLimit(100_000L)
+            .to(incrementContract)
+            .value(Wei.ZERO)
+            .payload(Bytes32.leftPad(Bytes.of(5)))
+            .chainId(BigInteger.valueOf(42))
+            .signAndBuild(KEY_PAIR);
+    final Block block = buildBlock(tx);
+    final DebugTraceBlockStreamer streamer =
+        new DebugTraceBlockStreamer(
+            block, withMemory, fixture.getProtocolSchedule(), blockchainQueries);
+
+    // streaming path
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    streamer.streamTo(out, mapper);
+    final JsonNode streamedRoot = mapper.readTree(out.toByteArray());
+
+    // accumulating path
+    final List<Object> accumulated = streamer.accumulateAll();
+    final JsonNode accRoot = mapper.readTree(mapper.writeValueAsBytes(accumulated));
+
+    // Verify memory entries are actually present (MSTORE creates memory)
+    final JsonNode structLogs = streamedRoot.get(0).get("result").get("structLogs");
+    assertThat(structLogs.size()).as("trace must have struct logs").isGreaterThan(0);
+    boolean hasMemory = false;
+    for (final JsonNode log : structLogs) {
+      if (log.has("memory")) {
+        hasMemory = true;
+        break;
+      }
+    }
+    assertThat(hasMemory)
+        .as(
+            "trace with traceMemory=true must contain memory entries, got %d logs: %s",
+            structLogs.size(), structLogs.get(0))
+        .isTrue();
+
+    assertThat(streamedRoot)
+        .as("streaming and accumulating paths must produce identical JSON with memory enabled")
+        .isEqualTo(accRoot);
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────

@@ -415,7 +415,7 @@ public class DebugTraceBlockStreamer {
         for (int i = 0; i < wordCount; i++) {
           if (i > 0) writeByte(COMMA);
           writeByte(QUOTE);
-          writeHex(frame.readMutableMemory(i * 32L, 32).toArrayUnsafe(), true);
+          writeHex(frame.readMutableMemory(i * 32L, 32).toArrayUnsafe(), false);
           writeByte(QUOTE);
         }
         writeByte(ARR_CLOSE);
