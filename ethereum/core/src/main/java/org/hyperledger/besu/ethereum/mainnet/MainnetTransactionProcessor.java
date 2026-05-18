@@ -271,6 +271,7 @@ public class MainnetTransactionProcessor {
 
       long codeDelegationRefund = 0L;
       long alreadyExistingDelegators = 0L;
+      long authBaseRefundCount = 0L;
       if (transaction.getType().equals(TransactionType.DELEGATE_CODE)) {
         if (maybeCodeDelegationProcessor.isEmpty()) {
           throw new RuntimeException("Code delegation processor is required for 7702 transactions");
@@ -283,6 +284,7 @@ public class MainnetTransactionProcessor {
                 .process(delegationUpdater, transaction, accessLocationTracker);
         eip2930WarmAddressList.addAll(codeDelegationResult.accessedDelegatorAddresses());
         alreadyExistingDelegators = codeDelegationResult.alreadyExistingDelegators();
+        authBaseRefundCount = codeDelegationResult.authBaseRefundCount();
         codeDelegationRefund =
             gasCalculator.calculateDelegateCodeGasRefund(alreadyExistingDelegators);
         delegationUpdater.commit();
@@ -409,26 +411,17 @@ public class MainnetTransactionProcessor {
                 .build();
       }
       initializeStateGasReservoir(initialFrame, gasAvailable, intrinsicRegularGas, stateGasCalc);
-      chargeIntrinsicStateGas(initialFrame, transaction, alreadyExistingDelegators, stateGasCalc);
+      chargeIntrinsicStateGas(
+          initialFrame, transaction, alreadyExistingDelegators, authBaseRefundCount, stateGasCalc);
       // EIP-8037: Advance the undo mark so intrinsic state gas charges (auth delegation,
       // contract creation) are not rolled back if the initial frame's execution reverts.
       // These are transaction-level costs that persist regardless of execution outcome.
       initialFrame.advanceUndoMark();
 
       Deque<MessageFrame> messageFrameStack = initialFrame.getMessageFrameStack();
-
-      // EIP-8037: Track spillBurned before the initial frame's final processing step.
-      // When the initial frame reverts/halts, its state gas spill should count as state gas
-      // for block accounting. Child frame spills (tracked earlier) should not.
-      long spillBurnedBeforeInitialFinal = 0;
       while (!messageFrameStack.isEmpty()) {
-        if (messageFrameStack.size() == 1) {
-          spillBurnedBeforeInitialFinal = initialFrame.getStateGasSpillBurned();
-        }
         process(messageFrameStack.peekFirst(), operationTracer);
       }
-      final long initialFrameStateGasSpill =
-          initialFrame.getStateGasSpillBurned() - spillBurnedBeforeInitialFinal;
 
       // EIP-8037: Runtime TX_MAX_GAS_LIMIT enforcement on regular gas only.
       // With multidimensional gas, tx.gasLimit can exceed TX_MAX_GAS_LIMIT to accommodate
@@ -457,11 +450,6 @@ public class MainnetTransactionProcessor {
 
       if (txSucceeded) {
         worldUpdater.commit();
-        // EIP-8037: end-of-tx refund for accounts created and
-        // self-destructed within this transaction. Must run before tx_gas_used_before_refund is
-        // computed below so the sender is not charged for state that was destroyed. Pass the
-        // intrinsic state gas so the refund is capped at execution-time state gas only.
-        stateGasCalc.refundSameTransactionSelfDestructStateGas(initialFrame, intrinsicStateGas);
       } else {
         if (initialFrame.getExceptionalHaltReason().isPresent()) {
           validationResult =
@@ -474,6 +462,11 @@ public class MainnetTransactionProcessor {
               ValidationResult.invalid(
                   TransactionInvalidReason.EXECUTION_HALTED,
                   "Regular gas consumption exceeds TX_MAX_GAS_LIMIT");
+        }
+        // No account persists on a failed creation tx, so the intrinsic NEW_ACCOUNT charge must
+        // be returned to the sender via the reservoir leftover.
+        if (stateGasCalc.isActive() && transaction.isContractCreation()) {
+          stateGasCalc.refundTxCreateIntrinsicStateGas(initialFrame);
         }
       }
 
@@ -513,9 +506,6 @@ public class MainnetTransactionProcessor {
               .remainingGas(initialFrame.getRemainingGas())
               .stateGasReservoir(initialFrame.getStateGasReservoir())
               .stateGasUsed(initialFrame.getStateGasUsed())
-              .initialFrameStateGasSpill(initialFrameStateGasSpill)
-              .stateGasSpillBurned(initialFrame.getStateGasSpillBurned())
-              .initialFrameRegularHaltBurn(initialFrame.getInitialFrameRegularHaltBurn())
               .refundedGas(refundedGas)
               .floorCost(floorCost)
               .regularGasLimitExceeded(regularGasLimitExceeded)
@@ -596,15 +586,6 @@ public class MainnetTransactionProcessor {
       final Optional<PartialBlockAccessView> partialBlockAccessView =
           accessLocationTracker.map(tracker -> tracker.createPartialBlockAccessView(worldState));
 
-      // EIP-8037: for EIP-7702 authorizations targeting
-      // existing accounts the actual state gas charged is less than the immutable worst-case
-      // intrinsic_state_gas. Block accounting uses the worst case, so track the difference as
-      // an overhead that is added on top of stateGasUsed at the block level.
-      final long intrinsicStateGasOverhead =
-          stateGasCalc.isActive() && alreadyExistingDelegators > 0
-              ? stateGasCalc.emptyAccountDelegationStateGas() * alreadyExistingDelegators
-              : 0L;
-
       if (txSucceeded) {
         return TransactionProcessingResult.successful(
             initialFrame.getLogs(),
@@ -612,7 +593,6 @@ public class MainnetTransactionProcessor {
             refundedGas,
             usedGas,
             effectiveStateGas,
-            intrinsicStateGasOverhead,
             initialFrame.getOutputData(),
             partialBlockAccessView,
             validationResult);
@@ -634,7 +614,6 @@ public class MainnetTransactionProcessor {
             refundedGas,
             usedGas,
             effectiveStateGas,
-            intrinsicStateGasOverhead,
             validationResult,
             initialFrame.getRevertReason(),
             initialFrame.getExceptionalHaltReason(),
@@ -704,6 +683,10 @@ public class MainnetTransactionProcessor {
     return clearEmptyAccounts;
   }
 
+  public GasCalculator getGasCalculator() {
+    return gasCalculator;
+  }
+
   /**
    * EIP-8037: Initializes the state gas reservoir for Amsterdam+ forks. When multidimensional gas
    * is active, regular gas is capped at {@code TX_MAX_GAS_LIMIT - intrinsic}; gas beyond that cap
@@ -725,21 +708,22 @@ public class MainnetTransactionProcessor {
     initialFrame.setStateGasReservoir(reservoir);
   }
 
-  /**
-   * EIP-8037: Charges intrinsic state gas (contract creation and authorization delegation) before
-   * frame execution begins.
-   */
+  /** Charges EIP-8037 intrinsic state gas (contract creation and authorization delegation). */
   private static void chargeIntrinsicStateGas(
       final MessageFrame initialFrame,
       final Transaction transaction,
       final long alreadyExistingDelegators,
+      final long authBaseRefundCount,
       final StateGasCostCalculator stateGasCalc) {
     if (transaction.isContractCreation()) {
       stateGasCalc.chargeCreateStateGas(initialFrame);
     }
     if (transaction.getType().equals(TransactionType.DELEGATE_CODE)) {
       stateGasCalc.chargeCodeDelegationStateGas(
-          initialFrame, transaction.codeDelegationListSize(), alreadyExistingDelegators);
+          initialFrame,
+          transaction.codeDelegationListSize(),
+          alreadyExistingDelegators,
+          authBaseRefundCount);
     }
   }
 

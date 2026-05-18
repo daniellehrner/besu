@@ -45,7 +45,8 @@ public interface StateGasCostCalculator {
   long costPerStateByte();
 
   /**
-   * Returns the state gas for a CREATE operation (112 * cpsb).
+   * Returns the EIP-8037 state gas for a CREATE operation: {@code STATE_BYTES_PER_NEW_ACCOUNT *
+   * cpsb}.
    *
    * @return the state gas for CREATE
    */
@@ -68,14 +69,16 @@ public interface StateGasCostCalculator {
   long codeDepositHashGas(int codeSize);
 
   /**
-   * Returns the state gas for creating a new account (112 * cpsb).
+   * Returns the EIP-8037 state gas for creating a new account: {@code STATE_BYTES_PER_NEW_ACCOUNT *
+   * cpsb}.
    *
    * @return the state gas for new account creation
    */
   long newAccountStateGas();
 
   /**
-   * Returns the state gas for storage set 0->nonzero (32 * cpsb).
+   * Returns the EIP-8037 state gas for storage set 0→nonzero: {@code STATE_BYTES_PER_STORAGE_SLOT *
+   * cpsb}.
    *
    * @return the state gas for storage set
    */
@@ -89,7 +92,7 @@ public interface StateGasCostCalculator {
   long storageSetRegularGas();
 
   /**
-   * Returns the state gas for EIP-7702 auth base (23 * cpsb).
+   * Returns the EIP-8037 state gas for EIP-7702 auth base: {@code STATE_BYTES_PER_AUTH * cpsb}.
    *
    * @return the state gas for auth base
    */
@@ -103,7 +106,8 @@ public interface StateGasCostCalculator {
   long authBaseRegularGas();
 
   /**
-   * Returns the state gas for empty account delegation (112 * cpsb).
+   * Returns the EIP-8037 state gas for an EIP-7702 delegation targeting a previously empty account:
+   * {@code STATE_BYTES_PER_NEW_ACCOUNT * cpsb}.
    *
    * @return the state gas for empty account delegation
    */
@@ -148,7 +152,7 @@ public interface StateGasCostCalculator {
   }
 
   /**
-   * Charges state gas for CREATE/CREATE2 operations (new account: 112 * cpsb).
+   * Charges EIP-8037 state gas for CREATE/CREATE2 operations.
    *
    * @param frame the message frame
    * @return true if gas was successfully charged, false if insufficient gas
@@ -202,10 +206,17 @@ public interface StateGasCostCalculator {
    * @param frame the message frame
    * @param totalDelegations total number of code delegations
    * @param alreadyExistingDelegators number of delegators that already existed
+   * @param authBaseRefundCount number of authorizations that don't write new delegation-indicator
+   *     bytes — either the authority already has a delegation designator (overwritten in place) or
+   *     {@code auth.address} is zero (no indicator written). The AUTH_BASE portion is refundable
+   *     for these.
    * @return true if gas was successfully charged, false if insufficient gas
    */
   default boolean chargeCodeDelegationStateGas(
-      final MessageFrame frame, final long totalDelegations, final long alreadyExistingDelegators) {
+      final MessageFrame frame,
+      final long totalDelegations,
+      final long alreadyExistingDelegators,
+      final long authBaseRefundCount) {
     return true;
   }
 
@@ -225,45 +236,24 @@ public interface StateGasCostCalculator {
       final Supplier<UInt256> originalValue) {}
 
   /**
-   * Refunds the state gas previously charged by {@link #chargeCreateStateGas(MessageFrame)} when a
-   * CREATE/CREATE2 silently fails at the opcode level (insufficient balance, nonce overflow, stack
-   * depth limit, or address collision), before a child frame is entered. The refund is credited
-   * directly to state_gas_reservoir and execution_state_gas_used is decremented. Per EIP-8037
-   * (ethereum/EIPs #11532 item 3): no account was created, so no state gas should be paid.
+   * Refunds the EIP-8037 state gas previously charged by {@link
+   * #chargeCreateStateGas(MessageFrame)} when a CREATE/CREATE2 silently fails at the opcode level
+   * (insufficient balance, nonce overflow, stack depth limit, or address collision), before a child
+   * frame is entered. No account is created, so no state gas should be paid — the refund is
+   * credited directly to state_gas_reservoir and execution_state_gas_used is decremented.
    *
    * @param frame the message frame performing the CREATE
    */
   default void refundCreateStateGas(final MessageFrame frame) {}
 
   /**
-   * Applies the end-of-transaction refund for accounts that were both created and self-destructed
-   * within the same transaction (EIP-6780). Per EIP-8037 (ethereum/EIPs #11532 item 4): for each
-   * such account, refund to state_gas_reservoir (and decrement execution_state_gas_used) the state
-   * gas for:
+   * Refunds the EIP-8037 intrinsic NEW_ACCOUNT × CPSB state gas charged at the start of a
+   * contract-creation transaction when the top-level CREATE ends in revert or exceptional halt: no
+   * account persists, so the intrinsic charge is returned to the reservoir.
    *
-   * <ul>
-   *   <li>account creation: {@code 112 × cost_per_state_byte}
-   *   <li>code deposit: {@code len(code) × cost_per_state_byte}
-   *   <li>non-zero storage slots: {@code 32 × cost_per_state_byte} per slot
-   * </ul>
-   *
-   * <p>The total refund is capped at execution-time state gas ({@code stateGasUsed -
-   * intrinsicStateGas}); the intrinsic charge paid at transaction start is never refunded. This
-   * matters when a top-level CREATE's own contract address is in {@code createSet ∩
-   * selfDestructSet} — without the cap, the refund would erase the intrinsic create-state-gas.
-   * Matches geth/nethermind/erigon/ethrex.
-   *
-   * <p>This must be applied before {@code tx_gas_used_before_refund} is computed so the sender is
-   * not charged for state that was destroyed. Storage slots restored to zero during execution
-   * (0→X→0) are not counted here because they have a final value of zero — the SSTORE restoration
-   * refund already returned their state gas.
-   *
-   * @param initialFrame the initial (depth-0) frame after transaction execution
-   * @param intrinsicStateGas the intrinsic state gas charged at tx start; refund cannot consume
-   *     this portion of {@code stateGasUsed}
+   * @param initialFrame the initial (depth-0) frame after the failed contract-creation transaction
    */
-  default void refundSameTransactionSelfDestructStateGas(
-      final MessageFrame initialFrame, final long intrinsicStateGas) {}
+  default void refundTxCreateIntrinsicStateGas(final MessageFrame initialFrame) {}
 
   /**
    * Computes the intrinsic state gas for a transaction. This is the worst-case state gas charged
@@ -281,7 +271,8 @@ public interface StateGasCostCalculator {
       stateGas += createStateGas();
     }
     if (codeDelegationCount > 0) {
-      // Worst case: all delegators are new accounts → (112 + 23) * cpsb each
+      // EIP-8037 worst case: every delegation creates a new account, so charge
+      // NEW_ACCOUNT + AUTH_BASE state gas per auth. Refunds restore the unused portion later.
       stateGas += (emptyAccountDelegationStateGas() + authBaseStateGas()) * codeDelegationCount;
     }
     return stateGas;

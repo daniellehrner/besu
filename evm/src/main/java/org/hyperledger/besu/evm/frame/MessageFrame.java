@@ -198,10 +198,6 @@ public class MessageFrame {
   // Metadata fields.
   private final Type type;
   private State state = State.NOT_STARTED;
-  // EIP-7778/EIP-8037: Flipped to true once code execution starts; used to distinguish a halt
-  // that fires during opcode execution (halt-burn counts toward block regular gas) from a halt
-  // raised pre-execution in the processor's start() (halt-burn must be excluded).
-  private boolean codeExecuted = false;
 
   // Machine state fields.
   private long gasRemaining;
@@ -873,11 +869,9 @@ public class MessageFrame {
   // ============================================================
   // EIP-8037 state gas accounting
   // ============================================================
-  //
-  // The state-gas dimension is shared transaction-wide via TxValues. UndoScalar-backed counters
-  // (stateGasUsed, stateGasReservoir, noGrowthStateGasRefunds) roll back on revert/halt; long[]-
-  // backed counters (stateGasSpillBurned, initialFrameRegularHaltBurn) accumulate permanently for
-  // block accounting and are NOT undone.
+  // stateGasUsed and stateGasReservoir live transaction-wide on TxValues as UndoScalars, so they
+  // roll back on frame failure. The frame-failure handler restores any state-gas spill by
+  // crediting the reservoir on the way out.
 
   // ---- stateGasUsed ----
 
@@ -941,16 +935,6 @@ public class MessageFrame {
     if (Eip8037Trace.ENABLED) {
       Eip8037Trace.creditReservoir(getDepth(), amount, before, after);
     }
-  }
-
-  /**
-   * Deducts {@code amount} from the reservoir (used to remove a no-growth refund credit during
-   * spill-burn handling on revert/halt).
-   *
-   * @param amount the amount to subtract from the reservoir
-   */
-  public void decrementStateGasReservoir(final long amount) {
-    txValues.stateGasReservoir().set(txValues.stateGasReservoir().get() - amount);
   }
 
   // ---- consume ----
@@ -1033,112 +1017,9 @@ public class MessageFrame {
     return sufficient;
   }
 
-  // ---- no-growth refund counter ----
-
-  /**
-   * Records a no-growth state gas refund (SSTORE 0→X→0, CREATE silent failure, same-tx
-   * SELFDESTRUCT). Read by {@code AbstractMessageProcessor.handleStateGasSpill} to subtract
-   * refunds-in-scope from the spill credit on revert/halt — those refunds must contribute nothing
-   * to a parent's reservoir when any frame in the chain fails.
-   *
-   * @param amount the refund amount to record
-   */
-  public void recordNoGrowthStateGasRefund(final long amount) {
-    txValues.noGrowthStateGasRefunds().set(txValues.noGrowthStateGasRefunds().get() + amount);
-  }
-
-  /**
-   * Returns the cumulative no-growth state gas refunds applied so far.
-   *
-   * @return the cumulative no-growth refunds
-   */
-  public long getNoGrowthStateGasRefunds() {
-    return txValues.noGrowthStateGasRefunds().get();
-  }
-
-  // ---- block-accounting counters (NOT undone on revert) ----
-
-  /**
-   * Accumulates state gas that spilled into gasRemaining in a reverted child frame. NOT undone on
-   * revert — tracked permanently for block accounting.
-   *
-   * @param amount the spill-burn amount to add
-   */
-  public void accumulateStateGasSpillBurned(final long amount) {
-    txValues.stateGasSpillBurned()[0] += amount;
-  }
-
-  /**
-   * Returns the total state gas spill burned by reverted child frames.
-   *
-   * @return the cumulative spill-burn
-   */
-  public long getStateGasSpillBurned() {
-    return txValues.stateGasSpillBurned()[0];
-  }
-
-  /**
-   * Accumulates reservoir gas that was drained for an in-scope charge whose matching no-growth
-   * refund was nullified by a reverted ancestor (EIP-8037). Spec semantics: the refund is
-   * subtracted at {@code incorporate_child_on_error} so the drain "stays paid" even though Besu's
-   * UndoScalar rollback restores the shared reservoir to entry. NOT undone on revert.
-   *
-   * @param amount the reservoir-burn amount to add
-   */
-  public void accumulateStateGasReservoirBurn(final long amount) {
-    txValues.stateGasReservoirBurn()[0] += amount;
-  }
-
-  /**
-   * Returns the cumulative reservoir gas effectively burned by reverted no-growth refunds.
-   *
-   * @return the cumulative reservoir-burn
-   */
-  public long getStateGasReservoirBurn() {
-    return txValues.stateGasReservoirBurn()[0];
-  }
-
-  /**
-   * Accumulates gas that was sitting unused in the initial frame's gasRemaining at the moment of an
-   * exceptional halt (EIP-7778/EIP-8037). The sender pays via receipts, but since no operation
-   * consumed it, it must be excluded from block regular gas. Not undone on revert.
-   *
-   * @param amount the halt-burn amount to add
-   */
-  public void accumulateInitialFrameRegularHaltBurn(final long amount) {
-    txValues.initialFrameRegularHaltBurn()[0] += amount;
-  }
-
-  /**
-   * Returns the gas burned on the initial frame's exceptional halt.
-   *
-   * @return the cumulative initial-frame halt-burn
-   */
-  public long getInitialFrameRegularHaltBurn() {
-    return txValues.initialFrameRegularHaltBurn()[0];
-  }
-
   // ============================================================
   // End EIP-8037 state gas accounting
   // ============================================================
-
-  /**
-   * Marks that opcode execution has started on this frame. Once set, an exceptional halt is
-   * classified as "during code execution" (halt-burned gas counts toward block regular gas) rather
-   * than pre-execution (halt-burned gas is excluded).
-   */
-  public void markCodeExecuted() {
-    this.codeExecuted = true;
-  }
-
-  /**
-   * Returns whether opcode execution has started on this frame.
-   *
-   * @return true if {@link #markCodeExecuted()} was invoked
-   */
-  public boolean isCodeExecuted() {
-    return codeExecuted;
-  }
 
   /**
    * Add recipient to the self-destruct set if not already present.

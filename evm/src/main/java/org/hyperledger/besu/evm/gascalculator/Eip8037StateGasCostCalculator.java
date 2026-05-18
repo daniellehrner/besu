@@ -17,10 +17,8 @@ package org.hyperledger.besu.evm.gascalculator;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.account.Account;
-import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 
-import java.util.Set;
 import java.util.function.Supplier;
 
 import org.apache.tuweni.units.bigints.UInt256;
@@ -38,27 +36,24 @@ import org.apache.tuweni.units.bigints.UInt256;
  * <p>Where TARGET_STATE_GROWTH_PER_YEAR = 100 * 1024^3 bytes (100 GiB).
  */
 public class Eip8037StateGasCostCalculator implements StateGasCostCalculator {
-  /**
-   * Number of state bytes per new account (20-byte address + 8-byte nonce + 32-byte balance +
-   * 32-byte code hash + 20-byte storage root = 112 bytes).
-   */
-  static final int STATE_BYTES_PER_NEW_ACCOUNT = 112;
+  /** Number of state bytes per new account. */
+  static final int STATE_BYTES_PER_NEW_ACCOUNT = 120;
 
-  /** Number of state bytes per storage slot (32 bytes for key + value). */
-  static final int STATE_BYTES_PER_STORAGE_SLOT = 32;
+  /** Number of state bytes per storage slot. */
+  static final int STATE_BYTES_PER_STORAGE_SLOT = 64;
 
   /** Number of state bytes per auth delegation (23 bytes). */
   static final int STATE_BYTES_PER_AUTH = 23;
 
   /**
    * Regular gas for storage set (GAS_STORAGE_UPDATE - GAS_COLD_SLOAD = 5000 - 2100 = 2900). The
-   * state portion (32 * cpsb) is charged separately.
+   * state portion ({@code STATE_BYTES_PER_STORAGE_SLOT * cpsb}) is charged separately.
    */
   static final long STORAGE_SET_REGULAR_GAS = 2_900L;
 
   /**
    * Regular gas for EIP-7702 auth base (calldata + ecrecover + cold access + warm write ≈ 7500).
-   * The state portion (23 * cpsb) is charged separately.
+   * The state portion ({@code STATE_BYTES_PER_AUTH * cpsb}) is charged separately.
    */
   static final long AUTH_BASE_REGULAR_GAS = 7_500L;
 
@@ -68,7 +63,7 @@ public class Eip8037StateGasCostCalculator implements StateGasCostCalculator {
   /** The mainnet transaction gas limit cap from EIP-7825, enforced at runtime on regular gas. */
   static final long TX_MAX_GAS_LIMIT = 16_777_216L;
 
-  static final long COST_PER_STATE_BYTE = 1174L;
+  static final long COST_PER_STATE_BYTE = 1530L;
 
   /** Instantiates a new EIP-8037 state gas cost calculator. */
   public Eip8037StateGasCostCalculator() {}
@@ -181,83 +176,33 @@ public class Eip8037StateGasCostCalculator implements StateGasCostCalculator {
 
   @Override
   public boolean chargeCodeDelegationStateGas(
-      final MessageFrame frame, final long totalDelegations, final long alreadyExistingDelegators) {
-    // Each authorization incurs auth base state gas (23 * cpsb)
-    if (!frame.consumeStateGas(authBaseStateGas() * totalDelegations)) {
+      final MessageFrame frame,
+      final long totalDelegations,
+      final long alreadyExistingDelegators,
+      final long authBaseRefundCount) {
+    // Charge the full worst-case intrinsic up-front so block_regular = tx_gas -
+    // intrinsic_state_gas regardless of authority pre-state. Refunds below restore the actual
+    // state growth to both the reservoir (for the sender) and stateGasUsed (for block accounting).
+    final long perAuthIntrinsic = authBaseStateGas() + emptyAccountDelegationStateGas();
+    if (!frame.consumeStateGas(perAuthIntrinsic * totalDelegations)) {
       return false;
     }
-    // New empty accounts incur additional state gas (112 * cpsb)
-    final long newEmptyAccounts = totalDelegations - alreadyExistingDelegators;
-    if (newEmptyAccounts > 0
-        && !frame.consumeStateGas(emptyAccountDelegationStateGas() * newEmptyAccounts)) {
-      return false;
-    }
-    // EIP-8037: intrinsic state gas is sized assuming every
-    // authority is a new empty account ((112 + 23) × cpsb per auth) and is immutable after
-    // transaction validation. When an authority already exists, the 112 × cpsb portion is
-    // refunded directly to state_gas_reservoir during authorization processing. The intrinsic
-    // value itself is not mutated; the refund is reflected in the final state_gas_reservoir.
-    //
-    // Because intrinsic state gas is not pre-deducted from tx.gas in this implementation (it is
-    // charged explicitly via consumeStateGas above, drawing from reservoir/gas_left), the
-    // reservoir credit is paired with a matching gas_left debit to preserve the sender
-    // bookkeeping invariant tx.gas - (gas_left + reservoir) = gas actually charged.
-    if (alreadyExistingDelegators > 0) {
-      final long reservoirCredit = emptyAccountDelegationStateGas() * alreadyExistingDelegators;
-      if (frame.getRemainingGas() < reservoirCredit) {
-        return false;
-      }
-      frame.decrementRemainingGas(reservoirCredit);
-      frame.incrementStateGasReservoir(reservoirCredit);
+    long refund = emptyAccountDelegationStateGas() * alreadyExistingDelegators;
+    refund += authBaseStateGas() * authBaseRefundCount;
+    if (refund > 0L) {
+      creditReservoir(frame, refund);
     }
     return true;
   }
 
   @Override
-  public void refundSameTransactionSelfDestructStateGas(
-      final MessageFrame initialFrame, final long intrinsicStateGas) {
-    final Set<Address> destroyed = initialFrame.getSelfDestructs();
-    if (destroyed.isEmpty()) {
-      return;
-    }
-    final Set<Address> created = initialFrame.getCreates();
-    final long storageSlotGas = storageSetStateGas();
-    long totalRefund = 0L;
-    for (final Address address : destroyed) {
-      if (!created.contains(address)) {
-        // Only refund for accounts both created AND destroyed in this transaction (EIP-6780).
-        continue;
-      }
-      final MutableAccount account = initialFrame.getWorldUpdater().getAccount(address);
-      if (account == null) {
-        continue;
-      }
-      totalRefund += createStateGas();
-      totalRefund += codeDepositStateGas(account.getCode().size());
-      // The account was created in this transaction, so every slot it currently holds is in
-      // the updater's journaled writes — Bonsai does not support trie enumeration.
-      for (final UInt256 value : account.getUpdatedStorage().values()) {
-        if (!value.isZero()) {
-          totalRefund += storageSlotGas;
-        }
-      }
-    }
-    if (totalRefund > 0L) {
-      // Cap at execution-time state gas; intrinsic was paid up-front and is not refundable.
-      // Matches geth/nethermind/erigon/ethrex.
-      final long executionStateGas =
-          Math.max(0L, initialFrame.getStateGasUsed() - intrinsicStateGas);
-      final long cappedRefund = Math.min(totalRefund, executionStateGas);
-      if (cappedRefund > 0L) {
-        initialFrame.incrementStateGasReservoir(cappedRefund);
-        initialFrame.decrementStateGasUsed(cappedRefund);
-      }
-    }
+  public void refundCreateStateGas(final MessageFrame frame) {
+    creditReservoir(frame, createStateGas());
   }
 
   @Override
-  public void refundCreateStateGas(final MessageFrame frame) {
-    applyNoGrowthRefund(frame, createStateGas());
+  public void refundTxCreateIntrinsicStateGas(final MessageFrame initialFrame) {
+    creditReservoir(initialFrame, createStateGas());
   }
 
   @Override
@@ -267,28 +212,19 @@ public class Eip8037StateGasCostCalculator implements StateGasCostCalculator {
       final Supplier<UInt256> currentValue,
       final Supplier<UInt256> originalValue) {
     if (StorageTransition.of(newValue, currentValue, originalValue).isUnwoundSet()) {
-      applyNoGrowthRefund(frame, storageSetStateGas());
+      creditReservoir(frame, storageSetStateGas());
     }
   }
 
   /**
-   * Applies a no-growth state-gas refund: credits {@code amount} back to the reservoir, decrements
-   * {@code stateGasUsed}, and records the refund in the no-growth counter.
-   *
-   * <p>The credit goes directly to {@code state_gas_reservoir}, bypassing the 20% refund-counter
-   * cap, so the full amount is returned regardless of cost_per_state_byte. The refund mutates the
-   * frame's {@code UndoScalar} counters and is therefore undone via {@link MessageFrame#rollback()}
-   * on revert/halt — it contributes to the reservoir only when the full frame chain succeeds.
-   *
-   * <p>The amount is also recorded via {@link MessageFrame#recordNoGrowthStateGasRefund(long)} so
-   * {@code AbstractMessageProcessor.handleStateGasSpill} can subtract refunds-in-scope from the
-   * spill credit on revert/halt — those refunds must contribute nothing to a parent's reservoir
-   * when any frame in the chain fails. Mirrors the {@code state_gas_refund} counter.
+   * Credits {@code amount} back to the reservoir and decrements stateGasUsed by the same amount.
+   * Both counters are UndoScalar-tracked, so the credit is rolled back if the enclosing frame
+   * fails — the frame-failure handler then restores the spill via a reservoir credit, so
+   * same-frame charge/refund pairs net to zero for the sender.
    */
-  private static void applyNoGrowthRefund(final MessageFrame frame, final long amount) {
+  private static void creditReservoir(final MessageFrame frame, final long amount) {
     frame.incrementStateGasReservoir(amount);
     frame.decrementStateGasUsed(amount);
-    frame.recordNoGrowthStateGasRefund(amount);
   }
 
   /**
