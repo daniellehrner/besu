@@ -326,6 +326,7 @@ public class MergeCoordinatorCacheReorgTest implements MergeGenesisConfigHelper 
         Address.ZERO,
         Optional.empty(),
         Optional.empty(),
+        Optional.empty(),
         Optional.empty());
 
     boolean built = latch.await(30, TimeUnit.SECONDS);

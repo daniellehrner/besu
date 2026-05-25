@@ -206,6 +206,7 @@ public class TestingBuildBlockV1 implements JsonRpcMethod {
     final Bytes32 parentBeaconBlockRoot = payloadAttributes.getParentBeaconBlockRoot();
     final Long timestamp = payloadAttributes.getTimestamp();
     final Long slotNumber = payloadAttributes.getSlotNumber();
+    final Long targetGasLimit = payloadAttributes.getTargetGasLimit();
 
     try {
       final Address coinbase = payloadAttributes.getSuggestedFeeRecipient();
@@ -228,6 +229,7 @@ public class TestingBuildBlockV1 implements JsonRpcMethod {
               Optional.of(withdrawals),
               Optional.ofNullable(parentBeaconBlockRoot),
               Optional.ofNullable(slotNumber),
+              Optional.ofNullable(targetGasLimit),
               parentHeader);
 
       final Block block = result.getBlock();

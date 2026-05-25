@@ -273,7 +273,8 @@ public abstract class AbstractEngineForkchoiceUpdatedV4 extends ExecutionEngineJ
                     payloadAttributes.getSuggestedFeeRecipient(),
                     finalWithdrawals,
                     Optional.ofNullable(payloadAttributes.getParentBeaconBlockRoot()),
-                    Optional.ofNullable(payloadAttributes.getSlotNumber())));
+                    Optional.ofNullable(payloadAttributes.getSlotNumber()),
+                    Optional.ofNullable(payloadAttributes.getTargetGasLimit())));
 
     payloadId.ifPresent(
         pid ->

@@ -49,6 +49,7 @@ public interface MergeMiningCoordinator extends MiningCoordinator {
    * @param withdrawals the optional list of withdrawals
    * @param parentBeaconBlockRoot optional root hash of the parent beacon block
    * @param slotNumber optional slot number (EIP-7843)
+   * @param targetGasLimit optional CL-supplied target gas limit for this payload
    * @return the payload identifier
    */
   PayloadIdentifier preparePayload(
@@ -58,7 +59,8 @@ public interface MergeMiningCoordinator extends MiningCoordinator {
       final Address feeRecipient,
       final Optional<List<Withdrawal>> withdrawals,
       final Optional<Bytes32> parentBeaconBlockRoot,
-      final Optional<Long> slotNumber);
+      final Optional<Long> slotNumber,
+      final Optional<Long> targetGasLimit);
 
   @Override
   default boolean isCompatibleWithEngineApi() {

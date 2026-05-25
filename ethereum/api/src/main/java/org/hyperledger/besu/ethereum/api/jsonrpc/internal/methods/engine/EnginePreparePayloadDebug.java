@@ -115,6 +115,7 @@ public class EnginePreparePayloadDebug extends ExecutionEngineJsonRpcMethod {
                     param.getFeeRecipient(),
                     Optional.of(withdrawals),
                     param.getParentBeaconBlockRoot(),
+                    Optional.empty(),
                     Optional.empty()));
   }
 }
