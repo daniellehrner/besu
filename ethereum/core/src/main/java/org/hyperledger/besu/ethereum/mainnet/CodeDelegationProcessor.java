@@ -77,10 +77,9 @@ public class CodeDelegationProcessor {
 
     transaction
         .getCodeDelegationList()
-        .get()
-        .forEach(
-            codeDelegation ->
-                processCodeDelegation(worldUpdater, codeDelegation, result, eip7928AccessList));
+        .ifPresent(
+          list -> list.forEach(
+            codeDelegation -> processCodeDelegation(worldUpdater, codeDelegation, result, eip7928AccessList)));
 
     return result;
   }
@@ -92,6 +91,60 @@ public class CodeDelegationProcessor {
       final Optional<AccessLocationTracker> eip7928AccessList) {
     LOG.trace("Processing code delegation: {}", codeDelegation);
 
+    if (!isCodeDelegationValid(codeDelegation)) {
+      return;
+    }
+
+    final Optional<Address> authorizerOptional = codeDelegation.authorizer();
+    if (authorizerOptional.isEmpty()) {
+      LOG.trace("Invalid signature for code delegation");
+      return;
+    }
+
+    Address authorizer = authorizerOptional.orElseThrow();
+    eip7928AccessList.ifPresent(t -> t.addTouchedAccount(authorizer));
+    result.addAccessedDelegatorAddress(authorizer);
+
+
+    // Use read-only get() to avoid marking the account as touched during validation.
+    // getAccount() would mark it as touched, causing empty accounts to be incorrectly
+    // deleted by clearAccountsThatAreEmpty() even when authorization is invalid/skipped.
+    final Optional<Account> maybeExistingAccount = Optional.ofNullable(worldUpdater.get(authorizer));
+    if (!canSetCodeDelegation(codeDelegation, maybeExistingAccount)) {
+      return;
+    }
+
+    LOG.trace("Set code delegation for authority: {}", authorizer);
+
+    MutableAccount authority = null;
+    try {
+      if (maybeExistingAccount.isEmpty()) {
+        authority = worldUpdater.createAccount(authorizer);
+        result.incrementAuthBaseRefundCount();
+        return;
+      }
+
+      authority = worldUpdater.getAccount(authorizer);
+      result.incrementAlreadyExistingDelegators();
+
+      // AUTH_BASE state gas is refunded when no delegation-indicator bytes are written: either the
+      // authority already has a delegation designator (overwritten in place) or auth.address is
+      // zero.
+      boolean authorityHasExistingDelegation =
+          hasCodeDelegation(maybeExistingAccount.get().getCode());
+      if (authorityHasExistingDelegation || codeDelegation.address().equals(Address.ZERO)) {
+        result.incrementAuthBaseRefundCount();
+      }
+    } finally {
+      MutableAccount finalAuthority = authority;
+      eip7928AccessList.ifPresent(t -> t.addTouchedAccount(finalAuthority.getAddress()));
+      codeDelegationService.processCodeDelegation(authority, codeDelegation.address());
+      authority.incrementNonce();
+    }
+  }
+
+  private boolean isCodeDelegationValid(
+      final CodeDelegation codeDelegation) {
     if (maybeChainId.isPresent()
         && !codeDelegation.chainId().equals(BigInteger.ZERO)
         && !maybeChainId.get().equals(codeDelegation.chainId())) {
@@ -99,77 +152,39 @@ public class CodeDelegationProcessor {
           "Invalid chain id for code delegation. Expected: {}, Actual: {}",
           maybeChainId.get(),
           codeDelegation.chainId());
-      return;
+      return false;
     }
 
     if (codeDelegation.nonce() == MAX_NONCE) {
       LOG.trace("Nonce of code delegation must be less than 2^64-1");
-      return;
+      return false;
     }
 
     if (codeDelegation.signature().getS().compareTo(halfCurveOrder) > 0) {
       LOG.trace(
           "Invalid signature for code delegation. S value must be less or equal than the half curve order.");
-      return;
+      return false;
     }
+    return true;
+  }
 
-    final Optional<Address> authorizer = codeDelegation.authorizer();
-    if (authorizer.isEmpty()) {
-      LOG.trace("Invalid signature for code delegation");
-      return;
-    }
-
-    LOG.trace("Set code delegation for authority: {}", authorizer.get());
-
-    // Use read-only get() to avoid marking the account as touched during validation.
-    // getAccount() would mark it as touched, causing empty accounts to be incorrectly
-    // deleted by clearAccountsThatAreEmpty() even when authorization is invalid/skipped.
-    final Optional<Account> maybeExistingAccount =
-        Optional.ofNullable(worldUpdater.get(authorizer.get()));
-    eip7928AccessList.ifPresent(t -> t.addTouchedAccount(authorizer.get()));
-    result.addAccessedDelegatorAddress(authorizer.get());
-
-    MutableAccount authority;
-    boolean authorityDoesAlreadyExist = false;
-    boolean authorityHasExistingDelegation = false;
+  private boolean canSetCodeDelegation(final CodeDelegation codeDelegation, final Optional<Account> maybeExistingAccount) {
     if (maybeExistingAccount.isEmpty()) {
       // only create an account if nonce is valid
-      if (codeDelegation.nonce() != 0) {
-        return;
-      }
-      authority = worldUpdater.createAccount(authorizer.get());
-      eip7928AccessList.ifPresent(t -> t.addTouchedAccount(authority.getAddress()));
-    } else {
-      if (!codeDelegationService.canSetCodeDelegation(maybeExistingAccount.get())) {
-        return;
-      }
-
-      if (codeDelegation.nonce() != maybeExistingAccount.get().getNonce()) {
-        LOG.trace(
-            "Invalid nonce for code delegation. Expected: {}, Actual: {}",
-            maybeExistingAccount.get().getNonce(),
-            codeDelegation.nonce());
-        return;
-      }
-
-      authorityHasExistingDelegation = hasCodeDelegation(maybeExistingAccount.get().getCode());
-
-      // Validation passed — now get the mutable account for mutation
-      authority = worldUpdater.getAccount(authorizer.get());
-      eip7928AccessList.ifPresent(t -> t.addTouchedAccount(authority.getAddress()));
-      authorityDoesAlreadyExist = true;
+      return codeDelegation.nonce() == 0;
     }
 
-    if (authorityDoesAlreadyExist) {
-      result.incrementAlreadyExistingDelegators();
-    }
-    // AUTH_BASE state gas is refunded when no delegation-indicator bytes are written: either the
-    // authority already has a delegation designator (overwritten in place) or auth.address is zero.
-    if (authorityHasExistingDelegation || codeDelegation.address().equals(Address.ZERO)) {
-      result.incrementAuthBaseRefundCount();
+    if (!codeDelegationService.canSetCodeDelegation(maybeExistingAccount.get())) {
+      return false;
     }
 
-    codeDelegationService.processCodeDelegation(authority, codeDelegation.address());
-    authority.incrementNonce();
+    if (codeDelegation.nonce() != maybeExistingAccount.get().getNonce()) {
+      LOG.trace(
+        "Invalid nonce for code delegation. Expected: {}, Actual: {}",
+        maybeExistingAccount.get().getNonce(),
+        codeDelegation.nonce());
+      return false;
+    }
+    return true;
   }
 }
