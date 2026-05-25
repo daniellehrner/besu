@@ -50,6 +50,7 @@ public interface MergeMiningCoordinator extends MiningCoordinator {
    * @param withdrawals the withdrawals, if present
    * @param parentBeaconBlockRoot the parent beacon block root, if present
    * @param slotNumber the consensus-layer slot number, if present
+   * @param targetGasLimit the target gas limit supplied by the CL, if present
    */
   @Value.Builder
   record PreparePayloadArgs(
@@ -59,7 +60,8 @@ public interface MergeMiningCoordinator extends MiningCoordinator {
       Address feeRecipient,
       Optional<List<Withdrawal>> withdrawals,
       Optional<Bytes32> parentBeaconBlockRoot,
-      Optional<Long> slotNumber) {}
+      Optional<Long> slotNumber,
+      Optional<Long> targetGasLimit) {}
 
   /**
    * Prepare payload identifier.
