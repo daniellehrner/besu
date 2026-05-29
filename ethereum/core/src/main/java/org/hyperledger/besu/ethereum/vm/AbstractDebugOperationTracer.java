@@ -14,6 +14,8 @@
  */
 package org.hyperledger.besu.ethereum.vm;
 
+import static org.hyperledger.besu.evm.internal.Words.clampedToLong;
+
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.operation.AbstractCallOperation;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -123,6 +125,79 @@ public abstract class AbstractDebugOperationTracer implements OperationTracer {
       stackContents[i] = frame.getStackItem(stackContents.length - i - 1);
     }
     return Optional.of(stackContents);
+  }
+
+  /** Stack offset (counted from the top of the stack) of the {@code inOffset} / {@code offset} */
+  private static final int CALL_OFFSET_FROM_TOP = 4;
+
+  /** Stack offset of {@code inSize} for CALL/CALLCODE (after {@code value}) */
+  private static final int CALL_SIZE_FROM_TOP = 5;
+
+  /** Stack offset of {@code inOffset} for DELEGATECALL/STATICCALL (no {@code value}) */
+  private static final int DELEGATECALL_OFFSET_FROM_TOP = 3;
+
+  /** Stack offset of {@code inSize} for DELEGATECALL/STATICCALL */
+  private static final int DELEGATECALL_SIZE_FROM_TOP = 4;
+
+  /** Stack offset of {@code offset} for CREATE/CREATE2 (top is {@code value}) */
+  private static final int CREATE_OFFSET_FROM_TOP = 2;
+
+  /** Stack offset of {@code size} for CREATE/CREATE2 */
+  private static final int CREATE_SIZE_FROM_TOP = 3;
+
+  /** Cap for the captured slice; matches {@code CallTracerHelper.extractCallDataFromMemory}. */
+  private static final long MAX_MEMORY_SLICE_BYTES = 1_000_000L;
+
+  /**
+   * For soft-failed CALL/CREATE frames, captures just the (offset, size) memory window the call
+   * tracer needs to recover input data or init code. Returns empty for any other case so memory is
+   * not copied at every opcode step.
+   *
+   * <p>Stack layouts (top of stack first):
+   *
+   * <ul>
+   *   <li>CALL/CALLCODE: gas, to, value, inOffset, inSize, outOffset, outSize
+   *   <li>DELEGATECALL/STATICCALL: gas, to, inOffset, inSize, outOffset, outSize
+   *   <li>CREATE/CREATE2: value, offset, size[, salt]
+   * </ul>
+   */
+  protected Optional<Bytes> captureSoftFailureMemorySlice(
+      final MessageFrame frame,
+      final Operation currentOperation,
+      final OperationResult operationResult) {
+    if (operationResult.getSoftFailureReason().isEmpty() || preExecutionStack.isEmpty()) {
+      return Optional.empty();
+    }
+    final int offsetFromTop;
+    final int sizeFromTop;
+    switch (currentOperation.getOpcode()) {
+      case 0xF1, 0xF2 -> { // CALL, CALLCODE
+        offsetFromTop = CALL_OFFSET_FROM_TOP;
+        sizeFromTop = CALL_SIZE_FROM_TOP;
+      }
+      case 0xF4, 0xFA -> { // DELEGATECALL, STATICCALL
+        offsetFromTop = DELEGATECALL_OFFSET_FROM_TOP;
+        sizeFromTop = DELEGATECALL_SIZE_FROM_TOP;
+      }
+      case 0xF0, 0xF5 -> { // CREATE, CREATE2
+        offsetFromTop = CREATE_OFFSET_FROM_TOP;
+        sizeFromTop = CREATE_SIZE_FROM_TOP;
+      }
+      default -> {
+        return Optional.empty();
+      }
+    }
+
+    final Bytes[] stack = preExecutionStack.get();
+    if (stack.length < sizeFromTop) {
+      return Optional.empty();
+    }
+    final long offset = clampedToLong(stack[stack.length - offsetFromTop]);
+    final long size = clampedToLong(stack[stack.length - sizeFromTop]);
+    if (size <= 0 || size > MAX_MEMORY_SLICE_BYTES || offset > Integer.MAX_VALUE) {
+      return Optional.empty();
+    }
+    return Optional.of(frame.readMemory(offset, size));
   }
 
   private boolean shouldTraceOpcode(final Operation currentOpcode) {

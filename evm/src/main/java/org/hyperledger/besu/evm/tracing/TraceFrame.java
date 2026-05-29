@@ -47,6 +47,7 @@ public class TraceFrame {
   private final Bytes outputData;
   private final Optional<Bytes[]> stack;
   private final Optional<Bytes[]> memory;
+  private final Optional<Bytes> maybeMemorySlice;
   private final Optional<Map<UInt256, UInt256>> storage;
   private final WorldUpdater worldUpdater;
   private final Optional<Bytes> revertReason;
@@ -85,6 +86,7 @@ public class TraceFrame {
     this.outputData = builder.outputData;
     this.stack = builder.stack;
     this.memory = builder.memory;
+    this.maybeMemorySlice = builder.maybeMemorySlice;
     this.storage = builder.storage;
     this.worldUpdater = builder.worldUpdater;
     this.revertReason = builder.revertReason;
@@ -140,6 +142,7 @@ public class TraceFrame {
     private Bytes outputData;
     private Optional<Bytes[]> stack = Optional.empty();
     private Optional<Bytes[]> memory = Optional.empty();
+    private Optional<Bytes> maybeMemorySlice = Optional.empty();
     private Optional<Map<UInt256, UInt256>> storage = Optional.empty();
     private WorldUpdater worldUpdater;
     private Optional<Bytes> revertReason = Optional.empty();
@@ -182,6 +185,7 @@ public class TraceFrame {
       this.outputData = traceFrame.outputData;
       this.stack = traceFrame.stack;
       this.memory = traceFrame.memory;
+      this.maybeMemorySlice = traceFrame.maybeMemorySlice;
       this.storage = traceFrame.storage;
       this.worldUpdater = traceFrame.worldUpdater;
       this.revertReason = traceFrame.revertReason;
@@ -365,6 +369,19 @@ public class TraceFrame {
      */
     public Builder setMemory(final Optional<Bytes[]> memory) {
       this.memory = memory;
+      return this;
+    }
+
+    /**
+     * Sets a pre-extracted memory slice for this operation. Used by tracers that capture only the
+     * specific bytes a downstream consumer needs (e.g. the call tracer's input/init-code), rather
+     * than copying the entire EVM memory.
+     *
+     * @param maybeMemorySlice the slice the tracer captured at this frame, or empty
+     * @return this builder instance for method chaining
+     */
+    public Builder setMaybeMemorySlice(final Optional<Bytes> maybeMemorySlice) {
+      this.maybeMemorySlice = maybeMemorySlice;
       return this;
     }
 
@@ -709,6 +726,17 @@ public class TraceFrame {
    */
   public Optional<Bytes[]> getMemory() {
     return memory;
+  }
+
+  /**
+   * Pre-extracted memory slice (set by tracers that capture only the bytes a consumer needs, e.g.
+   * call-tracer input data for soft-failed CALL/CREATE frames). When present, consumers should use
+   * this directly instead of slicing into {@link #getMemory()}.
+   *
+   * @return the slice if one was captured, or empty
+   */
+  public Optional<Bytes> getMaybeMemorySlice() {
+    return maybeMemorySlice;
   }
 
   /**

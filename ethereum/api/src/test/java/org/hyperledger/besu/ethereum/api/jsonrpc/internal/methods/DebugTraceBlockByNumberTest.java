@@ -49,6 +49,7 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -206,6 +207,32 @@ public class DebugTraceBlockByNumberTest {
 
     assertThat(batchJson)
         .as("batch (accumulating) and streaming paths must produce identical result JSON")
+        .isEqualTo(streamJson);
+  }
+
+  @Test
+  public void callTracerBatchResponseShouldMatchStreamingOutput() throws IOException {
+    // The streaming path runs CallTracerOperationTracer (skeleton frames + pre-extracted memory
+    // slices); the batch path runs the full DebugOperationTracer. Both must feed the same
+    // CallTracerResultConverter output.
+    final Object[] params = new Object[] {"0x1", Map.of("tracer", "callTracer")};
+
+    final JsonRpcRequestContext batchRequest =
+        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_traceBlockByNumber", params));
+    final JsonRpcResponse response = debugTraceBlockByNumber.response(batchRequest);
+    assertThat(response).isInstanceOf(JsonRpcSuccessResponse.class);
+    final Object batchResult = ((JsonRpcSuccessResponse) response).getResult();
+    assertThat(batchResult).isNotNull();
+    final JsonNode batchJson = mapper.readTree(mapper.writeValueAsBytes(batchResult));
+
+    final JsonRpcRequestContext streamRequest =
+        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_traceBlockByNumber", params));
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    debugTraceBlockByNumber.streamResponse(streamRequest, out, mapper);
+    final JsonNode streamJson = mapper.readTree(out.toByteArray()).get("result");
+
+    assertThat(batchJson)
+        .as("callTracer batch and streaming paths must produce identical result JSON")
         .isEqualTo(streamJson);
   }
 

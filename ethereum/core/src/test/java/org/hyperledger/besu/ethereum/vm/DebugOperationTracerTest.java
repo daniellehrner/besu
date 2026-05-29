@@ -28,9 +28,11 @@ import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
+import org.hyperledger.besu.evm.frame.SoftFailureReason;
 import org.hyperledger.besu.evm.gascalculator.CancunGasCalculator;
 import org.hyperledger.besu.evm.operation.AbstractOperation;
 import org.hyperledger.besu.evm.operation.CallOperation;
+import org.hyperledger.besu.evm.operation.CreateOperation;
 import org.hyperledger.besu.evm.operation.Operation;
 import org.hyperledger.besu.evm.operation.Operation.OperationResult;
 import org.hyperledger.besu.evm.tracing.OpCodeTracerConfigBuilder;
@@ -82,6 +84,7 @@ class DebugOperationTracerTest {
       };
 
   private final CallOperation callOperation = new CallOperation(new CancunGasCalculator());
+  private final CreateOperation createOperation = new CreateOperation(new CancunGasCalculator());
 
   @Test
   void shouldRecordProgramCounter() {
@@ -189,6 +192,121 @@ class DebugOperationTracerTest {
                 .build(),
             false);
     assertThat(traceFrame.getMemory()).isEmpty();
+  }
+
+  @Test
+  void shouldCaptureMemorySliceForSoftFailedCall() {
+    // CALL stack layout (top-to-bottom): gas, to, value, inOffset, inSize, outOffset, outSize.
+    // Push bottom-to-top so getStackItem(0) returns gas.
+    final MessageFrame frame = validMessageFrame();
+    final Bytes32 inputWord = Bytes32.fromHexString("0x" + "cd".repeat(32));
+    frame.writeMemory(32L, 32, inputWord);
+    frame.pushStackItem(UInt256.ZERO); // outSize
+    frame.pushStackItem(UInt256.ZERO); // outOffset
+    frame.pushStackItem(UInt256.valueOf(4L)); // inSize
+    frame.pushStackItem(UInt256.valueOf(32L)); // inOffset
+    frame.pushStackItem(UInt256.ZERO); // value
+    frame.pushStackItem(UInt256.ZERO); // to
+    frame.pushStackItem(UInt256.valueOf(1000L)); // gas (top)
+    frame.setCurrentOperation(callOperation);
+
+    final DebugOperationTracer tracer =
+        new DebugOperationTracer(
+            OpCodeTracerConfigBuilder.createFrom(OpCodeTracerConfig.DEFAULT)
+                .traceStorage(false)
+                .traceMemory(false)
+                .traceStack(true)
+                .build(),
+            false);
+    tracer.tracePreExecution(frame);
+    tracer.tracePostExecution(
+        frame, new OperationResult(200L, 1, SoftFailureReason.LEGACY_INSUFFICIENT_BALANCE, 0L));
+
+    final TraceFrame traceFrame = getOnlyTraceFrame(tracer);
+    assertThat(traceFrame.getMemory()).isEmpty();
+    assertThat(traceFrame.getMaybeMemorySlice()).contains(Bytes.fromHexString("0xcdcdcdcd"));
+  }
+
+  @Test
+  void shouldCaptureMemorySliceForSoftFailedCreate() {
+    // CREATE stack layout (top-to-bottom): value, offset, size.
+    final MessageFrame frame = validMessageFrame();
+    final Bytes32 initWord = Bytes32.fromHexString("0x" + "ab".repeat(32));
+    frame.writeMemory(0L, 32, initWord);
+    frame.pushStackItem(UInt256.valueOf(8L)); // size
+    frame.pushStackItem(UInt256.ZERO); // offset
+    frame.pushStackItem(UInt256.ZERO); // value (top)
+    frame.setCurrentOperation(createOperation);
+
+    final DebugOperationTracer tracer =
+        new DebugOperationTracer(
+            OpCodeTracerConfigBuilder.createFrom(OpCodeTracerConfig.DEFAULT)
+                .traceStorage(false)
+                .traceMemory(false)
+                .traceStack(true)
+                .build(),
+            false);
+    tracer.tracePreExecution(frame);
+    tracer.tracePostExecution(
+        frame, new OperationResult(100L, 1, SoftFailureReason.LEGACY_INSUFFICIENT_BALANCE, 0L));
+
+    final TraceFrame traceFrame = getOnlyTraceFrame(tracer);
+    assertThat(traceFrame.getMemory()).isEmpty();
+    assertThat(traceFrame.getMaybeMemorySlice())
+        .contains(Bytes.fromHexString("0xabababababababab"));
+  }
+
+  @Test
+  void shouldNotCaptureMemorySliceWhenNotASoftFailure() {
+    // Same setup as the soft-failed CALL test, but the result has no soft-failure reason.
+    final MessageFrame frame = validMessageFrame();
+    frame.writeMemory(0L, 32, WORD_1);
+    frame.pushStackItem(UInt256.ZERO); // outSize
+    frame.pushStackItem(UInt256.ZERO); // outOffset
+    frame.pushStackItem(UInt256.valueOf(4L)); // inSize
+    frame.pushStackItem(UInt256.ZERO); // inOffset
+    frame.pushStackItem(UInt256.ZERO); // value
+    frame.pushStackItem(UInt256.ZERO); // to
+    frame.pushStackItem(UInt256.valueOf(1000L)); // gas
+    frame.setCurrentOperation(callOperation);
+
+    final DebugOperationTracer tracer =
+        new DebugOperationTracer(
+            OpCodeTracerConfigBuilder.createFrom(OpCodeTracerConfig.DEFAULT)
+                .traceStorage(false)
+                .traceMemory(false)
+                .traceStack(true)
+                .build(),
+            false);
+    tracer.tracePreExecution(frame);
+    tracer.tracePostExecution(frame, new OperationResult(200L, null));
+
+    final TraceFrame traceFrame = getOnlyTraceFrame(tracer);
+    assertThat(traceFrame.getMaybeMemorySlice()).isEmpty();
+  }
+
+  @Test
+  void shouldNotCaptureMemorySliceForNonCallNonCreateSoftFailure() {
+    // Soft failure on a plain MUL — slice capture should ignore it.
+    final TraceFrame traceFrame =
+        traceFrameWithResult(
+            validMessageFrame(), new OperationResult(20L, 1, SoftFailureReason.INVALID_STATE, 0L));
+    assertThat(traceFrame.getMaybeMemorySlice()).isEmpty();
+  }
+
+  private TraceFrame traceFrameWithResult(
+      final MessageFrame frame, final OperationResult operationResult) {
+    final DebugOperationTracer tracer =
+        new DebugOperationTracer(
+            OpCodeTracerConfigBuilder.createFrom(OpCodeTracerConfig.DEFAULT)
+                .traceStorage(false)
+                .traceMemory(false)
+                .traceStack(false)
+                .build(),
+            false);
+    tracer.tracePreExecution(frame);
+    tracer.tracePostExecution(frame, operationResult);
+    return getOnlyTraceFrame(tracer);
   }
 
   @Test

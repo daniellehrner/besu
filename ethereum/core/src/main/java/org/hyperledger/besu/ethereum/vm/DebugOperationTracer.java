@@ -20,7 +20,6 @@ import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.ModificationNotAllowedException;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
-import org.hyperledger.besu.evm.operation.AbstractCreateOperation;
 import org.hyperledger.besu.evm.operation.Operation;
 import org.hyperledger.besu.evm.operation.Operation.OperationResult;
 import org.hyperledger.besu.evm.tracing.OpCodeTracerConfigBuilder.OpCodeTracerConfig;
@@ -77,15 +76,12 @@ public class DebugOperationTracer extends AbstractDebugOperationTracer {
     final int opcodeNumber = (opcode != null) ? currentOperation.getOpcode() : Integer.MAX_VALUE;
     final WorldUpdater worldUpdater = frame.getWorldUpdater();
     final Bytes outputData = frame.getOutputData();
-    // Always capture memory for soft-failed CREATE/CREATE2 ops so callTracer can extract init code
-    final Optional<Bytes[]> memory =
-        captureMemory(frame)
-            .or(
-                () ->
-                    operationResult.getSoftFailureReason().isPresent()
-                            && currentOperation instanceof AbstractCreateOperation
-                        ? forceCaptureMem(frame)
-                        : Optional.empty());
+    final Optional<Bytes[]> memory = captureMemory(frame);
+    // For soft-failed CALL/CREATE ops, capture only the (offset, size) memory slice the call
+    // tracer needs to recover input data / init code. Avoids copying full EVM memory on every
+    // step when traceMemory is disabled.
+    final Optional<Bytes> memorySlice =
+        captureSoftFailureMemorySlice(frame, currentOperation, operationResult);
     final Optional<Bytes[]> stackPostExecution = captureStack(frame);
 
     if (!traceFrames.isEmpty()) {
@@ -124,6 +120,7 @@ public class DebugOperationTracer extends AbstractDebugOperationTracer {
             .setOutputData(outputData)
             .setStack(preExecutionStack)
             .setMemory(memory)
+            .setMaybeMemorySlice(memorySlice)
             .setStorage(storage)
             .setWorldUpdater(worldUpdater)
             .setRevertReason(frame.getRevertReason())

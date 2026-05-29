@@ -60,6 +60,26 @@
       "code": "0x366000600037366000fd",
       "balance": "0x0"
     },
+    "0033000000000000000000000000000000000000": {
+      "comment": "Nested CALL: forwards calldata to 0x30 (increment contract) and returns its 32-byte output. Used by callTracer equivalence tests.",
+      "code": "0x365f5f3760205f365f5f603061fffff15060205ff3",
+      "balance": "0x0"
+    },
+    "0034000000000000000000000000000000000000": {
+      "comment": "Precompile call: copies calldata to memory and CALLs the IDENTITY precompile (0x04), returning its output. Used by callTracer equivalence tests.",
+      "code": "0x365f5f37365f365f5f60045af150365ff3",
+      "balance": "0x0"
+    },
+    "0035000000000000000000000000000000000000": {
+      "comment": "Soft-failed inner CREATE: writes 0xaa to mem[0], then CREATEs with value=1 from a zero-balance contract — triggers LEGACY_INSUFFICIENT_BALANCE soft-fail. Used by callTracer equivalence tests.",
+      "code": "0x60aa5f5360015f6001f05f5260205ff3",
+      "balance": "0x0"
+    },
+    "0036000000000000000000000000000000000000": {
+      "comment": "Soft-failed inner CALL: writes 0xcc to mem[0], then CALLs 0x30 with value=1 from a zero-balance contract — triggers LEGACY_INSUFFICIENT_BALANCE soft-fail. Used by callTracer equivalence tests.",
+      "code": "0x60cc5f535f5f60045f600160305af15f5260205ff3",
+      "balance": "0x0"
+    },
     "0x00A3ca265EBcb825B45F985A16CEFB49958cE017": {
       "comment": "Withdrawal Request Smart Contract",
       "balance": "0",

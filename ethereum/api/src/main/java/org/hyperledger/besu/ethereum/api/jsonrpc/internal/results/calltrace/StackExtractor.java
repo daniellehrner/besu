@@ -55,16 +55,14 @@ public final class StackExtractor {
   private static final int CALL_STACK_IN_OFFSET_POS = 4; // 4th from top
   private static final int CALL_STACK_IN_SIZE_POS = 3; // 3rd from top (for size, after value)
 
-  // Stack position constants for CREATE operations
-  // CREATE stack layout (from top of stack): value, offset, size
-  // When accessed as stack[length-N], this translates to:
-  private static final int CREATE_STACK_VALUE_POS = 1; // Top of stack (stack[length-1])
+  // Stack position constants for CREATE/CREATE2.
+  // Both opcodes share the same offset/size positions (top-first):
+  //   CREATE:  value, offset, size
+  //   CREATE2: value, offset, size, salt
+  // Accessed as stack[length-N], where N counts down from the top (top = 1).
+  private static final int CREATE_STACK_VALUE_POS = 1; // Top of stack
   private static final int CREATE_STACK_OFFSET_POS = 2; // 2nd from top
   private static final int CREATE_STACK_SIZE_POS = 3; // 3rd from top
-
-  // CREATE2 stack layout: value, offset, size, salt
-  private static final int CREATE2_STACK_OFFSET_POS = 3; // 3rd from top
-  private static final int CREATE2_STACK_SIZE_POS = 2; // 2nd from top
 
   private static final String ZERO_VALUE = "0x0";
 
@@ -169,7 +167,7 @@ public final class StackExtractor {
 
     return frame
         .getStack()
-        .map(stack -> extractCreateInitCodeFromStack(frame, stack, opcode))
+        .map(stack -> extractCreateInitCodeFromStack(frame, stack))
         .orElse(Bytes.EMPTY);
   }
 
@@ -238,27 +236,16 @@ public final class StackExtractor {
   }
 
   private static Bytes extractCreateInitCodeFromStack(
-      final TraceFrame frame, final Bytes[] stack, final String opcode) {
+      final TraceFrame frame, final Bytes[] stack) {
 
-    if ("CREATE".equals(opcode)) {
-      if (stack.length < CREATE_STACK_OFFSET_POS) {
-        return Bytes.EMPTY;
-      }
-
-      int offset = bytesToInt(stack[stack.length - CREATE_STACK_OFFSET_POS]);
-      int length = bytesToInt(stack[stack.length - CREATE_STACK_SIZE_POS]);
-
-      return extractFromMemory(frame, offset, length);
-    } else { // CREATE2
-      if (stack.length < CREATE2_STACK_OFFSET_POS) {
-        return Bytes.EMPTY;
-      }
-
-      int offset = bytesToInt(stack[stack.length - CREATE2_STACK_OFFSET_POS]);
-      int length = bytesToInt(stack[stack.length - CREATE2_STACK_SIZE_POS]);
-
-      return extractFromMemory(frame, offset, length);
+    if (stack.length < CREATE_STACK_SIZE_POS) {
+      return Bytes.EMPTY;
     }
+
+    int offset = bytesToInt(stack[stack.length - CREATE_STACK_OFFSET_POS]);
+    int length = bytesToInt(stack[stack.length - CREATE_STACK_SIZE_POS]);
+
+    return extractFromMemory(frame, offset, length);
   }
 
   private static Bytes extractFromMemory(
@@ -267,9 +254,16 @@ public final class StackExtractor {
       return Bytes.EMPTY;
     }
 
+    // Tracers that pre-extract just the slice the call tracer needs (e.g. DebugOperationTracer
+    // for soft-failed CALL/CREATE frames) populate maybeMemorySlice. When present, it already
+    // contains exactly the bytes for this (offset, length).
     return frame
-        .getMemory()
-        .map(memory -> extractCallDataFromMemory(memory, offset, length))
-        .orElse(Bytes.EMPTY);
+        .getMaybeMemorySlice()
+        .orElseGet(
+            () ->
+                frame
+                    .getMemory()
+                    .map(memory -> extractCallDataFromMemory(memory, offset, length))
+                    .orElse(Bytes.EMPTY));
   }
 }

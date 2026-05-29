@@ -46,6 +46,7 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -69,6 +70,21 @@ public class DebugTraceBlockTest {
                   SignatureAlgorithm.ALGORITHM));
   private static final Address CONTRACT_ADDRESS =
       Address.fromHexString("0x0030000000000000000000000000000000000000");
+  // Genesis contract that copies calldata to memory and REVERTs with it.
+  private static final Address REVERT_CONTRACT_ADDRESS =
+      Address.fromHexString("0x0032000000000000000000000000000000000000");
+  // Genesis contract that forwards calldata via inner CALL to 0x30.
+  private static final Address NESTED_CALL_CONTRACT_ADDRESS =
+      Address.fromHexString("0x0033000000000000000000000000000000000000");
+  // Genesis contract that CALLs the IDENTITY precompile (0x04).
+  private static final Address PRECOMPILE_CALLER_ADDRESS =
+      Address.fromHexString("0x0034000000000000000000000000000000000000");
+  // Genesis contract with zero balance that attempts CREATE with value=1 (soft-fail).
+  private static final Address SOFT_FAIL_CREATE_ADDRESS =
+      Address.fromHexString("0x0035000000000000000000000000000000000000");
+  // Genesis contract with zero balance that attempts CALL with value=1 (soft-fail).
+  private static final Address SOFT_FAIL_CALL_ADDRESS =
+      Address.fromHexString("0x0036000000000000000000000000000000000000");
 
   private DebugTraceBlock debugTraceBlock;
   private ExecutionContextTestFixture fixture;
@@ -199,6 +215,195 @@ public class DebugTraceBlockTest {
     assertThat(batchJson)
         .as("batch (accumulating) and streaming paths must produce identical result JSON")
         .isEqualTo(streamJson);
+  }
+
+  @Test
+  public void callTracerBatchResponseShouldMatchStreamingOutput() throws IOException {
+    // The streaming path runs CallTracerOperationTracer (skeleton frames + pre-extracted memory
+    // slices); the batch path runs the full DebugOperationTracer. Both must feed the same
+    // CallTracerResultConverter output.
+    final Object[] params =
+        new Object[] {testBlock.toRlp().toString(), Map.of("tracer", "callTracer")};
+
+    final JsonRpcRequestContext batchRequest =
+        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_traceBlock", params));
+    final JsonRpcResponse response = debugTraceBlock.response(batchRequest);
+    assertThat(response).isInstanceOf(JsonRpcSuccessResponse.class);
+    final Object batchResult = ((JsonRpcSuccessResponse) response).getResult();
+    assertThat(batchResult).isNotNull();
+    final JsonNode batchJson = mapper.readTree(mapper.writeValueAsBytes(batchResult));
+
+    final JsonRpcRequestContext streamRequest =
+        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_traceBlock", params));
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    debugTraceBlock.streamResponse(streamRequest, out, mapper);
+    final JsonNode streamJson = mapper.readTree(out.toByteArray()).get("result");
+
+    assertThat(batchJson)
+        .as("callTracer batch and streaming paths must produce identical result JSON")
+        .isEqualTo(streamJson);
+  }
+
+  @Test
+  public void callTracerBatchResponseShouldMatchStreamingOutputForRevertedCall() throws IOException {
+    final Transaction revertTransaction =
+        Transaction.builder()
+            .type(TransactionType.EIP1559)
+            .nonce(0)
+            .maxPriorityFeePerGas(Wei.of(5))
+            .maxFeePerGas(Wei.of(7))
+            .gasLimit(100_000L)
+            .to(REVERT_CONTRACT_ADDRESS)
+            .value(Wei.ZERO)
+            .payload(Bytes.fromHexString("0xdeadbeef"))
+            .chainId(BigInteger.valueOf(42))
+            .signAndBuild(KEY_PAIR);
+
+    final BlockHeader genesis = fixture.getBlockchain().getChainHeadHeader();
+    final BlockHeader blockHeader =
+        new BlockHeaderTestFixture()
+            .number(genesis.getNumber() + 1L)
+            .parentHash(genesis.getHash())
+            .gasLimit(30_000_000L)
+            .baseFeePerGas(Wei.of(7))
+            .buildHeader();
+    final Block revertBlock =
+        new Block(
+            blockHeader,
+            new BlockBody(List.of(revertTransaction), Collections.emptyList(), Optional.empty()));
+
+    final Object[] params =
+        new Object[] {revertBlock.toRlp().toString(), Map.of("tracer", "callTracer")};
+
+    final JsonRpcRequestContext batchRequest =
+        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_traceBlock", params));
+    final JsonRpcResponse response = debugTraceBlock.response(batchRequest);
+    assertThat(response).isInstanceOf(JsonRpcSuccessResponse.class);
+    final Object batchResult = ((JsonRpcSuccessResponse) response).getResult();
+    final JsonNode batchJson = mapper.readTree(mapper.writeValueAsBytes(batchResult));
+
+    final JsonRpcRequestContext streamRequest =
+        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_traceBlock", params));
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    debugTraceBlock.streamResponse(streamRequest, out, mapper);
+    final JsonNode streamJson = mapper.readTree(out.toByteArray()).get("result");
+
+    // Sanity-check we actually exercised the REVERT path before asserting equivalence.
+    assertThat(streamJson.get(0).get("result").has("error"))
+        .as("revert call should produce an error field in the call trace")
+        .isTrue();
+    assertThat(batchJson)
+        .as("callTracer batch and streaming paths must agree on reverted-call output")
+        .isEqualTo(streamJson);
+  }
+
+  @Test
+  public void callTracerBatchResponseShouldMatchStreamingOutputForNestedCall() throws IOException {
+    final Transaction tx =
+        buildTransaction(0, NESTED_CALL_CONTRACT_ADDRESS, Bytes32.leftPad(Bytes.of(7)));
+    assertCallTracerStreamingMatchesBatch(buildBlock(tx));
+  }
+
+  @Test
+  public void callTracerBatchResponseShouldMatchStreamingOutputForPrecompileCall()
+      throws IOException {
+    final Transaction tx =
+        buildTransaction(0, PRECOMPILE_CALLER_ADDRESS, Bytes.fromHexString("0xdeadbeef"));
+    final JsonNode streamJson = assertCallTracerStreamingMatchesBatch(buildBlock(tx));
+    // Sanity-check: the inner call to IDENTITY (0x04) should appear in the call trace.
+    assertThat(streamJson.get(0).get("result").get("calls"))
+        .as("precompile CALL should produce an inner call in the trace")
+        .isNotNull();
+  }
+
+  @Test
+  public void callTracerBatchResponseShouldMatchStreamingOutputForSoftFailedCreate()
+      throws IOException {
+    final Transaction tx = buildTransaction(0, SOFT_FAIL_CREATE_ADDRESS, Bytes.EMPTY);
+    assertCallTracerStreamingMatchesBatch(buildBlock(tx));
+  }
+
+  @Test
+  public void callTracerBatchResponseShouldMatchStreamingOutputForSoftFailedCall()
+      throws IOException {
+    final Transaction tx = buildTransaction(0, SOFT_FAIL_CALL_ADDRESS, Bytes.EMPTY);
+    assertCallTracerStreamingMatchesBatch(buildBlock(tx));
+  }
+
+  @Test
+  public void callTracerBatchResponseShouldMatchStreamingOutputForTopLevelCreate()
+      throws IOException {
+    // Top-level contract-creation tx: init code returns a 1-byte runtime (0x01).
+    // Init code: PUSH1 0x01 PUSH0 MSTORE PUSH1 0x01 PUSH1 0x1f RETURN
+    final Bytes initCode = Bytes.fromHexString("0x60015f5260016001f3");
+    final Transaction tx =
+        Transaction.builder()
+            .type(TransactionType.EIP1559)
+            .nonce(0)
+            .maxPriorityFeePerGas(Wei.of(5))
+            .maxFeePerGas(Wei.of(7))
+            .gasLimit(200_000L)
+            .value(Wei.ZERO)
+            .payload(initCode)
+            .chainId(BigInteger.valueOf(42))
+            .signAndBuild(KEY_PAIR);
+    final JsonNode streamJson = assertCallTracerStreamingMatchesBatch(buildBlock(tx));
+    assertThat(streamJson.get(0).get("result").get("type").asText())
+        .as("top-level creation tx should be typed as CREATE")
+        .isEqualTo("CREATE");
+  }
+
+  // ── helpers ──────────────────────────────────────────────────────────
+
+  private Transaction buildTransaction(final int nonce, final Address to, final Bytes payload) {
+    return Transaction.builder()
+        .type(TransactionType.EIP1559)
+        .nonce(nonce)
+        .maxPriorityFeePerGas(Wei.of(5))
+        .maxFeePerGas(Wei.of(7))
+        .gasLimit(200_000L)
+        .to(to)
+        .value(Wei.ZERO)
+        .payload(payload)
+        .chainId(BigInteger.valueOf(42))
+        .signAndBuild(KEY_PAIR);
+  }
+
+  private Block buildBlock(final Transaction tx) {
+    final BlockHeader genesis = fixture.getBlockchain().getChainHeadHeader();
+    final BlockHeader header =
+        new BlockHeaderTestFixture()
+            .number(genesis.getNumber() + 1L)
+            .parentHash(genesis.getHash())
+            .gasLimit(30_000_000L)
+            .baseFeePerGas(Wei.of(7))
+            .buildHeader();
+    return new Block(
+        header, new BlockBody(List.of(tx), Collections.emptyList(), Optional.empty()));
+  }
+
+  private JsonNode assertCallTracerStreamingMatchesBatch(final Block block) throws IOException {
+    final Object[] params =
+        new Object[] {block.toRlp().toString(), Map.of("tracer", "callTracer")};
+
+    final JsonRpcRequestContext batchRequest =
+        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_traceBlock", params));
+    final JsonRpcResponse response = debugTraceBlock.response(batchRequest);
+    assertThat(response).isInstanceOf(JsonRpcSuccessResponse.class);
+    final Object batchResult = ((JsonRpcSuccessResponse) response).getResult();
+    assertThat(batchResult).isNotNull();
+    final JsonNode batchJson = mapper.readTree(mapper.writeValueAsBytes(batchResult));
+
+    final JsonRpcRequestContext streamRequest =
+        new JsonRpcRequestContext(new JsonRpcRequest("2.0", "debug_traceBlock", params));
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    debugTraceBlock.streamResponse(streamRequest, out, mapper);
+    final JsonNode streamJson = mapper.readTree(out.toByteArray()).get("result");
+
+    assertThat(batchJson)
+        .as("callTracer batch and streaming paths must produce identical result JSON")
+        .isEqualTo(streamJson);
+    return streamJson;
   }
 
   @Test

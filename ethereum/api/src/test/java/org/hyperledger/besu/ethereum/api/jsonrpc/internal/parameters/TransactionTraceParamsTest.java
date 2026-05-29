@@ -62,16 +62,17 @@ public class TransactionTraceParamsTest {
   }
 
   @Test
-  public void nonOpcodeTracerShouldEnableMemoryByDefault() throws Exception {
-    // Non-opcode tracers (e.g. callTracer) need memory for internal operations
-    // such as extracting CREATE init code, so memory should be enabled by default
+  public void nonOpcodeTracerShouldNotEnableMemoryByDefault() throws Exception {
+    // Memory tracing is off by default for callTracer too: DebugOperationTracer captures the
+    // (offset, size) slice the call tracer needs at soft-failed CALL/CREATE frames, instead of
+    // copying the whole memory at every step.
     final TransactionTraceParams callTracerParams =
         MAPPER.readValue("{\"tracer\": \"callTracer\"}", TransactionTraceParams.class);
     final OpCodeTracerConfig config = callTracerParams.traceOptions().opCodeTracerConfig();
 
     assertThat(config.traceMemory())
-        .describedAs("callTracer should have memory enabled by default")
-        .isTrue();
+        .describedAs("callTracer must not force memory tracing on by default")
+        .isFalse();
   }
 
   @Test

@@ -20,7 +20,10 @@ import org.hyperledger.besu.datatypes.BlobGas;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.processor.Tracer;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.processor.TransactionTrace;
+import org.hyperledger.besu.ethereum.api.jsonrpc.internal.results.CallTracerResult;
+import org.hyperledger.besu.ethereum.api.jsonrpc.internal.results.CallTracerResultConverter;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.results.DebugTraceTransactionResult;
+import org.hyperledger.besu.ethereum.api.jsonrpc.internal.results.calltrace.CallTracerOperationTracer;
 import org.hyperledger.besu.ethereum.api.query.BlockchainQueries;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -67,6 +70,7 @@ public class DebugTraceBlockStreamer {
   private static final byte[] TX_OPEN = "{\"txHash\":\"".getBytes(StandardCharsets.US_ASCII);
   private static final byte[] TX_RESULT_STRUCT_OPEN =
       "\",\"result\":{\"structLogs\":[".getBytes(StandardCharsets.US_ASCII);
+  private static final byte[] TX_RESULT_OPEN = "\",\"result\":".getBytes(StandardCharsets.US_ASCII);
   private static final byte[] TX_GAS_PREFIX = "],\"gas\":".getBytes(StandardCharsets.US_ASCII);
   private static final byte[] TX_FAILED_TRUE_RV =
       ",\"failed\":true,\"returnValue\":\"".getBytes(StandardCharsets.US_ASCII);
@@ -182,34 +186,45 @@ public class DebugTraceBlockStreamer {
                     .getPreExecutionProcessor()
                     .createBlockHashLookup(blockchainQueries.getBlockchain(), header);
 
-            final boolean isOpcodeTracer = traceOptions.tracerType() == TracerType.OPCODE_TRACER;
+            final TracerType tracerType = traceOptions.tracerType();
 
             for (final Transaction transaction : block.getBody().getTransactions()) {
-              if (isOpcodeTracer) {
-                streamOpcodeTransaction(
-                    transaction,
-                    chainUpdater,
-                    transactionProcessor,
-                    header,
-                    blobGasPrice,
-                    blockHashLookup);
-              } else {
-                try {
-                  final byte[] json =
-                      mapper.writeValueAsBytes(
-                          buildTransactionResult(
-                              transaction,
-                              chainUpdater,
-                              transactionProcessor,
-                              protocolSpec,
-                              header,
-                              blobGasPrice,
-                              blockHashLookup));
-                  if (!firstTx) writeByte(COMMA);
-                  firstTx = false;
-                  writeBytes(json);
-                } catch (IOException e) {
-                  throw new UncheckedIOException(e);
+              switch (tracerType) {
+                case OPCODE_TRACER ->
+                    streamOpcodeTransaction(
+                        transaction,
+                        chainUpdater,
+                        transactionProcessor,
+                        header,
+                        blobGasPrice,
+                        blockHashLookup);
+                case CALL_TRACER ->
+                    streamCallTracerTransaction(
+                        transaction,
+                        chainUpdater,
+                        transactionProcessor,
+                        header,
+                        blobGasPrice,
+                        blockHashLookup,
+                        mapper);
+                default -> {
+                  try {
+                    final byte[] json =
+                        mapper.writeValueAsBytes(
+                            buildTransactionResult(
+                                transaction,
+                                chainUpdater,
+                                transactionProcessor,
+                                protocolSpec,
+                                header,
+                                blobGasPrice,
+                                blockHashLookup));
+                    if (!firstTx) writeByte(COMMA);
+                    firstTx = false;
+                    writeBytes(json);
+                  } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                  }
                 }
               }
             }
@@ -315,6 +330,50 @@ public class DebugTraceBlockStreamer {
         writeAscii(output.toHexString());
       }
       writeBytes(TX_CLOSE);
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  // ── streaming call-tracer transaction ─────────────────────────────
+
+  private void streamCallTracerTransaction(
+      final Transaction transaction,
+      final TraceBlock.ChainUpdater chainUpdater,
+      final MainnetTransactionProcessor transactionProcessor,
+      final BlockHeader header,
+      final Wei blobGasPrice,
+      final BlockHashLookup blockHashLookup,
+      final ObjectMapper mapper) {
+
+    final CallTracerOperationTracer tracer =
+        new CallTracerOperationTracer(traceOptions.opCodeTracerConfig());
+
+    try {
+      final TransactionProcessingResult result =
+          transactionProcessor.processTransaction(
+              chainUpdater.getNextUpdater(),
+              header,
+              transaction,
+              header.getCoinbase(),
+              tracer,
+              blockHashLookup,
+              ImmutableTransactionValidationParams.builder().build(),
+              blobGasPrice,
+              Optional.empty());
+      tracer.finalizeTrace();
+
+      final TransactionTrace transactionTrace =
+          new TransactionTrace(transaction, result, tracer.getTraceFrames());
+      final CallTracerResult callTree = CallTracerResultConverter.convert(transactionTrace);
+
+      if (!firstTx) writeByte(COMMA);
+      firstTx = false;
+      writeBytes(TX_OPEN);
+      writeAscii(transaction.getHash().toHexString());
+      writeBytes(TX_RESULT_OPEN);
+      writeBytes(mapper.writeValueAsBytes(callTree));
+      writeByte(OBJ_CLOSE);
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
