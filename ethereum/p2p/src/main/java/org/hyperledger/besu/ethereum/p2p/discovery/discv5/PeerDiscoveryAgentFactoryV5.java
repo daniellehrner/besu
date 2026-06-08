@@ -27,6 +27,7 @@ import org.hyperledger.besu.ethereum.p2p.discovery.NodeRecordManager;
 import org.hyperledger.besu.ethereum.p2p.discovery.PeerDiscoveryAgent;
 import org.hyperledger.besu.ethereum.p2p.discovery.PeerDiscoveryAgentFactory;
 import org.hyperledger.besu.ethereum.p2p.discovery.dns.EthereumNodeRecord;
+import org.hyperledger.besu.ethereum.p2p.peers.DefaultPeerId;
 import org.hyperledger.besu.ethereum.p2p.peers.Peer;
 import org.hyperledger.besu.ethereum.p2p.permissions.PeerPermissions;
 import org.hyperledger.besu.ethereum.p2p.rlpx.RlpxAgent;
@@ -45,6 +46,7 @@ import org.ethereum.beacon.discovery.DiscoverySystemBuilder;
 import org.ethereum.beacon.discovery.MutableDiscoverySystem;
 import org.ethereum.beacon.discovery.crypto.Signer;
 import org.ethereum.beacon.discovery.schema.NodeRecord;
+import org.ethereum.beacon.discovery.storage.NewAddressHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -150,10 +152,16 @@ public final class PeerDiscoveryAgentFactoryV5 implements PeerDiscoveryAgentFact
               .signer(new NodeKeySigner(nodeKey))
               .localNodeRecord(localNodeRecord)
               .localNodeRecordListener(nodeRecordListener)
-              // Ignore peer-reported external addresses for now (always returns Optional.empty()).
-              // For IPv4 this is covered by NatService; future IPv6 auto-discovery may relax
-              // this: https://github.com/hyperledger/besu/issues/9874
-              .newAddressHandler((nodeRecord, newAddress) -> Optional.empty())
+              // The discovery library's default newAddressHandler auto-rewrites the local ENR
+              // from peer reports; we replace it explicitly. When --p2p-host-ipv6 is pinned we
+              // install NOOP to suppress that default. Otherwise we install IpV6NewAddressHandler
+              // to route validated IPv6 peer-consensus reports into NodeRecordManager for
+              // auto-discovery. IPv4 reports are always ignored here — NatService
+              // (UPnP/NAT-PMP/MANUAL) handles IPv4 external address resolution at startup.
+              .newAddressHandler(
+                  discoveryConfig.getAdvertisedHostIpv6().isPresent()
+                      ? NewAddressHandler.NOOP
+                      : new IpV6NewAddressHandler(nodeRecordManager))
               .addressAccessPolicy(createAddressAccessPolicy())
               .bootnodes(
                   discoveryConfig.getEnrBootnodes().stream()
@@ -226,27 +234,41 @@ public final class PeerDiscoveryAgentFactoryV5 implements PeerDiscoveryAgentFact
           return false;
         }
 
-        // Reject NodeRecords with no advertised addresses — they cannot be
-        // converted to a DiscoveryPeer for identity-based permission checks.
-        if (udp.isEmpty() && udp6.isEmpty() && tcp.isEmpty() && tcp6.isEmpty()) {
+        final Peer localNode =
+            nodeRecordManager
+                .getLocalNode()
+                .map(Peer.class::cast)
+                // Defensive: in practice the local node is always initialized before the
+                // discovery system starts (see PeerDiscoveryAgentV5.initializeLocalNodeRecord),
+                // so this branch should never execute. Reject rather than bypass identity
+                // checks — the peer will be re-discovered on the next FINDNODE round.
+                .orElse(null);
+        if (localNode == null) {
           return false;
         }
 
-        try {
-          // .map(Peer.class::cast) widens Optional<DiscoveryPeerV4> to Optional<Peer>
-          final Optional<Peer> localNode = nodeRecordManager.getLocalNode().map(Peer.class::cast);
-          if (localNode.isEmpty()) {
-            // Defensive: in practice the local node is always initialized before the
-            // discovery system starts (see PeerDiscoveryAgentV5.initializeLocalNodeRecord),
-            // so this branch should never execute. Reject rather than bypass identity
-            // checks — the peer will be re-discovered on the next FINDNODE round.
+        if (udp.isEmpty() && udp6.isEmpty() && tcp.isEmpty() && tcp6.isEmpty()) {
+          // No address to build a full DiscoveryPeer — fall back to node-ID-only check.
+          // Implementations that need an IP (e.g. subnet filters) default to true since
+          // there is nothing to filter on; only ID-based checks (e.g. denylists) fire.
+          try {
+            final Bytes publicKey = EthereumNodeRecord.uncompressedPublicKey(record);
+            return peerPermissions.isPermitted(
+                localNode,
+                new DefaultPeerId(publicKey),
+                PeerPermissions.Action.DISCOVERY_ALLOW_IN_PEER_TABLE);
+          } catch (final RuntimeException e) {
+            LOG.debug("DiscV5: Rejecting peer with missing or malformed secp256k1 key", e);
             return false;
           }
+        }
+
+        try {
           final DiscoveryPeer remotePeer =
               DiscoveryPeerFactory.fromNodeRecord(
                   record, config.discoveryConfiguration().isPreferIpv6Outbound());
           return peerPermissions.isPermitted(
-              localNode.get(), remotePeer, PeerPermissions.Action.DISCOVERY_ALLOW_IN_PEER_TABLE);
+              localNode, remotePeer, PeerPermissions.Action.DISCOVERY_ALLOW_IN_PEER_TABLE);
         } catch (final RuntimeException e) {
           LOG.debug("DiscV5: Rejecting peer with malformed NodeRecord", e);
           return false;

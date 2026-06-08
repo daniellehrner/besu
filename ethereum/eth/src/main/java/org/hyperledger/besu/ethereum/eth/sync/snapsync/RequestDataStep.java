@@ -18,7 +18,6 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.snap.RetryingGetAccountRangeFromPeerTask;
-import org.hyperledger.besu.ethereum.eth.manager.snap.RetryingGetBlockAccessListsFromPeerTask;
 import org.hyperledger.besu.ethereum.eth.manager.snap.RetryingGetBytecodeFromPeerTask;
 import org.hyperledger.besu.ethereum.eth.manager.snap.RetryingGetStorageRangeFromPeerTask;
 import org.hyperledger.besu.ethereum.eth.manager.snap.RetryingGetTrieNodeFromPeerTask;
@@ -26,14 +25,13 @@ import org.hyperledger.besu.ethereum.eth.manager.task.EthTask;
 import org.hyperledger.besu.ethereum.eth.messages.snap.AccountRangeMessage;
 import org.hyperledger.besu.ethereum.eth.messages.snap.StorageRangeMessage;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.AccountRangeDataRequest;
-import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.BlockAccessListDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.BytecodeRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest;
+import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapRequestContext;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.StorageRangeDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.heal.AccountFlatDatabaseHealingRangeRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.heal.StorageFlatDatabaseHealingRangeRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.heal.TrieNodeHealingRequest;
-import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 import org.hyperledger.besu.ethereum.proof.WorldStateProofProvider;
 import org.hyperledger.besu.ethereum.trie.RangeManager;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
@@ -62,7 +60,7 @@ public class RequestDataStep {
   private static final Logger LOG = LoggerFactory.getLogger(RequestDataStep.class);
   private final WorldStateStorageCoordinator worldStateStorageCoordinator;
   private final SnapSyncProcessState fastSyncState;
-  private final SnapWorldDownloadState downloadState;
+  private final SnapRequestContext downloadState;
   private final SnapSyncConfiguration snapSyncConfiguration;
   private final MetricsSystem metricsSystem;
   private final EthContext ethContext;
@@ -72,7 +70,7 @@ public class RequestDataStep {
       final EthContext ethContext,
       final WorldStateStorageCoordinator worldStateStorageCoordinator,
       final SnapSyncProcessState fastSyncState,
-      final SnapWorldDownloadState downloadState,
+      final SnapRequestContext downloadState,
       final SnapSyncConfiguration snapSyncConfiguration,
       final MetricsSystem metricsSystem) {
     this.worldStateStorageCoordinator = worldStateStorageCoordinator;
@@ -225,43 +223,6 @@ public class RequestDataStep {
               if (error != null) {
                 LOG.atDebug()
                     .setMessage("Error handling code request task: {}")
-                    .addArgument(error)
-                    .log();
-              }
-              return requestTasks;
-            });
-  }
-
-  public CompletableFuture<List<Task<SnapDataRequest>>> requestBlockAccessLists(
-      final List<Task<SnapDataRequest>> requestTasks) {
-    final BlockHeader blockHeader = fastSyncState.getPivotBlockHeader().get();
-    final List<BlockHeader> blockHeaders =
-        requestTasks.stream()
-            .map(Task::getData)
-            .map(BlockAccessListDataRequest.class::cast)
-            .map(BlockAccessListDataRequest::getBlockHeader)
-            .collect(Collectors.toList());
-    final EthTask<List<BlockAccessList>> getBlockAccessListsTask =
-        RetryingGetBlockAccessListsFromPeerTask.forBlockAccessLists(
-            ethContext, blockHeaders, metricsSystem);
-    downloadState.addOutstandingTask(getBlockAccessListsTask);
-    return getBlockAccessListsTask
-        .run()
-        .orTimeout(10, TimeUnit.SECONDS)
-        .handle(
-            (response, error) -> {
-              downloadState.removeOutstandingTask(getBlockAccessListsTask);
-              if (response != null) {
-                for (int i = 0; i < Math.min(response.size(), requestTasks.size()); i++) {
-                  final BlockAccessListDataRequest blockAccessListDataRequest =
-                      (BlockAccessListDataRequest) requestTasks.get(i).getData();
-                  blockAccessListDataRequest.setRootHash(blockHeader.getStateRoot());
-                  blockAccessListDataRequest.setResponse(response.get(i));
-                }
-              }
-              if (error != null) {
-                LOG.atDebug()
-                    .setMessage("Error handling block access list request batch: {}")
                     .addArgument(error)
                     .log();
               }
