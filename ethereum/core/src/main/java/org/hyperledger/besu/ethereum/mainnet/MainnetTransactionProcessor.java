@@ -37,7 +37,6 @@ import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
 import org.hyperledger.besu.evm.frame.Eip8037Trace;
-import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.gascalculator.StateGasCostCalculator;
@@ -270,6 +269,8 @@ public class MainnetTransactionProcessor {
         }
       }
 
+      final var stateGasCalc = gasCalculator.stateGasCostCalculator();
+
       long codeDelegationRefund = 0L;
       long alreadyExistingDelegators = 0L;
       long authBaseRefundCount = 0L;
@@ -284,10 +285,11 @@ public class MainnetTransactionProcessor {
                 .get()
                 .process(delegationUpdater, transaction, accessLocationTracker);
         eip2930WarmAddressList.addAll(codeDelegationResult.accessedDelegatorAddresses());
-        // EIP-7702 (#11715): an invalid authorization grows no state, so it refunds its full
-        // worst-case intrinsic charge — NEW_ACCOUNT + AUTH_BASE state gas plus the regular
-        // ACCOUNT_WRITE — exactly like an authority whose account already existed.
-        final long invalidAuthorizations = codeDelegationResult.invalidAuthorizations();
+        // EIP-7702 (#11715): an invalid authorization grows no state, so under the Amsterdam gas
+        // regime it refunds its full worst-case intrinsic charge — exactly like an authority whose
+        // account already existed. Pre-Amsterdam forks refund none.
+        final long invalidAuthorizations =
+            stateGasCalc.isActive() ? codeDelegationResult.invalidAuthorizations() : 0L;
         alreadyExistingDelegators =
             codeDelegationResult.alreadyExistingDelegators() + invalidAuthorizations;
         authBaseRefundCount = codeDelegationResult.authBaseRefundCount() + invalidAuthorizations;
@@ -323,7 +325,6 @@ public class MainnetTransactionProcessor {
 
       // EIP-8037: Validate that gas limit covers both regular AND state intrinsic gas.
       // This must be checked before frame construction to reject the tx at the intrinsic level.
-      final var stateGasCalc = gasCalculator.stateGasCostCalculator();
       final long intrinsicStateGas =
           stateGasCalc.transactionIntrinsicStateGas(
               transaction.isContractCreation(), transaction.codeDelegationListSize());
@@ -426,7 +427,7 @@ public class MainnetTransactionProcessor {
       initializeStateGasReservoir(initialFrame, gasAvailable, intrinsicRegularGas, stateGasCalc);
       chargeIntrinsicStateGas(
           initialFrame, transaction, alreadyExistingDelegators, authBaseRefundCount, stateGasCalc);
-      chargeEip2780TopFrameCharges(initialFrame, transaction, worldState, stateGasCalc);
+      stateGasCalc.chargeTransactionEntry(initialFrame, gasCalculator, worldState);
       // EIP-8037: Advance the undo mark so intrinsic state gas charges (auth delegation,
       // contract creation) are not rolled back if the initial frame's execution reverts.
       // These are transaction-level costs that persist regardless of execution outcome.
@@ -785,44 +786,6 @@ public class MainnetTransactionProcessor {
           transaction.codeDelegationListSize(),
           alreadyExistingDelegators,
           authBaseRefundCount);
-    }
-  }
-
-  /**
-   * EIP-2780 top-frame charges applied to the depth-0 frame of a non-create transaction before any
-   * opcode runs (mirrors {@code process_message_call}): NEW_ACCOUNT state gas for a positive value
-   * transfer to a non-precompile, non-alive recipient, and a cold-account-access regular charge
-   * when the recipient carries an EIP-7702 delegation. Reads pre-value-transfer state.
-   */
-  private void chargeEip2780TopFrameCharges(
-      final MessageFrame initialFrame,
-      final Transaction transaction,
-      final WorldUpdater worldState,
-      final StateGasCostCalculator stateGasCalc) {
-    if (transaction.isContractCreation()) {
-      return;
-    }
-    final Address to = transaction.getTo().orElseThrow();
-    final Account recipient = worldState.get(to);
-    boolean outOfGas = false;
-    // NEW_ACCOUNT state gas: positive value sent to a non-precompile, non-alive recipient.
-    if (transaction.getValue().getAsBigInteger().signum() > 0
-        && !gasCalculator.isPrecompile(to)
-        && (recipient == null || recipient.isEmpty())) {
-      outOfGas = !initialFrame.consumeStateGas(stateGasCalc.newAccountStateGas());
-    }
-    // EIP-7702: top-level access to a delegated recipient's target costs cold account access.
-    if (!outOfGas && recipient != null && hasCodeDelegation(recipient.getCode())) {
-      final long delegationAccessCost = gasCalculator.getColdAccountAccessCost();
-      if (initialFrame.getRemainingGas() >= delegationAccessCost) {
-        initialFrame.decrementRemainingGas(delegationAccessCost);
-      } else {
-        outOfGas = true;
-      }
-    }
-    if (outOfGas) {
-      initialFrame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
-      initialFrame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
     }
   }
 

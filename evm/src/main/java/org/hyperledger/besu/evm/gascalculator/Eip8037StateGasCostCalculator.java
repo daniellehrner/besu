@@ -14,11 +14,16 @@
  */
 package org.hyperledger.besu.evm.gascalculator;
 
+import static org.hyperledger.besu.evm.worldstate.CodeDelegationHelper.hasCodeDelegation;
+
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.account.Account;
+import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
+import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
+import java.util.Optional;
 import java.util.function.Supplier;
 
 import org.apache.tuweni.units.bigints.UInt256;
@@ -215,6 +220,41 @@ public class Eip8037StateGasCostCalculator implements StateGasCostCalculator {
       frame.decrementStateGasUsed(refund);
     }
     return true;
+  }
+
+  @Override
+  public void chargeTransactionEntry(
+      final MessageFrame initialFrame,
+      final GasCalculator gasCalculator,
+      final WorldUpdater worldState) {
+    if (initialFrame.getType() == MessageFrame.Type.CONTRACT_CREATION) {
+      return;
+    }
+    final Address to = initialFrame.getRecipientAddress();
+    // Read from the shallow transaction-level updater (already cached from code resolution) rather
+    // than the frame's grandchild updater, to avoid an extra updater-chain traversal.
+    final Account recipient = worldState.get(to);
+    boolean outOfGas = false;
+    // NEW_ACCOUNT state gas: positive value sent to a non-alive recipient. Precompiles are NOT
+    // excluded here — EELS amsterdam (EIP-2780, fixed in tests-glamsterdam-devnet@v6.1.0) charges
+    // account creation when value is transferred to a previously zero-balance precompile, since
+    // such an address is not "alive" under EIP-161.
+    if (!initialFrame.getValue().isZero() && (recipient == null || recipient.isEmpty())) {
+      outOfGas = !initialFrame.consumeStateGas(newAccountStateGas());
+    }
+    // EIP-7702: top-level access to a delegated recipient's target costs cold account access.
+    if (!outOfGas && recipient != null && hasCodeDelegation(recipient.getCode())) {
+      final long delegationAccessCost = gasCalculator.getColdAccountAccessCost();
+      if (initialFrame.getRemainingGas() >= delegationAccessCost) {
+        initialFrame.decrementRemainingGas(delegationAccessCost);
+      } else {
+        outOfGas = true;
+      }
+    }
+    if (outOfGas) {
+      initialFrame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
+      initialFrame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
+    }
   }
 
   @Override

@@ -18,6 +18,7 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.frame.MessageFrame;
+import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
 import java.util.function.Supplier;
 
@@ -231,6 +232,25 @@ public interface StateGasCostCalculator {
       final long authBaseRefundCount) {
     return true;
   }
+
+  /**
+   * Charges the EIP-2780 transaction-entry costs on the depth-0 frame of a non-create transaction,
+   * before any opcode runs (mirrors EELS {@code process_message_call}): NEW_ACCOUNT state gas for a
+   * positive value transfer to a non-alive recipient (precompiles included, per EIP-2780), plus a
+   * cold-account-access regular charge when the recipient carries an EIP-7702 delegation. Reads the
+   * recipient's pre-value-transfer state from {@code worldState} (the shallow transaction-level
+   * updater, which already has the recipient cached from code resolution, so this is not an extra
+   * trie/disk lookup) and sets the frame to {@code EXCEPTIONAL_HALT} on insufficient gas. No-op for
+   * the NONE (pre-Amsterdam) strategy, so callers invoke it unconditionally.
+   *
+   * @param initialFrame the depth-0 message-call frame
+   * @param gasCalculator the active gas calculator, for the EIP-7702 cold-account-access cost
+   * @param worldState the transaction-level world updater to read the recipient account from
+   */
+  default void chargeTransactionEntry(
+      final MessageFrame initialFrame,
+      final GasCalculator gasCalculator,
+      final WorldUpdater worldState) {}
 
   /**
    * Refunds state gas for SSTORE when reverting a storage set (0→X→0). Only refunds when the new

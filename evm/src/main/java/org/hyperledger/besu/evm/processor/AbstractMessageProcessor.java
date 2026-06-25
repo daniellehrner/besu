@@ -162,6 +162,11 @@ public abstract class AbstractMessageProcessor {
     traceFrameExit(frame, "HALT");
   }
 
+  /**
+   * Gets called when the message frame requests a revert.
+   *
+   * @param frame The message frame
+   */
   protected void revert(final MessageFrame frame) {
     handleStateGasOnFrameFailure(frame);
 

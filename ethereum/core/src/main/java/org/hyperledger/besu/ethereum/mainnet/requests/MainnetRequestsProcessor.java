@@ -34,13 +34,16 @@ public class MainnetRequestsProcessor {
         .addProcessor(
             RequestType.BUILDER_DEPOSIT,
             new SystemCallRequestProcessor(
-                "BUILDER_DEPOSIT_REQUEST_PREDEPLOY_ADDRESS",
+                // eth_config key name per EELS amsterdam fork.py (EIP-8282); note builders use
+                // *_CONTRACT_ADDRESS, unlike withdrawal/consolidation's
+                // *_REQUEST_PREDEPLOY_ADDRESS.
+                "BUILDER_DEPOSIT_CONTRACT_ADDRESS",
                 requestContractAddresses.getBuilderDepositRequestContractAddress(),
                 RequestType.BUILDER_DEPOSIT))
         .addProcessor(
             RequestType.BUILDER_EXIT,
             new SystemCallRequestProcessor(
-                "BUILDER_EXIT_REQUEST_PREDEPLOY_ADDRESS",
+                "BUILDER_EXIT_CONTRACT_ADDRESS",
                 requestContractAddresses.getBuilderExitRequestContractAddress(),
                 RequestType.BUILDER_EXIT))
         .build();
