@@ -105,8 +105,10 @@ public class EIP7708TransferLogAcceptanceTest extends AcceptanceTestBase {
             .nonce(0)
             .maxPriorityFeePerGas(Wei.of(1_000_000_000))
             .maxFeePerGas(Wei.fromHexString("0x02540BE400"))
-            // Amsterdam (EIP-2780 + EIP-7708 + EIP-8037) reprices intrinsic gas: a value transfer is
-            // TX_BASE + TX_VALUE_COST + TRANSFER_LOG_COST regular gas plus new-account state gas, so
+            // Amsterdam (EIP-2780 + EIP-7708 + EIP-8037) reprices intrinsic gas: a value transfer
+            // is
+            // TX_BASE + TX_VALUE_COST + TRANSFER_LOG_COST regular gas plus new-account state gas,
+            // so
             // 21,000 is no longer sufficient when the transfer creates the recipient account.
             .gasLimit(300_000)
             .to(Address.fromHexStringStrict(recipient.getAddress()))
@@ -517,8 +519,7 @@ public class EIP7708TransferLogAcceptanceTest extends AcceptanceTestBase {
    * factory-to-child value transfer performed by CREATE still emits a Transfer log (LOG3).
    */
   @Test
-  public void shouldNotEmitBurnLogForSameTxCreatedContractSelfDestructToSelf()
-      throws IOException {
+  public void shouldNotEmitBurnLogForSameTxCreatedContractSelfDestructToSelf() throws IOException {
     final Address factoryContract =
         Address.fromHexStringStrict("0x0000000000000000000000000000000000007710");
     // Factory has 1 ETH balance which it sends to the created contract
