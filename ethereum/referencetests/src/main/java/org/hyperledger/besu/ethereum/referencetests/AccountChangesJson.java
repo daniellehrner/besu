@@ -116,7 +116,7 @@ public class AccountChangesJson {
 
     public StorageChange toStorageChange() {
       return new StorageChange(
-          decodeIndex(blockAccessIndex),
+          parseUnsignedLong(blockAccessIndex),
           postValue != null ? UInt256.fromHexString(postValue) : UInt256.ZERO);
     }
   }
@@ -136,7 +136,7 @@ public class AccountChangesJson {
 
     public BalanceChange toBalanceChange() {
       return new BalanceChange(
-          decodeIndex(blockAccessIndex),
+          parseUnsignedLong(blockAccessIndex),
           postBalance != null ? Wei.fromHexString(postBalance) : Wei.ZERO);
     }
   }
@@ -155,8 +155,7 @@ public class AccountChangesJson {
     }
 
     public NonceChange toNonceChange() {
-      return new NonceChange(
-          decodeIndex(blockAccessIndex), postNonce != null ? Long.decode(postNonce) : 0L);
+      return new NonceChange(parseUnsignedLong(blockAccessIndex), parseUnsignedLong(postNonce));
     }
   }
 
@@ -175,19 +174,23 @@ public class AccountChangesJson {
 
     public CodeChange toCodeChange() {
       return new CodeChange(
-          decodeIndex(blockAccessIndex),
+          parseUnsignedLong(blockAccessIndex),
           newCode != null ? Bytes.fromHexString(newCode) : Bytes.EMPTY);
     }
   }
 
-  private static long decodeIndex(final String index) {
-    if (index == null) {
+  /**
+   * Parses an unsigned long from a hex ({@code 0x}-prefixed) or decimal string. Unsigned so values
+   * up to 2^64-1 (e.g. a max nonce of {@code 0xffffffffffffffff}) round-trip into a {@code long}.
+   */
+  private static long parseUnsignedLong(final String value) {
+    if (value == null) {
       return 0L;
     }
-    final String s = index.toLowerCase(Locale.ROOT);
+    final String s = value.toLowerCase(Locale.ROOT);
     if (s.startsWith("0x")) {
       return Long.parseUnsignedLong(s.substring(2), 16);
     }
-    return Long.parseUnsignedLong(index, 10);
+    return Long.parseUnsignedLong(value, 10);
   }
 }
