@@ -1549,7 +1549,6 @@ public class MessageFrame {
     private Optional<List<VersionedHash>> versionedHashes = Optional.empty();
 
     private long initialStateGasReservoir = 0L;
-    private long initialStateGasUsed = 0L;
 
     private boolean enableEvmV2 = false;
 
@@ -1869,19 +1868,6 @@ public class MessageFrame {
       return this;
     }
 
-    /**
-     * EIP-8037: initial {@code stateGasUsed} for the transaction's top-level frame, used to bake
-     * intrinsic state gas charges into the frame before execution begins. Ignored for child frames.
-     * Default 0.
-     *
-     * @param initialStateGasUsed the cumulative state gas already charged at frame entry
-     * @return the builder
-     */
-    public Builder initialStateGasUsed(final long initialStateGasUsed) {
-      this.initialStateGasUsed = initialStateGasUsed;
-      return this;
-    }
-
     private void validate() {
       if (parentMessageFrame == null) {
         checkState(worldUpdater != null, "Missing message frame world updater");
@@ -1934,7 +1920,6 @@ public class MessageFrame {
                 blockValues,
                 miningBeneficiary,
                 versionedHashes,
-                initialStateGasUsed,
                 initialStateGasReservoir);
         updater = worldUpdater;
         newStatic = isStatic;
