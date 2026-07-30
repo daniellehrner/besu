@@ -106,18 +106,13 @@ public class AmsterdamGasCalculator extends OsakaGasCalculator {
   private static final long TX_DATA_TOKEN_STANDARD = 4L;
 
   /**
-   * EIP-2780: cost of a value-bearing transaction's recipient charges, covering the recipient
-   * balance write (4,244) and the EIP-7708 transfer log (1,756). Charged in intrinsic gas for a
-   * value-bearing call; a self-transfer writes only the sender, so it charges neither.
+   * EIP-2780: single charge covering everything a value-bearing call does to its recipient — the
+   * balance write and the EIP-7708 transfer log. The log is no longer priced as a separate
+   * primitive, so this is the only value-dependent term in the intrinsic. A self-transfer writes
+   * only the sender and emits no log, so it charges nothing; a contract creation covers both
+   * through {@link #CREATE_ACCESS} and likewise charges nothing.
    */
   private static final long TX_VALUE_COST = 6_000L;
-
-  /**
-   * EIP-7708: the transfer-log half of {@link #TX_VALUE_COST}, needed on its own because a
-   * value-bearing contract creation covers the balance write through {@link #CREATE_ACCESS} but
-   * still emits the log.
-   */
-  private static final long TRANSFER_LOG_COST = 1_756L;
 
   /**
    * EIP-2780: state-independent regular gas per EIP-7702 authorization, charged in intrinsic gas:
@@ -239,19 +234,21 @@ public class AmsterdamGasCalculator extends OsakaGasCalculator {
    * calldata floor so the floor never undercuts the transaction's own intrinsic base.
    */
   private static long baseRecipientRegularGas(final Transaction transaction) {
-    final boolean valueTransfer = !transaction.getValue().isZero();
     if (transaction.isContractCreation()) {
-      // CREATE_ACCESS already covers the recipient balance write; a value-bearing creation still
-      // emits the EIP-7708 transfer log.
-      return valueTransfer ? CREATE_ACCESS + TRANSFER_LOG_COST : CREATE_ACCESS;
+      // CREATE_ACCESS covers the recipient balance write, and the EIP-7708 transfer log is now
+      // folded into TX_VALUE_COST rather than charged on its own, so a creation costs the same
+      // whether or not it carries value.
+      return CREATE_ACCESS;
     }
     if (isSelfTransfer(transaction)) {
       // A self-transfer touches and writes only the sender, both covered by TX_BASE. Value makes no
       // difference either, since EIP-7708 emits no transfer log when sender and recipient match.
       return 0L;
     }
-    // TX_VALUE_COST already bundles the recipient balance write and the EIP-7708 transfer log.
-    return valueTransfer ? COLD_ACCOUNT_ACCESS + TX_VALUE_COST : COLD_ACCOUNT_ACCESS;
+    // TX_VALUE_COST bundles the recipient balance write and the EIP-7708 transfer log.
+    return transaction.getValue().isZero()
+        ? COLD_ACCOUNT_ACCESS
+        : COLD_ACCOUNT_ACCESS + TX_VALUE_COST;
   }
 
   /** EIP-2780: a self-transfer (sender == recipient) skips the recipient and value charges. */

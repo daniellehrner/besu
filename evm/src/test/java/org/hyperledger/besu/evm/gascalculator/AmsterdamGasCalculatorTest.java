@@ -140,10 +140,10 @@ class AmsterdamGasCalculatorTest {
         Arguments.of("ETH to delegated account", RECIPIENT, Wei.ONE, 21_000L),
         Arguments.of("self-transfer, sender delegated", SENDER, Wei.ONE, 12_000L),
         Arguments.of("ETH creating a new account", RECIPIENT, Wei.ONE, 21_000L),
-        // to == null: contract creation. The recipient balance write is already covered by
-        // CREATE_ACCESS, but a value-bearing creation still pays the EIP-7708 transfer log (1,756).
+        // to == null: contract creation. CREATE_ACCESS covers the recipient balance write and the
+        // EIP-7708 transfer log is folded into TX_VALUE_COST, so value makes no difference.
         Arguments.of("create, value = 0", null, Wei.ZERO, 23_000L),
-        Arguments.of("create, value > 0", null, Wei.ONE, 24_756L),
+        Arguments.of("create, value > 0", null, Wei.ONE, 23_000L),
         Arguments.of("create, target pre-exists", null, Wei.ZERO, 23_000L));
   }
 
