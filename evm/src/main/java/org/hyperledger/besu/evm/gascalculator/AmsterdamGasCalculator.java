@@ -74,6 +74,17 @@ public class AmsterdamGasCalculator extends OsakaGasCalculator {
   protected static final long ACCOUNT_WRITE = 8_000L;
 
   /**
+   * Per-address cost of a transaction access list entry: the cold access it prepays, less the warm
+   * access the entry still pays on its first touch, so prepaying is gas-neutral.
+   * COLD_ACCOUNT_ACCESS - WARM_STORAGE_READ_COST
+   */
+  private static final long ACCESS_LIST_ADDRESS_COST = 2_900L;
+
+  /** Per-storage-key access list cost. See {@link #ACCESS_LIST_ADDRESS_COST}. */
+  private static final long ACCESS_LIST_STORAGE_KEY_COST =
+      COLD_STORAGE_ACCESS - WARM_STORAGE_READ_COST;
+
+  /**
    * Flat write cost charged once per slot, on its first change in the transaction. Replaces the
    * Berlin SSTORE set/reset distinction; the set-from-zero surcharge now lives entirely in state
    * gas (see {@link Eip8037StateGasCostCalculator#storageSetStateGas}).
@@ -189,13 +200,17 @@ public class AmsterdamGasCalculator extends OsakaGasCalculator {
 
   @Override
   public long accessListGasCost(final int addresses, final int storageSlots) {
-    // EIP-8038: per-entry access cost is the cold access cost for both addresses and storage keys.
+    // EIP-8038: per-entry access cost is the cold access cost minus the warm access the prepaid
+    // entry still pays when it is first touched, so prepaying is gas-neutral with a cold access
+    // rather than costing WARM_ACCESS more.
     // EIP-7981: plus the access-list data floor, so the data is always charged at the floor rate
     // regardless of which branch of the gasUsed max() wins.
     return clampedAdd(
-        clampedMultiply(addresses, clampedAdd(COLD_ACCOUNT_ACCESS, ACCESS_LIST_ADDRESS_FLOOR_COST)),
         clampedMultiply(
-            storageSlots, clampedAdd(COLD_STORAGE_ACCESS, ACCESS_LIST_STORAGE_KEY_FLOOR_COST)));
+            addresses, clampedAdd(ACCESS_LIST_ADDRESS_COST, ACCESS_LIST_ADDRESS_FLOOR_COST)),
+        clampedMultiply(
+            storageSlots,
+            clampedAdd(ACCESS_LIST_STORAGE_KEY_COST, ACCESS_LIST_STORAGE_KEY_FLOOR_COST)));
   }
 
   @Override

@@ -80,14 +80,15 @@ class AmsterdamGasCalculatorTest {
 
   @Test
   void accessListGasCostIncludesDataFloor() {
-    // EIP-8038: per-entry access cost raised to COLD_ACCESS (3,000) for both addresses and keys.
+    // EIP-8038: per-entry access cost is COLD_ACCESS (3,000) - WARM_ACCESS (100) = 2,900 for both
+    // addresses and keys, so a prepaid entry is gas-neutral with a cold access.
     // EIP-7981 data floor: +1280/address + 2048/key.
-    // One address + zero keys  = 3000 + 1280 = 4280
-    assertThat(amsterdamGasCalculator.accessListGasCost(1, 0)).isEqualTo(4280L);
-    // One address + one key    = 4280 + 3000 + 2048 = 9328
-    assertThat(amsterdamGasCalculator.accessListGasCost(1, 1)).isEqualTo(9328L);
-    // Three addresses + five keys = 3*4280 + 5*(3000+2048) = 12840 + 25240 = 38080
-    assertThat(amsterdamGasCalculator.accessListGasCost(3, 5)).isEqualTo(38080L);
+    // One address + zero keys  = 2900 + 1280 = 4180
+    assertThat(amsterdamGasCalculator.accessListGasCost(1, 0)).isEqualTo(4180L);
+    // One address + one key    = 4180 + 2900 + 2048 = 9128
+    assertThat(amsterdamGasCalculator.accessListGasCost(1, 1)).isEqualTo(9128L);
+    // Three addresses + five keys = 3*4180 + 5*(2900+2048) = 12540 + 24740 = 37280
+    assertThat(amsterdamGasCalculator.accessListGasCost(3, 5)).isEqualTo(37280L);
   }
 
   @Test
