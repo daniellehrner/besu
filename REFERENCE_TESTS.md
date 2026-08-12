@@ -112,63 +112,101 @@ ExecutionSpecDevnet{Blockchain,State}Test_{hardfork}_{eip_or_topic}_{batch_index
 
 The devnet fixtures are resolved from the same GitHub Ivy repository as stable fixtures. The dependency is declared separately via the `devnetTarConfig` configuration in `ethereum/referencetests/build.gradle`.
 
-## Fast State Test Runner (evmtool)
+## Fast Engine API & State Test Runners (evmtool)
 
-The `referenceTests*` tasks above generate one JUnit test per fixture. In addition, `evmtool`'s `state-test` subcommand consumes the `state_tests` fixtures directly — no per-fixture code generation — which makes a whole fixture tree a seconds-long run rather than a build.
+The `referenceTests*` tasks above generate one JUnit test per fixture and exercise the **block-import** and **state-transition** code paths. In addition, `evmtool` provides two much faster runners that consume the execution-spec-tests fixtures directly (no per-fixture code generation), and crucially `engine-test` exercises the **real Engine API path** (`engine_newPayloadVX` + `engine_forkchoiceUpdatedVX`) — the same code hive's `consume-engine` simulator drives, but locally and in seconds instead of hours.
 
-### Gradle task
+- **`engine-test`** consumes `blockchain_tests_engine` fixtures. These are a **superset of the blockchain tests for every post-merge fork** (same scenarios, via the Engine API), so for a post-merge devnet they cover everything the block-import path does, plus the Engine API validation on top (payload schema, error codes, blob schedule, strict exception matching).
+- **`state-test`** consumes `state_tests` fixtures (the EVM/state-transition-only slice, not covered by `engine-test`).
 
-`stateTestsDevnet` **reuses the same devnet fixture download/extract** as `referenceTestsDevnet` (the `extractDevnetFixtures` task — no separate download) and **fails the build on any test failure**.
+> There is intentionally no devnet runner for the RLP `blockchain_tests`: on a post-merge devnet `engine-test` already covers those scenarios.
+
+### Gradle tasks
+
+Both tasks **reuse the same devnet fixture download/extract** as `referenceTestsDevnet` (the `extractDevnetFixtures` task — no separate download), run against the extracted fixtures, and **fail the build on any test failure**. By default only failures and a final summary are printed, so the console isn't flooded with per-test output.
 
 ```bash
+# Run all devnet engine-API tests (blockchain_tests_engine) through the real Engine API
+./gradlew :ethereum:evmtool:engineTestsDevnet
+
+# Run all devnet state tests
 ./gradlew :ethereum:evmtool:stateTestsDevnet
 ```
 
-| Property | Meaning |
-|----------|---------|
-| `-PstateTestWorkers=N` | Parallel workers (default: available processors) |
-| `-PstateTestPath=<subdir>` | Scope to a subdirectory, e.g. `for_amsterdam` |
-| `-PstateTestFilter=<substr>` | Only run tests whose node id matches — see [Filter syntax](#filter-syntax) |
+Each task accepts optional `-P` properties:
+
+| Property | Applies to | Meaning |
+|----------|-----------|---------|
+| `-PengineTestWorkers=N` / `-PstateTestWorkers=N` | engine / state | Parallel workers (default: available processors) |
+| `-PengineTestPath=<subdir>` / `-PstateTestPath=<subdir>` | engine / state | Scope to a subdirectory, e.g. `for_amsterdam` |
+| `-PengineTestFilter=<substr>` / `-PstateTestFilter=<substr>` | engine / state | Only run tests whose node id contains `<substr>`. If the expression contains `*` or `?` it is treated as a case-insensitive regex that must match the whole node id, with `*` meaning `.*` and `?` meaning any single character — see [Filter syntax](#filter-syntax) |
 
 ```bash
+# Only the Amsterdam-fork engine fixtures
+./gradlew :ethereum:evmtool:engineTestsDevnet -PengineTestPath=for_amsterdam
+
+# Hive consume-engine equivalent of --sim.limit '.*fork_(Amsterdam|BPO2ToAmsterdamAtTime15k|Osaka).*'
+./gradlew :ethereum:evmtool:engineTestsDevnet \
+  -PengineTestFilter='*fork_(Amsterdam|BPO2ToAmsterdamAtTime15k|Osaka)*'
+
+# A subset of state tests, 8 workers
 ./gradlew :ethereum:evmtool:stateTestsDevnet -PstateTestPath=for_amsterdam -PstateTestWorkers=8
 ```
 
 ### Filter syntax
 
-`--run` (and the `-PstateTestFilter` property) accepts two forms:
+`--run` (and the `-P*Filter` properties) accepts two forms:
 
 - **No `*` or `?`** — a case-insensitive **substring** match against the node id.
-- **Contains `*` or `?`** — a case-insensitive **regex** that must match the *whole* node id. `*` is rewritten to `.*`, `?` to any single character, and `.` is escaped to a literal (node ids contain `.py`). Everything else reaches `java.util.regex`, so alternation and character classes work.
+- **Contains `*` or `?`** — a case-insensitive **regex** that must match the *whole* node id. `*` is rewritten to `.*`, `?` to any single character, and `.` is escaped to a literal (node ids contain `.py`). Everything else reaches `java.util.regex`, so alternation and character classes work — this is what makes the hive `--sim.limit` equivalence above possible.
 
 Because the expression is a regex, the `[`, `]`, `(` and `)` that pytest node ids are full of are **metacharacters, not literals**. Escape them to match literally:
 
 ```bash
 # WRONG: '[' opens a character class -> rejected before any test runs
-$EVM state-test --run '*[fork_Amsterdam*' <fixtures>
+$EVM engine-test --run '*[fork_Amsterdam*' <fixtures>
 #   Invalid --run/--test-name pattern '*[fork_Amsterdam*': Unclosed character class. …
 
 # RIGHT: escape it, or just use the substring form
-$EVM state-test --run '*\[fork_Amsterdam*' <fixtures>
-$EVM state-test --run 'fork_Amsterdam' <fixtures>
+$EVM engine-test --run '*\[fork_Amsterdam*' <fixtures>
+$EVM engine-test --run 'fork_Amsterdam' <fixtures>
 ```
 
 The pattern is compiled once before any fixture is read, so a malformed expression is an immediate, explicit failure (exit 1) rather than a run that quietly executes nothing. A filter that compiles but matches no test is also an error — an empty run never reports success.
 
 ### Running the evmtool binary directly
 
+For ad-hoc runs against any fixtures directory (not just the pinned devnet set), build the `evm` binary once and invoke the subcommands:
+
 ```bash
 ./gradlew :ethereum:evmtool:installDist
-EVM=./ethereum/evmtool/build/install/evmtool/bin/evmtool
+EVM=ethereum/evmtool/build/install/evmtool/bin/evmtool
 
+# Engine API tests (file or directory; directories are walked recursively)
+$EVM engine-test --workers 8 <path-to>/blockchain_tests_engine/
+
+# State tests
 $EVM state-test --workers 8 <path-to>/state_tests/
 ```
 
-Flags: `--workers N`, `--run <substr-or-regex>`, `--json-array` to emit machine-readable results (`[{name, pass, fork, stateRoot, error}]`), and `--summary-only` to suppress the per-test JSON line that external tooling parses (which remains the default).
+Shared flags: `--workers N`, `--run <substr-or-regex>` (see [Filter syntax](#filter-syntax)), and `--json-array` to emit machine-readable results (`[{name, pass, fork, lastBlockHash|stateRoot, error}]`).
 
-The subcommand exits non-zero if any test fails, if no test ran at all, or if the `--run` pattern is malformed. Fixture files that cannot be read as a state test are listed separately under "Unreadable" and do **not** count as failures — they say nothing about Besu. As of the currently pinned `tests-glamsterdam-devnet` fixtures that is 14 `state_tests` files (`test_bad_v_r_s`), which carry a pre-signed transaction in `post[].txbytes` rather than a `secretKey` that `StateTestVersionedTransaction` can sign with. The JUnit `referenceTestsDevnet` gate drops those same fixtures, silently.
+Per-test output differs between the two, because `state-test` has a long-standing line-per-test stdout contract that external tooling parses:
 
-> The gradle-extracted fixtures live at `ethereum/referencetests/build/execution-spec-devnet-tests/fixtures/state_tests/`, so you can point the binary there after running `referenceTestsDevnet` (or `extractDevnetFixtures`) once.
+| | `engine-test` | `state-test` |
+|---|---|---|
+| Default output | failures + final summary only | one JSON line per test (unchanged from before the runner existed) |
+| Per-test line | `--verbose` | on by default |
+| Quiet mode | default | `--summary-only` (what `stateTestsDevnet` uses) |
+| `--test-name` | alias for `--run` | **exact** test name; use `--run` for substring/regex |
+
+Both subcommands exit non-zero if any test fails, if no test ran at all, or if the `--run` pattern is malformed. Fixture files that cannot be read as a test of the expected kind are listed separately under "Unreadable" and do **not** count as failures — they say nothing about Besu. As of the currently pinned `tests-glamsterdam-devnet` fixtures that is 14 `state_tests` files (`test_bad_v_r_s`), which carry a pre-signed transaction in `post[].txbytes` rather than a `secretKey` that `StateTestVersionedTransaction` can sign with. The JUnit `referenceTestsDevnet` gate drops those same fixtures, silently.
+
+> **Tip:** if a `--verbose` run makes the terminal flicker (Gradle's animated console repainting as output streams), add `--console=plain` to the Gradle invocation.
+
+> The gradle-extracted fixtures used by the tasks above live at
+> `ethereum/referencetests/build/execution-spec-devnet-tests/fixtures/{blockchain_tests_engine,state_tests}/`,
+> so you can point the binary at that directory after running `referenceTestsDevnet` (or `extractDevnetFixtures`) once.
 
 ## Enabling JSON Tracing
 
