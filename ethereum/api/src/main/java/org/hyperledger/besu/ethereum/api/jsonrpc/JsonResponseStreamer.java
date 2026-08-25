@@ -61,7 +61,7 @@ public class JsonResponseStreamer extends OutputStream {
       chunked = true;
     }
 
-    StreamBackpressure.awaitDrain(response);
+    StreamBackpressure.awaitDrain(response, this::writeAborted);
 
     Buffer buf = Buffer.buffer(len);
     buf.appendBytes(bbuf, off, len);
@@ -96,5 +96,16 @@ public class JsonResponseStreamer extends OutputStream {
   private void handleFailure(final Throwable t) {
     LOG.debug("Write to remote address {} failed", remoteAddress, t);
     failure.set(t);
+  }
+
+  /**
+   * True once this response can no longer be delivered, so a thread waiting for the write queue to
+   * drain should give up rather than wait out the backpressure timeout. {@code ended()} covers the
+   * JSON-RPC timeout handler completing the response from the event loop while we are blocked here.
+   *
+   * @return whether writing should be abandoned
+   */
+  private boolean writeAborted() {
+    return failure.get() != null || response.closed() || response.ended();
   }
 }
