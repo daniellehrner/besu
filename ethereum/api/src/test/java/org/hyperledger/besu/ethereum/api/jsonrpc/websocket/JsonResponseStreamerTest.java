@@ -22,6 +22,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
 
 import io.vertx.core.http.ServerWebSocket;
@@ -101,6 +102,19 @@ public class JsonResponseStreamerTest {
 
     verify(failedResponse).writeFrame(argThat(frameContains("xyz", false)));
     verify(failedResponse, never()).writeFrame(argThat(frameContains("\n", true)));
+  }
+
+  @Test
+  public void writeAbortsWhenWebSocketClosesWhileQueueIsFull() throws IOException {
+    when(response.writeQueueFull()).thenReturn(true);
+    when(response.isClosed()).thenReturn(true);
+
+    JsonResponseStreamer streamer = new JsonResponseStreamer(response);
+    // the first write only buffers; the second is the one that has to wait for the queue
+    streamer.write("xyz".getBytes(StandardCharsets.UTF_8));
+
+    assertThatThrownBy(() -> streamer.write('\n')).isInstanceOf(ClosedChannelException.class);
+    verify(response, never()).writeFrame(any(WebSocketFrame.class));
   }
 
   private ArgumentMatcher<WebSocketFrame> frameContains(final String text, final boolean isFinal) {
