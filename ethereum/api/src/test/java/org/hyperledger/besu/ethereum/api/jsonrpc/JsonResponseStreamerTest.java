@@ -22,6 +22,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
 
 import io.vertx.core.buffer.Buffer;
@@ -119,6 +120,32 @@ public class JsonResponseStreamerTest {
     verify(failedResponse).write(argThat(bufferContains("xyz")));
     verify(failedResponse, never()).write(argThat(bufferContains("abc")));
     verify(failedResponse).end();
+  }
+
+  @Test
+  public void writeAbortsWhenConnectionClosesWhileQueueIsFull() {
+    when(httpResponse.writeQueueFull()).thenReturn(true);
+    when(httpResponse.closed()).thenReturn(true);
+
+    JsonResponseStreamer streamer = new JsonResponseStreamer(httpResponse, testAddress);
+
+    assertThatThrownBy(() -> streamer.write("xyz".getBytes(StandardCharsets.UTF_8)))
+        .isInstanceOf(ClosedChannelException.class);
+    verify(httpResponse, never()).write(any(Buffer.class));
+  }
+
+  @Test
+  public void writeAbortsWhenResponseAlreadyEndedWhileQueueIsFull() {
+    // the JSON-RPC timeout handler ends the response from the event loop while a worker
+    // thread is blocked on backpressure
+    when(httpResponse.writeQueueFull()).thenReturn(true);
+    when(httpResponse.ended()).thenReturn(true);
+
+    JsonResponseStreamer streamer = new JsonResponseStreamer(httpResponse, testAddress);
+
+    assertThatThrownBy(() -> streamer.write("xyz".getBytes(StandardCharsets.UTF_8)))
+        .isInstanceOf(ClosedChannelException.class);
+    verify(httpResponse, never()).write(any(Buffer.class));
   }
 
   private ArgumentMatcher<Buffer> bufferContains(final String text) {

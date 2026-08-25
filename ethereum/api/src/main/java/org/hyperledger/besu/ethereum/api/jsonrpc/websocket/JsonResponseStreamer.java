@@ -58,7 +58,7 @@ class JsonResponseStreamer extends OutputStream {
     stopOnFailureOrClosed();
 
     if (buffer != EMPTY_BUFFER) {
-      StreamBackpressure.awaitDrain(response);
+      StreamBackpressure.awaitDrain(response, this::writeAborted);
       writeFrame(buffer, false);
     }
     Buffer buf = Buffer.buffer(len);
@@ -103,5 +103,15 @@ class JsonResponseStreamer extends OutputStream {
   private void handleFailure(final Throwable t) {
     LOG.debug("Write to remote address {} failed", response.remoteAddress(), t);
     failure.set(t);
+  }
+
+  /**
+   * True once this response can no longer be delivered, so a thread waiting for the write queue to
+   * drain should give up rather than wait out the backpressure timeout.
+   *
+   * @return whether writing should be abandoned
+   */
+  private boolean writeAborted() {
+    return failure.get() != null || response.isClosed();
   }
 }

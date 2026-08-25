@@ -15,8 +15,10 @@
 package org.hyperledger.besu.ethereum.api.jsonrpc;
 
 import java.io.IOException;
+import java.nio.channels.ClosedChannelException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 import io.vertx.core.streams.WriteStream;
 
@@ -30,33 +32,71 @@ import io.vertx.core.streams.WriteStream;
  */
 public final class StreamBackpressure {
 
-  private static final long DRAIN_TIMEOUT_SECONDS = 60;
+  private static final long DRAIN_TIMEOUT_MILLIS = TimeUnit.SECONDS.toMillis(60);
+
+  /**
+   * How often the wait is broken to re-evaluate the abort condition. A drain still wakes the waiter
+   * immediately via the drain handler, so this only bounds how quickly a dead peer is noticed.
+   */
+  private static final long ABORT_POLL_MILLIS = 50;
 
   private StreamBackpressure() {}
 
   /**
-   * If the write queue is full, blocks until it drains below the low watermark or the timeout
-   * expires.
+   * If the write queue is full, blocks until it drains below the low watermark, the peer goes away,
+   * or the timeout expires.
    *
    * @param stream the Vertx WriteStream to check
+   * @param aborted returns true once the response can no longer be written — the connection was
+   *     closed, the response was already ended (for example by the JSON-RPC timeout handler), or a
+   *     previous write failed. Re-evaluated every 50 ms while waiting.
+   * @throws ClosedChannelException if {@code aborted} becomes true while waiting
    * @throws IOException if the timeout expires or the thread is interrupted
    */
-  public static void awaitDrain(final WriteStream<?> stream) throws IOException {
-    if (stream.writeQueueFull()) {
-      final CountDownLatch latch = new CountDownLatch(1);
-      stream.drainHandler(v -> latch.countDown());
-      // Re-check after setting handler to avoid race where queue drained
+  public static void awaitDrain(final WriteStream<?> stream, final BooleanSupplier aborted)
+      throws IOException {
+    awaitDrain(stream, aborted, DRAIN_TIMEOUT_MILLIS);
+  }
+
+  static void awaitDrain(
+      final WriteStream<?> stream, final BooleanSupplier aborted, final long timeoutMillis)
+      throws IOException {
+    if (!stream.writeQueueFull()) {
+      return;
+    }
+
+    final CountDownLatch latch = new CountDownLatch(1);
+    stream.drainHandler(v -> latch.countDown());
+    try {
+      // Re-check after setting the handler to avoid a race where the queue drained
       // between the full-check and the handler registration
-      if (stream.writeQueueFull()) {
-        try {
-          if (!latch.await(DRAIN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-            throw new IOException("Timed out waiting for write queue to drain");
-          }
-        } catch (final InterruptedException e) {
-          Thread.currentThread().interrupt();
-          throw new IOException("Interrupted waiting for write queue to drain", e);
+      if (!stream.writeQueueFull()) {
+        return;
+      }
+      final long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+      while (true) {
+        // Checked before every wait slice: nothing counts the latch down when the peer
+        // disappears, so without this the thread would park for the full timeout even though
+        // the response can never be delivered.
+        if (aborted.getAsBoolean()) {
+          throw new ClosedChannelException();
+        }
+        final long remainingNanos = deadline - System.nanoTime();
+        if (remainingNanos <= 0) {
+          throw new IOException("Timed out waiting for write queue to drain");
+        }
+        final long waitMillis =
+            Math.min(ABORT_POLL_MILLIS, TimeUnit.NANOSECONDS.toMillis(remainingNanos) + 1);
+        if (latch.await(waitMillis, TimeUnit.MILLISECONDS)) {
+          return;
         }
       }
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IOException("Interrupted waiting for write queue to drain", e);
+    } finally {
+      // Do not leave a handler pointing at a latch nobody is waiting on any more.
+      stream.drainHandler(null);
     }
   }
 }
