@@ -136,8 +136,7 @@ public class JsonResponseStreamerTest {
 
   @Test
   public void writeAbortsWhenResponseAlreadyEndedWhileQueueIsFull() {
-    // the JSON-RPC timeout handler ends the response from the event loop while a worker
-    // thread is blocked on backpressure
+    // the timeout handler ends the response while a worker thread is blocked on backpressure
     when(httpResponse.writeQueueFull()).thenReturn(true);
     when(httpResponse.ended()).thenReturn(true);
 
@@ -146,6 +145,33 @@ public class JsonResponseStreamerTest {
     assertThatThrownBy(() -> streamer.write("xyz".getBytes(StandardCharsets.UTF_8)))
         .isInstanceOf(ClosedChannelException.class);
     verify(httpResponse, never()).write(any(Buffer.class));
+  }
+
+  @Test
+  public void writeAbortsWhenResponseAlreadyEndedAndQueueIsNotFull() {
+    // the timeout handler ends the response while the worker thread is between writes, so there is
+    // no backpressure wait to abort
+    when(httpResponse.writeQueueFull()).thenReturn(false);
+    when(httpResponse.ended()).thenReturn(true);
+
+    JsonResponseStreamer streamer = new JsonResponseStreamer(httpResponse, testAddress);
+
+    assertThatThrownBy(() -> streamer.write("xyz".getBytes(StandardCharsets.UTF_8)))
+        .isInstanceOf(ClosedChannelException.class);
+    verify(httpResponse, never()).write(any(Buffer.class));
+  }
+
+  @Test
+  public void writeKeepsTheOriginalFailureRatherThanReportingAClosedChannel() throws IOException {
+    final IOException cause = new IOException("SSL write failed");
+    when(failedResponse.write(any(Buffer.class))).thenReturn(new FailedFuture<>(cause));
+
+    JsonResponseStreamer streamer = new JsonResponseStreamer(failedResponse, testAddress);
+    streamer.write("xyz".getBytes(StandardCharsets.UTF_8));
+
+    // a genuine write error must stay distinguishable from a peer that simply hung up
+    assertThatThrownBy(() -> streamer.write("abc".getBytes(StandardCharsets.UTF_8)))
+        .isSameAs(cause);
   }
 
   private ArgumentMatcher<Buffer> bufferContains(final String text) {
