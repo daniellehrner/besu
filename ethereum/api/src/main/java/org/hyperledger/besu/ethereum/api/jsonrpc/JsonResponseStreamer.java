@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.api.jsonrpc;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.channels.ClosedChannelException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import io.vertx.core.buffer.Buffer;
@@ -61,7 +62,7 @@ public class JsonResponseStreamer extends OutputStream {
       chunked = true;
     }
 
-    StreamBackpressure.awaitDrain(response, this::writeAborted);
+    StreamBackpressure.awaitDrain(response, this::stopOnFailureOrClosed);
 
     Buffer buf = Buffer.buffer(len);
     buf.appendBytes(bbuf, off, len);
@@ -81,6 +82,12 @@ public class JsonResponseStreamer extends OutputStream {
     }
   }
 
+  /**
+   * Guards both the next write and a thread blocked on backpressure. The original failure is
+   * rethrown as-is so a write error stays distinguishable from a client that hung up.
+   *
+   * @throws IOException if writing should be abandoned
+   */
   private void stopOnFailureOrClosed() throws IOException {
     if (closed) {
       throw new IOException("Stream closed");
@@ -91,21 +98,16 @@ public class JsonResponseStreamer extends OutputStream {
       LOG.debug("Stop writing to remote address {} due to a failure", remoteAddress, t);
       throw (t instanceof IOException ioException) ? ioException : new IOException(t);
     }
+
+    // The event loop can complete the response - the JSON-RPC timeout handler does - while this
+    // worker thread is between writes. Writing to it afterwards throws IllegalStateException.
+    if (response.closed() || response.ended()) {
+      throw new ClosedChannelException();
+    }
   }
 
   private void handleFailure(final Throwable t) {
     LOG.debug("Write to remote address {} failed", remoteAddress, t);
     failure.set(t);
-  }
-
-  /**
-   * True once this response can no longer be delivered, so a thread waiting for the write queue to
-   * drain should give up rather than wait out the backpressure timeout. {@code ended()} covers the
-   * JSON-RPC timeout handler completing the response from the event loop while we are blocked here.
-   *
-   * @return whether writing should be abandoned
-   */
-  private boolean writeAborted() {
-    return failure.get() != null || response.closed() || response.ended();
   }
 }
