@@ -18,8 +18,8 @@ import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BooleanSupplier;
 
+import io.vertx.core.Handler;
 import io.vertx.core.streams.WriteStream;
 
 /**
@@ -34,53 +34,62 @@ public final class StreamBackpressure {
 
   private static final long DRAIN_TIMEOUT_MILLIS = TimeUnit.SECONDS.toMillis(60);
 
-  /**
-   * How often the wait is broken to re-evaluate the abort condition. A drain still wakes the waiter
-   * immediately via the drain handler, so this only bounds how quickly a dead peer is noticed.
-   */
+  /** Bounds how long a waiter can stay parked after the peer has gone away. */
   private static final long ABORT_POLL_MILLIS = 50;
 
   private StreamBackpressure() {}
+
+  /** Signals that a response can no longer be delivered. */
+  @FunctionalInterface
+  public interface AbortCheck {
+
+    /**
+     * Implementations should throw {@link ClosedChannelException} for a lost peer and the
+     * underlying failure for a write error, so the two stay distinguishable in the logs.
+     *
+     * @throws IOException if the response can no longer be delivered
+     */
+    void checkNotAborted() throws IOException;
+  }
 
   /**
    * If the write queue is full, blocks until it drains below the low watermark, the peer goes away,
    * or the timeout expires.
    *
    * @param stream the Vertx WriteStream to check
-   * @param aborted returns true once the response can no longer be written — the connection was
-   *     closed, the response was already ended (for example by the JSON-RPC timeout handler), or a
-   *     previous write failed. Re-evaluated every 50 ms while waiting.
-   * @throws ClosedChannelException if {@code aborted} becomes true while waiting
-   * @throws IOException if the timeout expires or the thread is interrupted
+   * @param abortCheck throws once the response can no longer be written
+   * @throws IOException if {@code abortCheck} throws while waiting, if the timeout expires, or if
+   *     the thread is interrupted
    */
-  public static void awaitDrain(final WriteStream<?> stream, final BooleanSupplier aborted)
+  public static void awaitDrain(final WriteStream<?> stream, final AbortCheck abortCheck)
       throws IOException {
-    awaitDrain(stream, aborted, DRAIN_TIMEOUT_MILLIS);
+    awaitDrain(stream, abortCheck, DRAIN_TIMEOUT_MILLIS);
   }
 
   static void awaitDrain(
-      final WriteStream<?> stream, final BooleanSupplier aborted, final long timeoutMillis)
+      final WriteStream<?> stream, final AbortCheck abortCheck, final long timeoutMillis)
       throws IOException {
-    if (!stream.writeQueueFull()) {
+    // A closed ServerWebSocket rejects every query about its write queue, so the abort has to be
+    // detected before the stream is touched.
+    abortCheck.checkNotAborted();
+
+    if (!writeQueueFull(stream)) {
       return;
     }
 
     final CountDownLatch latch = new CountDownLatch(1);
-    stream.drainHandler(v -> latch.countDown());
+    if (!setDrainHandler(stream, v -> latch.countDown())) {
+      throw new ClosedChannelException();
+    }
     try {
-      // Re-check after setting the handler to avoid a race where the queue drained
-      // between the full-check and the handler registration
-      if (!stream.writeQueueFull()) {
+      // Guards against the queue draining between the full-check and the handler registration.
+      if (!writeQueueFull(stream)) {
         return;
       }
       final long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
       while (true) {
-        // Checked before every wait slice: nothing counts the latch down when the peer
-        // disappears, so without this the thread would park for the full timeout even though
-        // the response can never be delivered.
-        if (aborted.getAsBoolean()) {
-          throw new ClosedChannelException();
-        }
+        // Nothing counts the latch down when the peer disappears, so the abort has to be polled.
+        abortCheck.checkNotAborted();
         final long remainingNanos = deadline - System.nanoTime();
         if (remainingNanos <= 0) {
           throw new IOException("Timed out waiting for write queue to drain");
@@ -95,8 +104,34 @@ public final class StreamBackpressure {
       Thread.currentThread().interrupt();
       throw new IOException("Interrupted waiting for write queue to drain", e);
     } finally {
-      // Do not leave a handler pointing at a latch nobody is waiting on any more.
-      stream.drainHandler(null);
+      // Do not leave a handler pointing at a latch nobody waits on any more.
+      setDrainHandler(stream, null);
+    }
+  }
+
+  private static boolean writeQueueFull(final WriteStream<?> stream) throws IOException {
+    try {
+      return stream.writeQueueFull();
+    } catch (final IllegalStateException e) {
+      // ServerWebSocket throws instead of answering once the socket is closed
+      final ClosedChannelException closed = new ClosedChannelException();
+      closed.initCause(e);
+      throw closed;
+    }
+  }
+
+  /**
+   * @return false if the stream refused the handler because it is already closed
+   */
+  private static boolean setDrainHandler(
+      final WriteStream<?> stream, final Handler<Void> drainHandler) {
+    try {
+      stream.drainHandler(drainHandler);
+      return true;
+    } catch (final IllegalStateException e) {
+      // ServerWebSocket.drainHandler() throws once the socket is closed, even when clearing the
+      // handler with null. Swallowed so it cannot mask the abort the caller reports.
+      return false;
     }
   }
 }

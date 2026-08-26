@@ -24,6 +24,7 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import io.vertx.core.http.ServerWebSocket;
 import io.vertx.core.http.WebSocketFrame;
@@ -107,13 +108,30 @@ public class JsonResponseStreamerTest {
   @Test
   public void writeAbortsWhenWebSocketClosesWhileQueueIsFull() throws IOException {
     when(response.writeQueueFull()).thenReturn(true);
-    when(response.isClosed()).thenReturn(true);
+    final AtomicBoolean webSocketClosed = new AtomicBoolean(false);
+    when(response.isClosed()).thenAnswer(invocation -> webSocketClosed.get());
 
     JsonResponseStreamer streamer = new JsonResponseStreamer(response);
     // the first write only buffers; the second is the one that has to wait for the queue
     streamer.write("xyz".getBytes(StandardCharsets.UTF_8));
+    webSocketClosed.set(true);
 
     assertThatThrownBy(() -> streamer.write('\n')).isInstanceOf(ClosedChannelException.class);
+    verify(response, never()).writeFrame(any(WebSocketFrame.class));
+  }
+
+  @Test
+  public void writeAbortsWhenWebSocketIsAlreadyClosed() {
+    // a closed ServerWebSocket throws IllegalStateException from writeQueueFull() and
+    // drainHandler(), so the abort has to be detected without touching either
+    when(response.isClosed()).thenReturn(true);
+    when(response.writeQueueFull()).thenThrow(new IllegalStateException("WebSocket is closed"));
+    when(response.drainHandler(any())).thenThrow(new IllegalStateException("WebSocket is closed"));
+
+    JsonResponseStreamer streamer = new JsonResponseStreamer(response);
+
+    assertThatThrownBy(() -> streamer.write("xyz".getBytes(StandardCharsets.UTF_8)))
+        .isInstanceOf(ClosedChannelException.class);
     verify(response, never()).writeFrame(any(WebSocketFrame.class));
   }
 
