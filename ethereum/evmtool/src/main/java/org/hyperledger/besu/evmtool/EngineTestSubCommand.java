@@ -76,8 +76,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.function.IntFunction;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -214,9 +212,13 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
       boolean ranNothing = false;
       if (!results.hasTests()) {
         ranNothing = true;
-        parentCommand.out.printf(
-            "No engine test was executed%s.%n",
-            testName == null ? "" : " matching --test-name '" + testName + "'");
+        // Not under --json-array, where the empty array plus a non-zero exit says the same thing
+        // without breaking the parse.
+        if (!jsonArray) {
+          parentCommand.out.printf(
+              "No engine test was executed%s.%n",
+              testName == null ? "" : " matching --test-name '" + testName + "'");
+        }
       }
       if (jsonArray) {
         FixtureRunner.printJsonArray(parentCommand.out, jsonArrayResults);
@@ -252,17 +254,6 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
     return exitCode;
   }
 
-  // Shared across all tests to avoid thread exhaustion
-  private static final Vertx SHARED_VERTX = Vertx.vertx();
-  private static final NoOpMetricsSystem SHARED_METRICS = new NoOpMetricsSystem();
-  private static final EthScheduler SHARED_SCHEDULER =
-      new EthScheduler(
-          Runtime.getRuntime().availableProcessors(),
-          1,
-          Runtime.getRuntime().availableProcessors(),
-          SHARED_METRICS);
-  private static final EthPeers SHARED_PEERS = new HarnessEthPeers();
-
   /**
    * Mirrors the production {@code GET_PAYLOAD_BODIES_MAX_REQUEST_SIZE}. Only the
    * engine_getPayloadBodiesBy* methods read it, which the fixtures never exercise, but the engine
@@ -270,17 +261,53 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
    */
   private static final int GET_PAYLOAD_BODIES_MAX_REQUEST_SIZE = 1024;
 
+  // Cached ObjectMapper for params deserialization — ObjectMapper is thread-safe for reads
+  private static final ObjectMapper SHARED_PARAMS_MAPPER = JsonUtils.createObjectMapper();
+
+  /**
+   * The engine machinery every test in a run shares, created once on first use.
+   *
+   * <p>These live in a holder rather than in static fields of the subcommand because picocli
+   * instantiates every registered subcommand when it builds the {@code CommandLine}, which loads
+   * this class. As plain statics they would start a Vertx event loop, six executor pools and the
+   * {@link EthPeers} gauges on <em>every</em> evmtool invocation — {@code t8n}, {@code state-test},
+   * even {@code --help}. The holder defers all of that to the first {@code engine-test} run.
+   */
+  private static final class EngineHarness {
+    private static final NoOpMetricsSystem METRICS = new NoOpMetricsSystem();
+    private static final Vertx VERTX = Vertx.vertx();
+    private static final EthScheduler SCHEDULER =
+        new EthScheduler(
+            Runtime.getRuntime().availableProcessors(),
+            1,
+            Runtime.getRuntime().availableProcessors(),
+            METRICS);
+    private static final EthPeers PEERS = new HarnessEthPeers(METRICS);
+
+    // Shared no-op listener — avoids creating an anonymous class per test
+    private static final EngineCallListener LISTENER =
+        new EngineCallListener() {
+          @Override
+          public void executionEngineCalled() {}
+
+          @Override
+          public void stop() {}
+        };
+
+    private EngineHarness() {}
+  }
+
   /**
    * The engine methods only ever call {@link EthPeers#peerCount()} on this, for the "N peers"
    * suffix of the imported-block log line, so everything else is left unwired. A stub rather than a
    * mock keeps a test framework off the shipped evmtool runtime classpath.
    */
   private static final class HarnessEthPeers extends EthPeers {
-    private HarnessEthPeers() {
+    private HarnessEthPeers(final NoOpMetricsSystem metricsSystem) {
       super(
           () -> null,
           Clock.systemUTC(),
-          SHARED_METRICS,
+          metricsSystem,
           0,
           List.of(),
           Bytes.EMPTY,
@@ -297,22 +324,28 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
     }
   }
 
-  // Shared no-op listener — avoids creating anonymous class per test
-  private static final EngineCallListener SHARED_LISTENER =
-      new EngineCallListener() {
-        @Override
-        public void executionEngineCalled() {}
-
-        @Override
-        public void stop() {}
-      };
-  // Cached ObjectMapper for params deserialization — ObjectMapper is thread-safe for reads
-  private static final ObjectMapper SHARED_PARAMS_MAPPER = JsonUtils.createObjectMapper();
   // Protocol schedules are cached per distinct fixture blob schedule (key from
   // EngineTestCaseSpec.getBlobScheduleKey()), so devnets whose blob target/max differ from Besu
   // defaults are validated against the fixtures' own blob schedule rather than rebuilt per test.
-  private final ConcurrentMap<String, ReferenceTestProtocolSchedules> cachedSchedules =
-      new ConcurrentHashMap<>();
+  private final Map<String, ReferenceTestProtocolSchedules> cachedSchedules = new HashMap<>();
+
+  /**
+   * The schedules for one fixture blob schedule, built once and shared by every worker.
+   *
+   * <p>Synchronized rather than a {@code ConcurrentHashMap.computeIfAbsent}: the map has one key
+   * per distinct blob schedule (nine across the pinned devnet tree), so per-key serialisation would
+   * still let several workers into {@code create()} at once, and {@code create()} initialises the
+   * KZG trusted setup, which is process-wide state guarded by a {@code compareAndSet} that lets the
+   * losing thread proceed before the setup is loaded. The check-then-act has to be atomic across
+   * keys, not merely visible.
+   */
+  private synchronized ReferenceTestProtocolSchedules getSchedules(final EngineTestCaseSpec spec) {
+    return cachedSchedules.computeIfAbsent(
+        spec.getBlobScheduleKey(),
+        key ->
+            ReferenceTestProtocolSchedules.create(
+                parentCommand.getEvmConfiguration(), spec.getBlobScheduleOptions().orElse(null)));
+  }
 
   private void executeEngineTests(
       final Map<String, EngineTestCaseSpec> tests, final FixtureRunner.TestResults results) {
@@ -323,7 +356,22 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
       } catch (final RuntimeException e) {
         // Charge an execution error — failing to build the chain or schedule, say — to the test
         // that caused it, so one broken fixture cannot take the rest of the file down with it.
-        results.recordFailure(entry.getKey(), "execution error: " + e);
+        final String reason = "execution error: " + e;
+        if (!jsonArray) {
+          parentCommand.out.println("FAIL: " + entry.getKey() + " - " + reason);
+        }
+        results.recordFailure(entry.getKey(), reason);
+        if (jsonArray) {
+          // No blockchain to read a head hash from — the failure happened building it.
+          final ObjectNode result = SHARED_PARAMS_MAPPER.createObjectNode();
+          result.put("name", entry.getKey());
+          result.put("pass", false);
+          result.put("fork", entry.getValue().getNetwork());
+          result.put("lastBlockHash", "");
+          result.put("lastPayloadStatus", "");
+          result.put("error", reason);
+          jsonArrayResults.add(result);
+        }
       }
     }
   }
@@ -362,41 +410,52 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
     final MutableBlockchain blockchain = spec.buildBlockchain();
     final ProtocolSchedule schedule;
     try {
-      schedule =
-          cachedSchedules
-              .computeIfAbsent(
-                  spec.getBlobScheduleKey(),
-                  key ->
-                      ReferenceTestProtocolSchedules.create(
-                          parentCommand.getEvmConfiguration(),
-                          spec.getBlobScheduleOptions().orElse(null)))
-              .getByName(spec.getNetwork());
+      schedule = getSchedules(spec).getByName(spec.getNetwork());
     } catch (final RuntimeException e) {
-      results.recordFailure(test, "Failed to build protocol schedule: " + e);
+      recordResult(
+          test, spec, blockchain, false, "Failed to build protocol schedule: " + e, results);
       return;
     }
     if (schedule == null) {
-      results.recordFailure(test, "Unsupported fork: " + spec.getNetwork());
+      recordResult(
+          test, spec, blockchain, false, "Unsupported fork: " + spec.getNetwork(), results);
       return;
     }
 
     // Build engine-aware protocol context with MergeContext
     final ProtocolContext context = spec.buildProtocolContextForEngine(blockchain);
+    try {
+      runAgainstEngine(test, spec, blockchain, schedule, context, results);
+    } finally {
+      // Always released, including on the early returns and on anything thrown out of the run:
+      // one leaked archive per malformed fixture adds up across a large tree.
+      closeQuietly(context);
+    }
+  }
+
+  /** The engine replay proper, with {@code context} owned (and released) by the caller. */
+  private void runAgainstEngine(
+      final String test,
+      final EngineTestCaseSpec spec,
+      final MutableBlockchain blockchain,
+      final ProtocolSchedule schedule,
+      final ProtocolContext context,
+      final FixtureRunner.TestResults results) {
 
     // Use shared static instances to avoid thread exhaustion across tests
     final EvmToolMergeCoordinator coordinator =
-        new EvmToolMergeCoordinator(context, schedule, SHARED_SCHEDULER);
+        new EvmToolMergeCoordinator(context, schedule, EngineHarness.SCHEDULER);
 
     // Lazily create engine methods — most tests use only 1-2 versions, not all 9
     final ExecutionEngineJsonRpcMethod.ConstructorArguments ctorArgs =
         new ExecutionEngineJsonRpcMethod.ConstructorArguments(
             schedule,
             context,
-            SHARED_VERTX,
-            SHARED_LISTENER,
+            EngineHarness.VERTX,
+            EngineHarness.LISTENER,
             coordinator,
-            SHARED_PEERS,
-            SHARED_METRICS,
+            EngineHarness.PEERS,
+            EngineHarness.METRICS,
             // Only read by engine_forkchoiceUpdatedV4 when the call carries custodyColumns, which
             // the fixtures never do — there is no transaction pool behind this runner.
             null,
@@ -405,7 +464,14 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
     final Map<Integer, ExecutionEngineJsonRpcMethod> newPayloadMethods = new HashMap<>();
     final Map<Integer, ExecutionEngineJsonRpcMethod> fcuMethods = new HashMap<>();
 
-    // Factory lambdas for lazy creation of engine methods
+    // Factory lambdas for lazy creation of engine methods.
+    //
+    // The (minSupportedFork, firstUnsupportedFork) pairs mirror what
+    // ExecutionEngineJsonRpcMethods.VersionScheduler wires on a real node, upper bounds included —
+    // without them the runner would happily accept, say, engine_newPayloadV3 for a Prague block
+    // where Besu answers -38005 UNSUPPORTED_FORK, and the fork-support layer would go untested.
+    // Production leaves the lower bound unset for V1/V2 rather than naming PARIS; the two are
+    // equivalent here because ForkSupportHelper special-cases an unconfigured PARIS milestone.
     final IntFunction<ExecutionEngineJsonRpcMethod> getNewPayload =
         v ->
             newPayloadMethods.computeIfAbsent(
@@ -421,17 +487,17 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
                           new EngineNewPayloadV2<
                               ExecutionPayloadV2,
                               NewPayloadRequestParametersV1<ExecutionPayloadV2>>(
-                              ctorArgs, PARIS, null);
+                              ctorArgs, PARIS, CANCUN);
                       case 3 ->
                           new EngineNewPayloadV3<
                               ExecutionPayloadV3,
                               NewPayloadRequestParametersV2<ExecutionPayloadV3>>(
-                              ctorArgs, CANCUN, null);
+                              ctorArgs, CANCUN, PRAGUE);
                       case 4 ->
                           new EngineNewPayloadV4<
                               ExecutionPayloadV3,
                               NewPayloadRequestParametersV3<ExecutionPayloadV3>>(
-                              ctorArgs, PRAGUE, null);
+                              ctorArgs, PRAGUE, AMSTERDAM);
                       case 5 ->
                           new EngineNewPayloadV5<
                               ExecutionPayloadV4,
@@ -454,12 +520,12 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
                           new EngineForkchoiceUpdatedV2<
                               PayloadAttributesV2,
                               ForkchoiceUpdatedRequestParametersV1<PayloadAttributesV2>>(
-                              ctorArgs, PARIS, null);
+                              ctorArgs, PARIS, CANCUN);
                       case 3 ->
                           new EngineForkchoiceUpdatedV3<
                               PayloadAttributesV3,
                               ForkchoiceUpdatedRequestParametersV1<PayloadAttributesV3>>(
-                              ctorArgs, CANCUN, null);
+                              ctorArgs, CANCUN, AMSTERDAM);
                       case 4 ->
                           new EngineForkchoiceUpdatedV4<
                               PayloadAttributesV4,
@@ -475,7 +541,7 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
 
     final EngineTestCaseSpec.EngineNewPayload[] payloads = spec.getEngineNewPayloads();
     if (payloads == null || payloads.length == 0) {
-      results.recordFailure(test, "No engine payloads");
+      recordResult(test, spec, blockchain, false, "No engine payloads", results);
       return;
     }
 
@@ -483,11 +549,13 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
     final int initialFcuVersion = payloads[0].getForkchoiceUpdatedVersion();
     final ExecutionEngineJsonRpcMethod initialFcu = getFcu.apply(initialFcuVersion);
     if (initialFcu == null) {
-      final String reason =
-          "unsupported forkchoiceUpdated version " + initialFcuVersion + " (initial FCU)";
-      parentCommand.out.println("FAIL: " + test + " - " + reason);
-      results.recordFailure(test, reason);
-      closeQuietly(context);
+      recordResult(
+          test,
+          spec,
+          blockchain,
+          false,
+          "unsupported forkchoiceUpdated version " + initialFcuVersion + " (initial FCU)",
+          results);
       return;
     }
     try {
@@ -514,9 +582,7 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
     }
 
     if (!testPassed) {
-      parentCommand.out.println("FAIL: " + test + " - " + failureReason);
-      results.recordFailure(test, failureReason);
-      closeQuietly(context);
+      recordResult(test, spec, blockchain, false, failureReason, results);
       return;
     }
 
@@ -725,13 +791,54 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
               blockchain.getChainHeadHash(), spec.getLastBlockHash());
     }
 
+    recordResult(
+        test,
+        spec,
+        blockchain,
+        testPassed,
+        testPassed ? "" : failureReason,
+        lastPayloadStatus,
+        testPassed ? lastValidationError : failureReason,
+        results);
+  }
+
+  /** Records an outcome reached before any payload was replayed, so with no engine status yet. */
+  private void recordResult(
+      final String test,
+      final EngineTestCaseSpec spec,
+      final MutableBlockchain blockchain,
+      final boolean testPassed,
+      final String failureReason,
+      final FixtureRunner.TestResults results) {
+    recordResult(test, spec, blockchain, testPassed, failureReason, "", failureReason, results);
+  }
+
+  /**
+   * The one place a test's outcome is reported, so that every exit path — including the early
+   * returns for an unsupported fork or a missing payload — produces both a summary entry and, under
+   * {@code --json-array}, a row. A consumer diffing rows against an expected test list would
+   * otherwise see those tests silently absent rather than failed.
+   */
+  private void recordResult(
+      final String test,
+      final EngineTestCaseSpec spec,
+      final MutableBlockchain blockchain,
+      final boolean testPassed,
+      final String failureReason,
+      final String lastPayloadStatus,
+      final String error,
+      final FixtureRunner.TestResults results) {
     if (testPassed) {
       if (verbose) {
         parentCommand.out.println("PASS: " + test);
       }
       results.recordPass();
     } else {
-      parentCommand.out.println("FAIL: " + test + " - " + failureReason);
+      // Suppressed under --json-array: the array is the whole of that mode's stdout contract, and
+      // an interleaved FAIL line makes it unparseable.
+      if (!jsonArray) {
+        parentCommand.out.println("FAIL: " + test + " - " + failureReason);
+      }
       results.recordFailure(test, failureReason);
     }
 
@@ -742,12 +849,9 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
       result.put("fork", spec.getNetwork());
       result.put("lastBlockHash", blockchain.getChainHeadHash().toHexString());
       result.put("lastPayloadStatus", lastPayloadStatus);
-      result.put("error", testPassed ? lastValidationError : failureReason);
+      result.put("error", error);
       jsonArrayResults.add(result);
     }
-
-    // Cleanup resources to prevent thread/memory exhaustion across tests
-    closeQuietly(context);
   }
 
   private static void closeQuietly(final ProtocolContext context) {
