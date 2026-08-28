@@ -124,9 +124,10 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
 
   @Option(
       names = {"--workers"},
-      description = "Number of parallel workers for processing fixture files.",
-      defaultValue = "1")
-  private int workers = 1;
+      description =
+          "Number of parallel workers for processing fixture files. Defaults to the number of"
+              + " available cores (${DEFAULT-VALUE} here); lower it to run with less parallelism.")
+  private int workers = Runtime.getRuntime().availableProcessors();
 
   @Option(
       names = {"--json-array"},

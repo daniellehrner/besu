@@ -95,7 +95,8 @@ application {
 // Shared gradle properties, named after the hive flags they stand in for:
 //   -PsimLimit=<regex>      hive --sim.limit, taken verbatim. Only tests whose pytest node id
 //                           matches are run. See translateSimLimit below.
-//   -PsimParallelism=N      hive --sim.parallelism. Defaults to the available processors.
+//   -PsimParallelism=N      hive --sim.parallelism. Left to the subcommand when unset, which
+//                           defaults to the available processors.
 //   -PsimPath=<subdir>      no hive equivalent: scope to one fixture subdirectory, e.g.
 //                           for_amsterdam. Much cheaper than filtering the whole tree.
 //
@@ -140,8 +141,9 @@ def registerHiveEquivalentTask(project, String taskName, String subcommand, Stri
 
     def fixtures = project.project(':ethereum:referencetests').layout.buildDirectory
       .dir("execution-spec-devnet-tests/fixtures/${fixtureDir}")
+    // Left unset when the property is absent, so the subcommand's own default applies rather than
+    // this file keeping a second copy of it. All three runners default to the available cores.
     def parallelism = project.findProperty('simParallelism')?.toString()
-      ?: Runtime.runtime.availableProcessors().toString()
     def subPath = project.findProperty('simPath')?.toString()
     def simLimit = project.findProperty('simLimit')?.toString()
 
@@ -157,7 +159,10 @@ def registerHiveEquivalentTask(project, String taskName, String subcommand, Stri
       if (!runDir.exists()) {
         throw new GradleException("Fixtures path not found: ${runDir} (from -PsimPath=${subPath})")
       }
-      def cmd = [subcommand, '--workers', parallelism] + extraArgs
+      def cmd = [subcommand] + extraArgs
+      if (parallelism != null) {
+        cmd += ['--workers', parallelism]
+      }
       if (simLimit != null) {
         cmd += ['--test-name', translateSimLimit(simLimit)]
       }
