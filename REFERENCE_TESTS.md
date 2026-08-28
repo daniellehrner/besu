@@ -74,6 +74,31 @@ For example:
 
 > **Note:** These hardfork/EIP filters apply only to execution-spec-tests. The legacy `GeneralStateReferenceTest` and `BlockchainReferenceTest` classes still use sequential numbering. For those, use the runtime system properties `test.ethereum.state.eips` and `test.ethereum.include` instead.
 
+## Devnet (pre-release) Reference Tests
+
+`referenceTests` runs the released fixtures. The pre-release devnet fixtures — the tarball pinned by
+`devnetTarConfig` in `ethereum/referencetests/build.gradle` — are a separate source set with its own
+task:
+
+```bash
+./gradlew referenceTestsDevnet
+```
+
+It takes the same `--tests` filters as `referenceTests`, over classes named
+`ExecutionSpecDevnet{Blockchain,State}Test_{hardfork}_{eip_or_topic}_{batch_index}`:
+
+```bash
+./gradlew referenceTestsDevnet --tests "*_amsterdam_*"
+./gradlew referenceTestsDevnet --tests "*_amsterdam_eip7928_*"
+```
+
+This is the only runner that drives the devnet fixtures through the JUnit reference-test harness, so
+it is the one to reach for when you need that harness's tracing (see [Enabling JSON
+Tracing](#enabling-json-tracing)) — the evmtool runners below do not go through it.
+
+> `referenceTestsDevnet` is **not** a CI gate and is frequently red on `main` while a devnet is in
+> flight. Get a baseline on `main` before reading a failure on your branch as your own regression.
+
 ## Hive-Equivalent Fixture Runners (evmtool)
 
 The `referenceTests` task above drives **block import** and **state transition** directly. It never
@@ -141,26 +166,16 @@ cheaper than filtering the whole tree, since a filter still has to read every fi
 ./gradlew consumeEngineTests -PsimPath=for_amsterdam -PsimLimit='.*(7928|8282).*'
 ```
 
-#### How `-PsimLimit` is translated
+#### How `-PsimLimit` matches
 
-The value is a hive regex and is accepted as written, but it is not handed to `evmtool` untouched.
-`evmtool`'s `--test-name` escapes `.` to a literal before expanding `*` to `.*`, because pytest node
-ids contain `.py` and a bare `.` is far more often meant literally. A hive pattern passed straight
-through would compile with its `.*` turned into `\..*` and match nothing, so the task rewrites `.*`
-to `*` first, which `evmtool` expands straight back to `.*`.
+The value is a hive regex and is passed to `evmtool`'s `--test-name-regex` **verbatim** — nothing is
+rewritten, nothing is escaped, so a published `--sim.limit` can be copied character for character,
+escapes and all. Match semantics agree with hive's too: the EELS simulators apply the filter with
+Python's `re.match`, which is anchored at the start of the pytest node id, open at the end and
+case-sensitive, and `--test-name-regex` does the same.
 
-The two agree on match semantics: hive matches partially under `--sim.limit.exact=false`, and the
-leading/trailing `.*` that hive patterns conventionally carry survive the rewrite, so the
-whole-node-id match `evmtool` performs selects the same tests. A pattern with no wildcard at all
-falls through to `evmtool`'s case-insensitive substring form, also a partial match.
-
-Two things are **not** translated, and are rare in `--sim.limit` values:
-
-- a `?` quantifier — `evmtool` reads `?` as a single-character wildcard;
-- a bare `.` meant as any-character — `evmtool` reads it as a literal `.`.
-
-`evmtool`'s regex is also case-insensitive where hive's Go regex is case-sensitive. Irrelevant for a
-digit-only alternation, relevant if you filter on fork names.
+That is why the leading and trailing `.*` in the conventional `.*(7928|8282).*` matter: without the
+leading one the pattern would have to match from the first character of the node id.
 
 A malformed pattern is compiled before any fixture is read, so it fails immediately with exit 1
 rather than silently running nothing. An empty run is an error too: a run that executed no test
@@ -172,11 +187,20 @@ make the `(a|b|c)` alternation work; escape them when you want them literal:
 ```bash
 # WRONG: '[' opens a character class -> rejected before any test runs
 ./gradlew consumeEngineTests -PsimLimit='.*[fork_Amsterdam.*'
-#   Invalid --test-name pattern: Unclosed character class. …
+#   Invalid --test-name-regex pattern: Unclosed character class. …
 
 # RIGHT
 ./gradlew consumeEngineTests -PsimLimit='.*\[fork_Amsterdam.*'
 ```
+
+`evmtool` also has a `--test-name` option, which is the friendlier form used when driving the binary
+by hand: a bare substring, or a `*`/`?` glob in which `.` is a literal. The Gradle tasks never use
+it — `-PsimLimit` is always a regex.
+
+> `stateTestsDevnet` used to take `-PstateTestFilter`, `-PstateTestPath` and `-PstateTestWorkers`.
+> Those names are gone; the task now shares `-PsimLimit` / `-PsimPath` / `-PsimParallelism` with the
+> other runners. Passing an old one fails the build rather than running the whole tree unfiltered.
+> Note that `-PsimLimit` is a regex where `-PstateTestFilter` was a substring or a `*?`-glob.
 
 ### Reproducing a published hive run
 
@@ -234,8 +258,7 @@ curl -sS --range 0-65535 "https://hive.ethpandaops.io/$GROUP/results/$FILE" \
 That prints both things worth checking:
 
 - **`--sim.limit=…`** — copy it verbatim into the matching constant. It needs no editing: the tasks
-  accept a hive regex as written and translate it (see [How `-PsimLimit` is
-  translated](#how--psimlimit-is-translated)).
+  take a hive regex exactly as written (see [How `-PsimLimit` matches](#how--psimlimit-matches)).
 - **`fixtures=…`** — the tarball the run used. If its version differs from `devnetTarConfig` the two
   are not selecting from the same test set and counts will not line up; see
   [Fixture version](#fixture-version).
@@ -301,10 +324,16 @@ $EVM engine-test --workers 8 <path-to>/blockchain_tests_engine/    # consume-eng
 $EVM block-test  --workers 8 <path-to>/blockchain_tests/           # consume-rlp
 ```
 
-A directory argument is walked recursively and spread over `--workers` workers. `--test-name` is the
-raw form of `-PsimLimit`, and takes the *translated* expression (`*(7928|8282)*`, not `.*(…).*`).
-`--json-array` emits machine-readable results (`[{name, pass, fork, lastBlockHash, error}]`) and
-nothing else, so the exit code is what reports an empty or failed run.
+A directory argument is walked recursively and spread over `--workers` workers. `--test-name-regex`
+is the raw form of `-PsimLimit` and takes the same expression (`.*(7928|8282).*`); `--test-name` is
+the glob form described above. `--json-array` emits machine-readable results (`[{name, pass, fork,
+lastBlockHash, error}]`) and nothing else, so the exit code is what reports an empty or failed run.
+
+A single fixture file can also be piped in as `stdin`, which all three subcommands accept:
+
+```bash
+$EVM engine-test stdin < <path-to>/one_fixture.json
+```
 
 `engine-test` prints failures and a final summary only; `--verbose` adds a line per test.
 `block-test` logs every imported block, so pipe through `grep -v 'Imported in'` for a quiet run.
