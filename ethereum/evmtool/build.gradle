@@ -78,105 +78,115 @@ application {
   mainClass = 'org.hyperledger.besu.evmtool.EvmTool'
 }
 
-// Runs the execution-spec devnet engine fixtures (blockchain_tests_engine) through the real
-// Engine API code path via the `engine-test` subcommand. Reuses the devnet fixture download/extract
-// from the :ethereum:referencetests project (extractDevnetFixtures) instead of fetching separately,
-// and fails the build on any fixture failure (engine-test exits non-zero).
+// Hive-equivalent fixture runners.
 //
-// Optional gradle properties:
-//   -PengineTestWorkers=N        parallelism (defaults to available processors)
-//   -PengineTestPath=<subdir>    scope to a subdirectory of blockchain_tests_engine,
-//                                e.g. for_amsterdam (runs only the Amsterdam-fork fixtures)
-//   -PengineTestFilter=<substr>  only run tests whose node id contains <substr> (or a *?-glob)
-tasks.register('engineTestsDevnet', JavaExec) {
-  description = 'Runs execution-spec devnet engine (blockchain_tests_engine) fixtures via the real Engine API path.'
-  group = 'verification'
+// `./hive --sim ethereum/eels/consume-engine` and `--sim ethereum/eels/consume-rlp` replay the
+// execution-spec fixtures against a real Besu container: consume-engine over the Engine API
+// (engine_newPayloadVX + engine_forkchoiceUpdatedVX), consume-rlp over the RLP block-import path.
+// Both take hours. These tasks replay the same fixture trees through the same Besu code, in
+// process, in minutes.
+//
+//   ./hive --sim ethereum/eels/consume-engine  ->  ./gradlew consumeEngineTests
+//   ./hive --sim ethereum/eels/consume-rlp     ->  ./gradlew consumeRlpTests
+//
+// Both reuse the devnet fixture download/extract from the :ethereum:referencetests project
+// (extractDevnetFixtures — no separate download) and fail the build on any fixture failure.
+//
+// Shared gradle properties, named after the hive flags they stand in for:
+//   -PsimLimit=<regex>      hive --sim.limit, taken verbatim. Only tests whose pytest node id
+//                           matches are run. See translateSimLimit below.
+//   -PsimParallelism=N      hive --sim.parallelism. Defaults to the available processors.
+//   -PsimPath=<subdir>      no hive equivalent: scope to one fixture subdirectory, e.g.
+//                           for_amsterdam. Much cheaper than filtering the whole tree.
+//
+// Because the properties are shared, one command covers both simulators:
+//   ./gradlew consumeEngineTests consumeRlpTests -PsimLimit='.*(7928|8282).*'
 
-  dependsOn ':ethereum:referencetests:extractDevnetFixtures'
+/**
+ * Translates a hive --sim.limit regex into an evmtool --test-name expression.
+ *
+ * evmtool's filter escapes '.' to a literal before expanding '*' to '.*', because pytest node ids
+ * contain ".py" and a bare '.' is far more often meant literally than as a wildcard. A hive regex
+ * handed over untouched would therefore compile with its '.*' turned into '\..*' and match nothing.
+ * Rewriting '.*' to '*' first restores the intent: evmtool expands it straight back to '.*'.
+ *
+ * hive matches partially when --sim.limit.exact=false, evmtool's glob form matches the whole node
+ * id, and the leading/trailing '.*' hive patterns conventionally carry survive the rewrite as '*',
+ * so the two agree. A pattern with no wildcard at all falls through to evmtool's substring form,
+ * which is also a partial match.
+ *
+ * Not translated, and rare in --sim.limit values: a '?' quantifier (evmtool reads '?' as a
+ * single-character wildcard) and a bare '.' meant as any-character (evmtool reads it literally).
+ */
+static String translateSimLimit(String simLimit) {
+  return simLimit.replace('.*', '*')
+}
 
-  classpath = sourceSets.main.runtimeClasspath
-  mainClass = 'org.hyperledger.besu.evmtool.EvmTool'
+def registerHiveEquivalentTask(project, String taskName, String subcommand, String fixtureDir, String desc, List<String> extraArgs) {
+  return project.tasks.register(taskName, JavaExec) {
+    description = desc
+    group = 'verification'
 
-  def engineFixtures = project(':ethereum:referencetests').layout.buildDirectory
-    .dir('execution-spec-devnet-tests/fixtures/blockchain_tests_engine')
-  def workerCount = project.findProperty('engineTestWorkers')?.toString()
-    ?: Runtime.runtime.availableProcessors().toString()
-  def subPath = project.findProperty('engineTestPath')?.toString()
-  def nameFilter = project.findProperty('engineTestFilter')?.toString()
+    dependsOn ':ethereum:referencetests:extractDevnetFixtures'
 
-  doFirst {
-    def fixturesDir = engineFixtures.get().asFile
-    if (!fixturesDir.exists()) {
-      throw new GradleException(
-      "Engine fixtures not found at ${fixturesDir}.\n" +
-      "The pinned devnet fixtures tarball may predate blockchain_tests_engine; " +
-      "check the devnetTarConfig version in ethereum/referencetests/build.gradle.")
+    // The fixture path and filter are applied in doFirst, after Gradle has snapshotted the task
+    // inputs, so every invocation looks identical to the up-to-date check and a task that once
+    // succeeded would be skipped for every later -P combination — reporting BUILD SUCCESSFUL
+    // without running a test. A verification task must always run.
+    outputs.upToDateWhen { false }
+
+    classpath = project.sourceSets.main.runtimeClasspath
+    mainClass = 'org.hyperledger.besu.evmtool.EvmTool'
+
+    def fixtures = project.project(':ethereum:referencetests').layout.buildDirectory
+      .dir("execution-spec-devnet-tests/fixtures/${fixtureDir}")
+    def parallelism = project.findProperty('simParallelism')?.toString()
+      ?: Runtime.runtime.availableProcessors().toString()
+    def subPath = project.findProperty('simPath')?.toString()
+    def simLimit = project.findProperty('simLimit')?.toString()
+
+    doFirst {
+      def fixturesDir = fixtures.get().asFile
+      if (!fixturesDir.exists()) {
+        throw new GradleException(
+        "Fixtures not found at ${fixturesDir}.\n" +
+        "Run ./gradlew :ethereum:referencetests:extractDevnetFixtures, or check the " +
+        "devnetTarConfig version in ethereum/referencetests/build.gradle.")
+      }
+      def runDir = subPath ? new File(fixturesDir, subPath) : fixturesDir
+      if (!runDir.exists()) {
+        throw new GradleException("Fixtures path not found: ${runDir} (from -PsimPath=${subPath})")
+      }
+      def cmd = [subcommand, '--workers', parallelism] + extraArgs
+      if (simLimit != null) {
+        cmd += ['--test-name', translateSimLimit(simLimit)]
+      }
+      cmd += runDir.absolutePath
+      args = cmd
+      logger.lifecycle("${taskName}: ${subcommand} over ${runDir}" +
+        (simLimit != null ? " matching --sim.limit '${simLimit}'" : " (all tests)"))
     }
-    def runDir = subPath ? new File(fixturesDir, subPath) : fixturesDir
-    if (!runDir.exists()) {
-      throw new GradleException("Engine fixtures path not found: ${runDir} (from -PengineTestPath=${subPath})")
-    }
-    def cmd = [
-      'engine-test',
-      '--workers',
-      workerCount
-    ]
-    if (nameFilter != null) {
-      cmd += ['--test-name', nameFilter]
-    }
-    cmd += runDir.absolutePath
-    args = cmd
   }
 }
 
-// Runs the execution-spec devnet state_tests (EVM/state-transition only — these are not covered by
-// engine-test) via the `state-test` subcommand. Reuses the devnet fixture download/extract from the
-// :ethereum:referencetests project (extractDevnetFixtures) and fails the build on any failure.
-//
-// Optional gradle properties:
-//   -PstateTestWorkers=N        limit parallelism (the runner defaults to all available cores)
-//   -PstateTestPath=<subdir>    scope to a subdirectory of state_tests (e.g. for_amsterdam)
-//   -PstateTestFilter=<substr>  only run tests whose name contains <substr> (or a *?-glob)
-tasks.register('stateTestsDevnet', JavaExec) {
-  description = 'Runs execution-spec devnet state_tests via the evmtool state-test runner.'
-  group = 'verification'
+// hive ethereum/eels/consume-engine
+registerHiveEquivalentTask(project, 'consumeEngineTests', 'engine-test', 'blockchain_tests_engine',
+  'Hive consume-engine equivalent: replays blockchain_tests_engine fixtures through the real Engine API.',
+  [])
 
-  dependsOn ':ethereum:referencetests:extractDevnetFixtures'
+// hive ethereum/eels/consume-rlp. Not redundant with consume-engine: blockchain_tests_engine has no
+// pre-merge fork groups, so for_frontier, for_homestead, for_tangerinewhistle, for_spuriousdragon,
+// for_byzantium, for_constantinoplefix, for_istanbul, for_berlin and for_london exist only here.
+registerHiveEquivalentTask(project, 'consumeRlpTests', 'block-test', 'blockchain_tests',
+  'Hive consume-rlp equivalent: replays blockchain_tests fixtures through the RLP block-import path.',
+  [])
 
-  classpath = sourceSets.main.runtimeClasspath
-  mainClass = 'org.hyperledger.besu.evmtool.EvmTool'
-
-  def stateFixtures = project(':ethereum:referencetests').layout.buildDirectory
-    .dir('execution-spec-devnet-tests/fixtures/state_tests')
-  def workerCount = project.findProperty('stateTestWorkers')?.toString()
-  def subPath = project.findProperty('stateTestPath')?.toString()
-  def nameFilter = project.findProperty('stateTestFilter')?.toString()
-
-  doFirst {
-    def fixturesDir = stateFixtures.get().asFile
-    if (!fixturesDir.exists()) {
-      throw new GradleException(
-      "State fixtures not found at ${fixturesDir}.\n" +
-      "Check the devnetTarConfig version in ethereum/referencetests/build.gradle.")
-    }
-    def runDir = subPath ? new File(fixturesDir, subPath) : fixturesDir
-    if (!runDir.exists()) {
-      throw new GradleException("State fixtures path not found: ${runDir} (from -PstateTestPath=${subPath})")
-    }
-    def cmd = [
-      'state-test',
-      '--summary-only'
-    ]
-    if (workerCount != null) {
-      cmd += ['--workers', workerCount]
-    }
-    if (nameFilter != null) {
-      cmd += ['--test-name', nameFilter]
-    }
-    cmd += runDir.absolutePath
-    args = cmd
-  }
-}
+// No hive simulator consumes state_tests — they are the EVM/state-transition-only slice, covered by
+// neither consume-engine nor consume-rlp. Kept because that coverage is real, and it reuses the same
+// -PsimParallelism / -PsimPath / -PsimLimit properties.
+registerHiveEquivalentTask(project, 'stateTestsDevnet', 'state-test', 'state_tests',
+  'Runs execution-spec devnet state_tests via the evmtool state-test runner.',
+  ['--summary-only'])
 
 
 // rename the top level dir from besu-<version> to besu and this makes it really
