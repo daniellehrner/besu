@@ -14,6 +14,7 @@
 - Vert.x 5's `PoolMetrics` SPI drops the `rejected` callback, so the `vertx_worker_pool_rejected_total` metric no longer reports any value; remove any dashboard or alert that depends on it. [#11015](https://github.com/besu-eth/besu/pull/11015)
 - Vert.x 5's DNS client now filters resolved records by comparing an answer's owner name against the queried name case-sensitively, silently dropping non-matching records instead of returning them as Vert.x 4.x did. EIP-1459 DNS discovery could miss subtree/node TXT records from a server whose response doesn't echo the query name byte-for-byte (e.g. differing case). [#11015](https://github.com/besu-eth/besu/pull/11015)
 - Removed the custom `engine_preparePayload_debug` RPC methods, use the standard `testing_buildBlockV1` instead. [#11011](https://github.com/besu-eth/besu/pull/11011)
+- Removed the EIP-7610 storage collision check: contract creation no longer aborts when the destination address has non-empty storage but a zero nonce and no code, restoring the EIP-684 conditions for every fork. EIP-7610 was declined for inclusion in Glamsterdam (EIP-7773) and removed from the execution specs retroactively; no mainnet account is affected. `Account.isStorageEmpty()`, which existed only for this check, is removed from the `besu-evm` API. [#11175](https://github.com/besu-eth/besu/pull/11175)
 
 ### Upcoming Breaking Changes
 - Plugin API
@@ -46,6 +47,7 @@
 - Complete QBFT votes in a reasonable time when `empyblockperiodseconds` is set by treating QBFT votes as "non empty blocks" [#11111](https://github.com/besu-eth/besu/pull/11111)
 
 ### Additions and Improvements
+- Upgrade the stable reference tests to `tests@v20.0.2` and the devnet reference tests to `tests-glamsterdam-devnet@v8.1.2`, both now published from the `ethereum/execution-specs` repository. [#11175](https://github.com/besu-eth/besu/pull/11175)
 - Add JMH `GasProfiler` that emits `mgas_per_s` as a secondary metric on each benchmark iteration using Besu's own `GasCalculator`. Enable with `-PgasProfiler=true`; override the EVM fork with `-PgasProfilerFork=<fork>` (defaults to Osaka). [#10807](https://github.com/besu-eth/besu/pull/10807)
 - Align Kotlin runtime dependencies to 2.4.0 to support plugins compiled against the Kotlin 2.4 API. [#10983](https://github.com/besu-eth/besu/pull/10983)
 - Upgrade log4j to 2.25.5 [#11075](https://github.com/besu-eth/besu/pull/11075)
