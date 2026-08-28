@@ -180,33 +180,77 @@ make the `(a|b|c)` alternation work; escape them when you want them literal:
 
 ### Reproducing a published hive run
 
-Two tasks per simulator carry the filter of a published hive run, so reproducing one is a task name
-rather than a copied regex. They ignore `-PsimLimit` — the preset *is* the point — but still take
-`-PsimParallelism`.
+The devnet hive runs published at [hive.ethpandaops.io](https://hive.ethpandaops.io) each pin a
+`--sim.limit`. Four tasks carry those filters so that reproducing a run is a task name rather than a
+regex copied out of a web UI:
 
 | Task | Mirrors | `--sim.limit` |
 |------|---------|---------------|
-| `consumeEngineTestsGlamsterdam` / `consumeRlpTestsGlamsterdam` | [glamsterdam](https://hive.ethpandaops.io/#/test/glamsterdam/1787867407-75e9079746599601ca1c6f8ffd9aab2a) | `.*fork_(Amsterdam\|BPO2ToAmsterdamAtTime15k\|Osaka).*` |
-| `consumeEngineTestsGlamsterdamQuick` / `consumeRlpTestsGlamsterdamQuick` | [glamsterdam-quick](https://hive.ethpandaops.io/#/test/glamsterdam-quick/1787875966-3c9b3411ee5e78d8b8c2fa25af6e899f) | the 20-EIP alternation |
+| `consumeEngineTestsGlamsterdam` | [glamsterdam](https://hive.ethpandaops.io/#/test/glamsterdam/1787867407-75e9079746599601ca1c6f8ffd9aab2a) `consume-engine` | `.*fork_(Amsterdam\|BPO2ToAmsterdamAtTime15k\|Osaka).*` |
+| `consumeRlpTestsGlamsterdam` | the same filter, `consume-rlp` | as above |
+| `consumeEngineTestsGlamsterdamQuick` | [glamsterdam-quick](https://hive.ethpandaops.io/#/test/glamsterdam-quick/1787875966-3c9b3411ee5e78d8b8c2fa25af6e899f) `consume-engine` | the 20-EIP alternation |
+| `consumeRlpTestsGlamsterdamQuick` | the same filter, `consume-rlp` | as above |
 
 ```bash
-./gradlew consumeEngineTestsGlamsterdam        # the full published sweep
+./gradlew consumeEngineTestsGlamsterdam        # the full published sweep, all three forks
 ./gradlew consumeEngineTestsGlamsterdamQuick   # the EIP-scoped sweep
 ```
+
+The `Glamsterdam` tasks cover **three** forks, not just Amsterdam — `fork_Amsterdam` alone is about
+59% of the selection. The `GlamsterdamQuick` tasks scope by EIP number instead, which cuts across
+forks.
+
+A preset ignores `-PsimLimit`: overriding half of it would produce a number against a scope nobody
+can reconstruct. `-PsimParallelism` still applies. Use the plain `consumeEngineTests` /
+`consumeRlpTests` tasks when you want your own filter.
 
 Measured against the pinned fixtures:
 
 | Task | tests | passed | failed | wall clock |
 |---|---|---|---|---|
-| `consumeEngineTestsGlamsterdam` | 42501 | 42377 | 124 | ~31s |
+| `consumeEngineTestsGlamsterdam` | 42501 | 42425 | 76 | ~30s |
+| `consumeRlpTestsGlamsterdam` | 42452 | 42452 | 0 | ~52s |
 | `consumeEngineTestsGlamsterdamQuick` | 3959 | 3956 | 3 | ~20s |
 | `consumeRlpTestsGlamsterdamQuick` | 3954 | 3954 | 0 | ~22s |
-| `consumeRlpTestsGlamsterdam` | 42452 | 42452 | 0 | ~52s |
 
-The published runs pull `tests-glamsterdam-devnet@v8.1.2` while `devnetTarConfig` pins `v8.1.1`, so
-counts differ slightly from hive's — the glamsterdam run selects 42588 tests upstream against 42501
-here. Note that the number the hive UI shows most prominently is the *pass* count (42140), not the
-number of tests run.
+Note that the number the hive UI shows most prominently is the *pass* count, not the number of tests
+run — the glamsterdam run reads 42140, having run 42588.
+
+#### Keeping the presets current
+
+Fork names change every devnet (`BPO2ToAmsterdamAtTime15k` becomes `BPO3To…`, a fork is added or
+dropped) and the quick run's EIP list is edited as EIPs are scheduled in or out. When that happens
+these tasks silently keep selecting the old set, so re-read the filter from the newest published run
+rather than assuming. Both filters live in one place, as `GLAMSTERDAM_SIM_LIMIT` and
+`GLAMSTERDAM_QUICK_SIM_LIMIT` at the top of `ethereum/evmtool/build.gradle`.
+
+The suite JSON records the exact invocation under `runMetadata.hiveCommand`. `listing.jsonl` is not
+in chronological order, so sort by `start` rather than taking the last line:
+
+```bash
+GROUP=glamsterdam          # or glamsterdam-quick
+SIM=eels/consume-engine    # or eels/consume-rlp
+
+FILE=$(curl -sS "https://hive.ethpandaops.io/$GROUP/listing.jsonl" \
+  | jq -rs --arg sim "$SIM" 'map(select(.name==$sim)) | sort_by(.start) | last | .fileName')
+
+# The suite JSON is large (150 MB+); a range request is enough, runMetadata precedes testCases
+curl -sS --range 0-65535 "https://hive.ethpandaops.io/$GROUP/results/$FILE" \
+  | grep -oE '"(--sim\.limit=[^"]*|fixtures=[^"]*)"'
+```
+
+That prints both things worth checking:
+
+- **`--sim.limit=…`** — copy it verbatim into the matching constant. It needs no editing: the tasks
+  accept a hive regex as written and translate it (see [How `-PsimLimit` is
+  translated](#how--psimlimit-is-translated)).
+- **`fixtures=…`** — the tarball the run used. If its version differs from `devnetTarConfig`, the
+  two are not selecting from the same test set and counts will not line up; see
+  [Fixture version](#fixture-version).
+
+After changing a constant, run the task and sanity-check the test count against the run you copied
+from. A filter that matches nothing fails the build rather than reporting success, but a filter that
+matches the *wrong* set will happily go green.
 
 ### Worked example
 
