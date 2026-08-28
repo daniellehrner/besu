@@ -201,17 +201,7 @@ Measured against the pinned fixtures:
 | `consumeEngineTestsGlamsterdam` | 42501 | 42377 | 124 | ~31s |
 | `consumeEngineTestsGlamsterdamQuick` | 3959 | 3956 | 3 | ~20s |
 | `consumeRlpTestsGlamsterdamQuick` | 3954 | 3954 | 0 | ~22s |
-| `consumeRlpTestsGlamsterdam` | 42452 | 37965 | 4487 | ~51s |
-
-> **`consumeRlpTests` is not yet trustworthy on devnet blob forks.** 4463 of those 4487 failures are
-> blob tests (`cancun/eip4844_blobs`, `osaka/eip7918_blob_reserve_price`) and none of them are Besu
-> bugs: `BlockchainTestSubCommand.getSchedules()` builds one schedule from
-> `ReferenceTestProtocolSchedules.create(evmConfiguration)`, the overload that knows nothing about
-> the fixture's `config.blobSchedule`, so devnet blob target/max never reach the validator.
-> `engine-test` reads each fixture's blob schedule and caches a schedule per distinct one; the same
-> treatment has not been given to `block-test`, and `BlockchainReferenceTestCaseSpec` has no
-> `getBlobScheduleOptions()` to read. Until that is fixed, use the engine tasks as the signal and
-> read the RLP ones as blob-blind.
+| `consumeRlpTestsGlamsterdam` | 42452 | 42452 | 0 | ~52s |
 
 The published runs pull `tests-glamsterdam-devnet@v8.1.2` while `devnetTarConfig` pins `v8.1.1`, so
 counts differ slightly from hive's — the glamsterdam run selects 42588 tests upstream against 42501

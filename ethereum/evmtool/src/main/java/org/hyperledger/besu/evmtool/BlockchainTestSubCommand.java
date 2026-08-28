@@ -17,6 +17,7 @@ package org.hyperledger.besu.evmtool;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.hyperledger.besu.evmtool.BlockchainTestSubCommand.COMMAND_NAME;
 
+import org.hyperledger.besu.config.BlobScheduleOptions;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Log;
 import org.hyperledger.besu.datatypes.Wei;
@@ -59,8 +60,10 @@ import java.io.PrintStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -152,9 +155,10 @@ public class BlockchainTestSubCommand implements Runnable, IExitCodeGenerator {
   // picocli does it magically
   @Parameters private final List<Path> blockchainTestFiles = new ArrayList<>();
 
-  // Cached across all tests: building the 30+ reference test schedules is expensive.
-  // Guarded by getSchedules().
-  private ReferenceTestProtocolSchedules cachedSchedules;
+  // Cached across all tests: building the 30+ reference test schedules is expensive. Keyed by the
+  // fixture's blob schedule, so a devnet whose blob target/max differ from Besu's defaults is
+  // validated against its own. Guarded by getSchedules().
+  private final Map<String, ReferenceTestProtocolSchedules> cachedSchedules = new HashMap<>();
 
   /**
    * Default constructor for the BlockchainTestSubCommand class. This constructor doesn't take any
@@ -310,15 +314,25 @@ public class BlockchainTestSubCommand implements Runnable, IExitCodeGenerator {
   }
 
   /**
-   * The reference test schedules, built once and shared by every worker. Building them is expensive
-   * — 30+ schedules per call — and {@code create} also initialises the KZG trusted setup, which is
-   * process-wide state, so the check-then-act has to be atomic rather than merely visible.
+   * The reference test schedules for one fixture's blob schedule, built once and shared by every
+   * worker. Building them is expensive — 30+ schedules per call — and {@code create} also
+   * initialises the KZG trusted setup, which is process-wide state, so the check-then-act has to be
+   * atomic across keys rather than merely visible.
+   *
+   * <p>The fixture's own {@code config.blobSchedule} is passed through. Without it every devnet
+   * blob test is validated against Besu's mainnet blob target/max and diverges: on the pinned
+   * glamsterdam fixtures that was 4463 failures, all of them in {@code cancun/eip4844_blobs} and
+   * {@code osaka/eip7918_blob_reserve_price}. The JUnit reference tests have always read it (see
+   * {@code BlockchainReferenceTestTools}); this runner was the one consumer that did not.
    */
-  private synchronized ReferenceTestProtocolSchedules getSchedules() {
-    if (cachedSchedules == null) {
-      cachedSchedules = ReferenceTestProtocolSchedules.create(parentCommand.getEvmConfiguration());
-    }
-    return cachedSchedules;
+  private synchronized ReferenceTestProtocolSchedules getSchedules(
+      final BlockchainReferenceTestCaseSpec spec) {
+    final Optional<BlobScheduleOptions> blobSchedule = spec.getBlobScheduleOptions();
+    return cachedSchedules.computeIfAbsent(
+        blobSchedule.map(options -> options.asMap().toString()).orElse(""),
+        key ->
+            ReferenceTestProtocolSchedules.create(
+                parentCommand.getEvmConfiguration(), blobSchedule.orElse(null)));
   }
 
   private void traceTestSpecs(
@@ -342,7 +356,7 @@ public class BlockchainTestSubCommand implements Runnable, IExitCodeGenerator {
                     genesisBlockHeader.getStateRoot(), genesisBlockHeader.getHash()))
             .orElseThrow();
 
-    final ProtocolSchedule schedule = getSchedules().getByName(spec.getNetwork());
+    final ProtocolSchedule schedule = getSchedules(spec).getByName(spec.getNetwork());
 
     BlockTestTracerManager tracerManager = null;
     PrintStream traceWriter;
