@@ -65,6 +65,18 @@ public class EvmToolMergeCoordinator implements MergeMiningCoordinator {
     return rememberBlock(block, Optional.empty());
   }
 
+  /**
+   * Validates the block and, unlike production, makes it canonical straight away.
+   *
+   * <p>{@link org.hyperledger.besu.consensus.merge.blockcreation.MergeCoordinator} stores the block
+   * non-canonically here and moves the head only in {@code updateForkChoice}. This fuses the two,
+   * which is sound only because the fixtures import linearly: every VALID payload in {@code
+   * blockchain_tests_engine} extends the previous VALID one, so there is never a stored block that
+   * the following forkchoiceUpdated does not make head anyway. A fixture carrying a VALID payload
+   * on a side chain would advance the head where a real node would not, and the {@code
+   * lastblockhash} oracle would then be checking this harness's semantics rather than production's
+   * — so mirror store-then-FCU here if such fixtures ever appear.
+   */
   @Override
   public BlockProcessingResult rememberBlock(
       final Block block, final Optional<BlockAccessList> blockAccessList) {
@@ -151,14 +163,18 @@ public class EvmToolMergeCoordinator implements MergeMiningCoordinator {
     return true;
   }
 
+  // Answered from the same bad-block cache production reads. validateAndProcessBlock populates it
+  // on every rejection, so a fixture that re-sends an invalid payload gets the cached verdict and
+  // latestValidHash rather than a fresh validation with a different message — which is what the
+  // hive run these tasks reproduce would report.
   @Override
   public boolean isBadBlock(final Hash blockHash) {
-    return false;
+    return protocolContext.getBadBlockManager().isBadBlock(blockHash);
   }
 
   @Override
   public Optional<Hash> getLatestValidHashOfBadBlock(final Hash blockHash) {
-    return Optional.empty();
+    return protocolContext.getBadBlockManager().getLatestValidHash(blockHash);
   }
 
   @Override

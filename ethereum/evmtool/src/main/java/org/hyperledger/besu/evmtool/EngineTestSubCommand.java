@@ -95,9 +95,11 @@ import picocli.CommandLine.ParentCommand;
  * CLI subcommand that executes Ethereum Engine API test fixtures (blockchain_test_engine format)
  * through the real Engine API code path.
  *
- * <p>Routes payloads through AbstractEngineNewPayload.syncResponse() →
- * MergeCoordinator.rememberBlock(), exercising the same validation and execution logic as consume
- * engine via Hive.
+ * <p>Routes payloads through the engine method's {@code
+ * ExecutionEngineJsonRpcMethod.syncResponse()} — {@link
+ * org.hyperledger.besu.ethereum.api.jsonrpc.internal.methods.engine.EngineNewPayloadV1} and its
+ * later versions — into {@code MergeMiningCoordinator.rememberBlock()}, exercising the same
+ * validation and execution logic as consume-engine via hive.
  */
 @Command(
     name = COMMAND_NAME,
@@ -118,6 +120,15 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
           "Limit execution to tests whose name contains the given substring, or matches the given"
               + " pattern (a regex, with * and ? as wildcards).")
   private String testName = null;
+
+  @Option(
+      names = {"--test-name-regex"},
+      description =
+          "Limit execution to tests whose id matches the given regex, taken verbatim. This is a"
+              + " hive --sim.limit value: anchored at the start of the id, open at the end and"
+              + " case-sensitive, as re.match is. Nothing is escaped or rewritten, so a published"
+              + " hive filter can be passed exactly as it appears.")
+  private String testNameRegex = null;
 
   // Compiled up front so a malformed expression fails before any fixture is read
   private TestNameFilter nameFilter;
@@ -167,9 +178,9 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
             .getTypeFactory()
             .constructParametricType(Map.class, String.class, EngineTestCaseSpec.class);
 
-    if (testName != null) {
+    if (testName != null || testNameRegex != null) {
       try {
-        nameFilter = TestNameFilter.compile(testName);
+        nameFilter = TestNameFilter.fromOptions(testName, testNameRegex);
       } catch (final IllegalArgumentException e) {
         parentCommand.out.println(e.getMessage());
         exitCode = 1;
@@ -204,6 +215,11 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
     } catch (final IOException e) {
       setupFailed = true;
       System.err.println("Unable to read test file: " + e.getMessage());
+    } catch (final InterruptedException e) {
+      // Catching it cleared the flag; restore it so whoever interrupted the run still sees it.
+      Thread.currentThread().interrupt();
+      setupFailed = true;
+      System.err.println("Interrupted while running engine tests");
     } catch (final Exception e) {
       setupFailed = true;
       System.err.println("Error: " + e.getMessage());
@@ -217,8 +233,7 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
         // without breaking the parse.
         if (!jsonArray) {
           parentCommand.out.printf(
-              "No engine test was executed%s.%n",
-              testName == null ? "" : " matching --test-name '" + testName + "'");
+              "No engine test was executed%s.%n", TestNameFilter.describe(testName, testNameRegex));
         }
       }
       if (jsonArray) {
@@ -242,7 +257,12 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
       final FixtureRunner.TestResults results) {
     final Map<String, EngineTestCaseSpec> tests;
     try {
-      tests = mapper.readValue(file.toFile(), javaType);
+      // FixtureRunner.collectFiles passes the literal path "stdin" through unresolved, as the
+      // signal to read the fixture from standard input. block-test and state-test both honour it.
+      tests =
+          "stdin".equals(file.toString())
+              ? mapper.readValue(parentCommand.in, javaType)
+              : mapper.readValue(file.toFile(), javaType);
     } catch (final Exception e) {
       results.recordUnreadable(file.toString(), "not readable as an engine test fixture: " + e);
       return;
@@ -325,29 +345,6 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
     }
   }
 
-  // Protocol schedules are cached per distinct fixture blob schedule (key from
-  // EngineTestCaseSpec.getBlobScheduleKey()), so devnets whose blob target/max differ from Besu
-  // defaults are validated against the fixtures' own blob schedule rather than rebuilt per test.
-  private final Map<String, ReferenceTestProtocolSchedules> cachedSchedules = new HashMap<>();
-
-  /**
-   * The schedules for one fixture blob schedule, built once and shared by every worker.
-   *
-   * <p>Synchronized rather than a {@code ConcurrentHashMap.computeIfAbsent}: the map holds a key
-   * per distinct blob schedule, so per-key serialisation would still let several workers into
-   * {@code create()} at once, and {@code create()} initialises the KZG trusted setup, which is
-   * process-wide state guarded by a {@code compareAndSet} that lets the losing thread proceed
-   * before the setup is loaded. The check-then-act has to be atomic across keys, not merely
-   * visible.
-   */
-  private synchronized ReferenceTestProtocolSchedules getSchedules(final EngineTestCaseSpec spec) {
-    return cachedSchedules.computeIfAbsent(
-        spec.getBlobScheduleKey(),
-        key ->
-            ReferenceTestProtocolSchedules.create(
-                parentCommand.getEvmConfiguration(), spec.getBlobScheduleOptions().orElse(null)));
-  }
-
   private void executeEngineTests(
       final Map<String, EngineTestCaseSpec> tests, final FixtureRunner.TestResults results) {
     for (final Map.Entry<String, EngineTestCaseSpec> entry : tests.entrySet()) {
@@ -394,11 +391,16 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
       parentCommand.out.println("Running " + test);
     }
 
-    // Build chain and protocol context (cache protocol schedules per fixture blob schedule)
+    // Build chain and protocol context. The fixture's own config.blobSchedule is passed through,
+    // because a devnet sets blob target and max to values Besu's defaults do not carry; schedules
+    // are cached per distinct blob schedule rather than rebuilt per test.
     final MutableBlockchain blockchain = spec.buildBlockchain();
     final ProtocolSchedule schedule;
     try {
-      schedule = getSchedules(spec).getByName(spec.getNetwork());
+      schedule =
+          ReferenceTestProtocolSchedules.cached(
+                  parentCommand.getEvmConfiguration(), spec.getBlobScheduleOptions().orElse(null))
+              .getByName(spec.getNetwork());
     } catch (final RuntimeException e) {
       recordResult(
           test, spec, blockchain, false, "Failed to build protocol schedule: " + e, results);
