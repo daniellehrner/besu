@@ -155,7 +155,7 @@ public class BlockchainTestSubCommand implements Runnable, IExitCodeGenerator {
   // picocli does it magically
   @Parameters private final List<Path> blockchainTestFiles = new ArrayList<>();
 
-  // Cached across all tests: building the 30+ reference test schedules is expensive. Keyed by the
+  // Cached across all tests: building the reference test schedules is expensive. Keyed by the
   // fixture's blob schedule, so a devnet whose blob target/max differ from Besu's defaults is
   // validated against its own. Guarded by getSchedules().
   private final Map<String, ReferenceTestProtocolSchedules> cachedSchedules = new HashMap<>();
@@ -315,15 +315,13 @@ public class BlockchainTestSubCommand implements Runnable, IExitCodeGenerator {
 
   /**
    * The reference test schedules for one fixture's blob schedule, built once and shared by every
-   * worker. Building them is expensive — 30+ schedules per call — and {@code create} also
-   * initialises the KZG trusted setup, which is process-wide state, so the check-then-act has to be
-   * atomic across keys rather than merely visible.
+   * worker. Building them is expensive, and {@code create} also initialises the KZG trusted setup,
+   * which is process-wide state, so the check-then-act has to be atomic across keys rather than
+   * merely visible.
    *
-   * <p>The fixture's own {@code config.blobSchedule} is passed through. Without it every devnet
-   * blob test is validated against Besu's mainnet blob target/max and diverges: on the pinned
-   * glamsterdam fixtures that was 4463 failures, all of them in {@code cancun/eip4844_blobs} and
-   * {@code osaka/eip7918_blob_reserve_price}. The JUnit reference tests have always read it (see
-   * {@code BlockchainReferenceTestTools}); this runner was the one consumer that did not.
+   * <p>The fixture's own {@code config.blobSchedule} is passed through, because a devnet sets blob
+   * target and max to values Besu's defaults do not carry. Build the schedule without it and every
+   * blob test is validated against the wrong parameters.
    */
   private synchronized ReferenceTestProtocolSchedules getSchedules(
       final BlockchainReferenceTestCaseSpec spec) {

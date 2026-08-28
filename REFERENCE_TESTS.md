@@ -122,13 +122,13 @@ So this hive run:
 
 ```bash
 ./hive --sim ethereum/eels/consume-engine --client besu --sim.parallelism=6 \
-  --sim.limit='.*(2780|7708|7928|8282).*' --sim.limit.exact=false ...
+  --sim.limit='.*(7928|8282).*' --sim.limit.exact=false ...
 ```
 
 becomes:
 
 ```bash
-./gradlew consumeEngineTests -PsimParallelism=6 -PsimLimit='.*(2780|7708|7928|8282).*'
+./gradlew consumeEngineTests -PsimParallelism=6 -PsimLimit='.*(7928|8282).*'
 ```
 
 and swapping the task for `consumeRlpTests` covers `--sim ethereum/eels/consume-rlp`. Quote the
@@ -184,45 +184,36 @@ The devnet hive runs published at [hive.ethpandaops.io](https://hive.ethpandaops
 `--sim.limit`. Four tasks carry those filters so that reproducing a run is a task name rather than a
 regex copied out of a web UI:
 
-| Task | Mirrors | `--sim.limit` |
-|------|---------|---------------|
-| `consumeEngineTestsGlamsterdam` | [glamsterdam](https://hive.ethpandaops.io/#/test/glamsterdam/1787867407-75e9079746599601ca1c6f8ffd9aab2a) `consume-engine` | `.*fork_(Amsterdam\|BPO2ToAmsterdamAtTime15k\|Osaka).*` |
-| `consumeRlpTestsGlamsterdam` | the same filter, `consume-rlp` | as above |
-| `consumeEngineTestsGlamsterdamQuick` | [glamsterdam-quick](https://hive.ethpandaops.io/#/test/glamsterdam-quick/1787875966-3c9b3411ee5e78d8b8c2fa25af6e899f) `consume-engine` | the 20-EIP alternation |
-| `consumeRlpTestsGlamsterdamQuick` | the same filter, `consume-rlp` | as above |
+| Task | Mirrors |
+|------|---------|
+| `consumeEngineTestsGlamsterdam` | the `glamsterdam` group's `consume-engine` run |
+| `consumeRlpTestsGlamsterdam` | the same filter, `consume-rlp` |
+| `consumeEngineTestsGlamsterdamQuick` | the `glamsterdam-quick` group's `consume-engine` run |
+| `consumeRlpTestsGlamsterdamQuick` | the same filter, `consume-rlp` |
 
 ```bash
-./gradlew consumeEngineTestsGlamsterdam        # the full published sweep, all three forks
+./gradlew consumeEngineTestsGlamsterdam        # the full published sweep
 ./gradlew consumeEngineTestsGlamsterdamQuick   # the EIP-scoped sweep
 ```
 
-The `Glamsterdam` tasks cover **three** forks, not just Amsterdam — `fork_Amsterdam` alone is about
-59% of the selection. The `GlamsterdamQuick` tasks scope by EIP number instead, which cuts across
-forks.
+The `Glamsterdam` filter selects by fork and currently spans more than one, so the task is not an
+Amsterdam-only run. The `GlamsterdamQuick` filter selects by EIP number instead, which cuts across
+forks. Read the constants for what each covers today.
 
-A preset ignores `-PsimLimit`: overriding half of it would produce a number against a scope nobody
+A preset ignores `-PsimLimit`: overriding half of it would report a number against a scope nobody
 can reconstruct. `-PsimParallelism` still applies. Use the plain `consumeEngineTests` /
 `consumeRlpTests` tasks when you want your own filter.
 
-Measured against the pinned fixtures:
-
-| Task | tests | passed | failed | wall clock |
-|---|---|---|---|---|
-| `consumeEngineTestsGlamsterdam` | 42501 | 42425 | 76 | ~30s |
-| `consumeRlpTestsGlamsterdam` | 42452 | 42452 | 0 | ~52s |
-| `consumeEngineTestsGlamsterdamQuick` | 3959 | 3956 | 3 | ~20s |
-| `consumeRlpTestsGlamsterdamQuick` | 3954 | 3954 | 0 | ~22s |
-
-Note that the number the hive UI shows most prominently is the *pass* count, not the number of tests
-run — the glamsterdam run reads 42140, having run 42588.
+> When comparing against the hive UI, note that the figure it shows most prominently is the *pass*
+> count, not the number of tests run.
 
 #### Keeping the presets current
 
-Fork names change every devnet (`BPO2ToAmsterdamAtTime15k` becomes `BPO3To…`, a fork is added or
-dropped) and the quick run's EIP list is edited as EIPs are scheduled in or out. When that happens
-these tasks silently keep selecting the old set, so re-read the filter from the newest published run
-rather than assuming. Both filters live in one place, as `GLAMSTERDAM_SIM_LIMIT` and
-`GLAMSTERDAM_QUICK_SIM_LIMIT` at the top of `ethereum/evmtool/build.gradle`.
+Fork names change with every devnet (a transition fork is renamed, added or dropped) and the quick
+run's EIP list is edited as EIPs are scheduled in or out. A filter left behind does not fail — it
+selects the old set and goes green — so re-read it from the newest published run rather than
+assuming. Both live in one place, as `GLAMSTERDAM_SIM_LIMIT` and `GLAMSTERDAM_QUICK_SIM_LIMIT` at
+the top of `ethereum/evmtool/build.gradle`.
 
 The suite JSON records the exact invocation under `runMetadata.hiveCommand`. `listing.jsonl` is not
 in chronological order, so sort by `start` rather than taking the last line:
@@ -234,7 +225,8 @@ SIM=eels/consume-engine    # or eels/consume-rlp
 FILE=$(curl -sS "https://hive.ethpandaops.io/$GROUP/listing.jsonl" \
   | jq -rs --arg sim "$SIM" 'map(select(.name==$sim)) | sort_by(.start) | last | .fileName')
 
-# The suite JSON is large (150 MB+); a range request is enough, runMetadata precedes testCases
+# The suite JSON is far too large to fetch whole; runMetadata precedes testCases, so a range
+# request over the head of it is enough
 curl -sS --range 0-65535 "https://hive.ethpandaops.io/$GROUP/results/$FILE" \
   | grep -oE '"(--sim\.limit=[^"]*|fixtures=[^"]*)"'
 ```
@@ -244,8 +236,8 @@ That prints both things worth checking:
 - **`--sim.limit=…`** — copy it verbatim into the matching constant. It needs no editing: the tasks
   accept a hive regex as written and translate it (see [How `-PsimLimit` is
   translated](#how--psimlimit-is-translated)).
-- **`fixtures=…`** — the tarball the run used. If its version differs from `devnetTarConfig`, the
-  two are not selecting from the same test set and counts will not line up; see
+- **`fixtures=…`** — the tarball the run used. If its version differs from `devnetTarConfig` the two
+  are not selecting from the same test set and counts will not line up; see
   [Fixture version](#fixture-version).
 
 After changing a constant, run the task and sanity-check the test count against the run you copied
@@ -254,26 +246,19 @@ matches the *wrong* set will happily go green.
 
 ### Worked example
 
-Against the pinned fixtures, scoped to `for_amsterdam` with the Glamsterdam EIP set:
+Against the pinned fixtures, scoped to one fork group and filtered to a set of EIPs:
 
 ```bash
-L='.*(2780|7708|7732|7778|7843|7928|7954|7975|7976|7981|7997|8024|8037|8038|8045|8061|8070|8159|8246|8282).*'
+L='.*(7928|8282).*'
 ./gradlew consumeEngineTests -PsimPath=for_amsterdam -PsimLimit="$L" -PsimParallelism=12
 ./gradlew consumeRlpTests    -PsimPath=for_amsterdam -PsimLimit="$L" -PsimParallelism=12
 ```
 
-| | tests | passed | failed | wall clock |
-|---|---|---|---|---|
-| `consumeRlpTests` | 3875 | 3875 | 0 | ~20s |
-| `consumeEngineTests` | 3878 | 3875 | 3 | ~20s |
-
-The three failures are the point of the exercise — they are invisible to `consumeRlpTests` and to
-`referenceTests`, because they are Engine API behaviour rather than block validity:
-
-```
-eip7928 test_bal_invalid_engine_payload_encoding[empty_byte_string | rlp_non_list | rlp_truncated_list]
-  payload 0: expected Engine API error code -32602, got success response with status INVALID
-```
+Running both is worth the extra minute: where they disagree, the difference is Engine API behaviour
+rather than block validity — a payload the engine should have rejected with a JSON-RPC error code,
+or an `INVALID` whose validation error does not map to the exception the fixture names. Those are
+exactly the failures neither `consumeRlpTests` nor `referenceTests` can see, and they are the reason
+the engine runner exists.
 
 ### Fixture version
 
@@ -300,10 +285,8 @@ task above. `stateTestsDevnet` runs them, taking the same `-PsimLimit` / `-PsimP
 ```
 
 Fixture files that cannot be read as a test of the expected kind are reported separately under
-"Unreadable" and do **not** count as failures — they say nothing about Besu. As of the currently
-pinned fixtures that is 14 `state_tests` files (`test_bad_v_r_s`), which carry a pre-signed
-transaction in `post[].txbytes` rather than a `secretKey` that `StateTestVersionedTransaction` can
-sign with.
+"Unreadable" and do **not** count as failures — a fixture this harness cannot build says nothing
+about Besu, and counting it as a failure would make a fixture format change look like a regression.
 
 ### Running the binary directly
 

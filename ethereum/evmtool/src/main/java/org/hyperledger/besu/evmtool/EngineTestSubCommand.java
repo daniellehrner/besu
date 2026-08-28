@@ -270,7 +270,7 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
    *
    * <p>These live in a holder rather than in static fields of the subcommand because picocli
    * instantiates every registered subcommand when it builds the {@code CommandLine}, which loads
-   * this class. As plain statics they would start a Vertx event loop, six executor pools and the
+   * this class. As plain statics they would start a Vertx event loop, the executor pools and the
    * {@link EthPeers} gauges on <em>every</em> evmtool invocation — {@code t8n}, {@code state-test},
    * even {@code --help}. The holder defers all of that to the first {@code engine-test} run.
    */
@@ -333,12 +333,12 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
   /**
    * The schedules for one fixture blob schedule, built once and shared by every worker.
    *
-   * <p>Synchronized rather than a {@code ConcurrentHashMap.computeIfAbsent}: the map has one key
-   * per distinct blob schedule (nine across the pinned devnet tree), so per-key serialisation would
-   * still let several workers into {@code create()} at once, and {@code create()} initialises the
-   * KZG trusted setup, which is process-wide state guarded by a {@code compareAndSet} that lets the
-   * losing thread proceed before the setup is loaded. The check-then-act has to be atomic across
-   * keys, not merely visible.
+   * <p>Synchronized rather than a {@code ConcurrentHashMap.computeIfAbsent}: the map holds a key
+   * per distinct blob schedule, so per-key serialisation would still let several workers into
+   * {@code create()} at once, and {@code create()} initialises the KZG trusted setup, which is
+   * process-wide state guarded by a {@code compareAndSet} that lets the losing thread proceed
+   * before the setup is loaded. The check-then-act has to be atomic across keys, not merely
+   * visible.
    */
   private synchronized ReferenceTestProtocolSchedules getSchedules(final EngineTestCaseSpec spec) {
     return cachedSchedules.computeIfAbsent(
@@ -836,8 +836,9 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
       result.put(
           "lastBlockHash", blockchain == null ? "" : blockchain.getChainHeadHash().toHexString());
       result.put("lastPayloadStatus", lastPayloadStatus);
-      // Empty on a pass: a test that correctly saw an expected INVALID payload has no error to
-      // report, and filling this in from that payload's message made passing rows look failed.
+      // Empty on a pass: a test whose payload was correctly INVALID has no error to report, and
+      // carrying that payload's message here would make a passing row indistinguishable from a
+      // failed one.
       result.put("error", failureReason);
       jsonArrayResults.add(result);
     }
