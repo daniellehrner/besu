@@ -63,6 +63,9 @@ final class EngineTestExceptionMapper {
               "TransactionException.PRIORITY_GREATER_THAN_MAX_FEE_PER_GAS",
               "transaction invalid max priority fee per gas cannot be greater than max fee per gas"),
           substring(
+              "TransactionException.INVALID_CHAINID",
+              "transaction invalid transaction was meant for chain id"),
+          substring(
               "TransactionException.TYPE_3_TX_INVALID_BLOB_VERSIONED_HASH",
               "Invalid versionedHash"),
           substring(
@@ -137,6 +140,10 @@ final class EngineTestExceptionMapper {
           regex(
               "BlockException.RLP_BLOCK_LIMIT_EXCEEDED",
               "Block size of \\d+ bytes exceeds limit of \\d+ bytes"),
+          regex(
+              "TransactionException.INVALID_SIGNATURE_VRS",
+              "Failed to decode transactions from block parameter|transaction invalid Signature s"
+                  + " value should be less than \\d+, but got \\d+"),
           regex(
               "TransactionException.INITCODE_SIZE_EXCEEDED",
               "transaction invalid Initcode size of \\d+ exceeds maximum size of \\d+"),
