@@ -123,7 +123,7 @@ static String translateSimLimit(String simLimit) {
   return simLimit.replace('.*', '*')
 }
 
-def registerHiveEquivalentTask(project, String taskName, String subcommand, String fixtureDir, String desc, List<String> extraArgs) {
+def registerHiveEquivalentTask(project, String taskName, String subcommand, String fixtureDir, String desc, List<String> extraArgs, String presetSimLimit = null) {
   return project.tasks.register(taskName, JavaExec) {
     description = desc
     group = 'verification'
@@ -145,7 +145,10 @@ def registerHiveEquivalentTask(project, String taskName, String subcommand, Stri
     // this file keeping a second copy of it. All three runners default to the available cores.
     def parallelism = project.findProperty('simParallelism')?.toString()
     def subPath = project.findProperty('simPath')?.toString()
-    def simLimit = project.findProperty('simLimit')?.toString()
+    // A preset task carries the filter of the hive run it mirrors, and that is the whole point of
+    // it: -PsimLimit is not consulted, so there is no way to half-override the preset and end up
+    // reporting a number against a scope nobody can reconstruct. Use the plain task to filter.
+    def simLimit = presetSimLimit ?: project.findProperty('simLimit')?.toString()
 
     doFirst {
       def fixturesDir = fixtures.get().asFile
@@ -172,7 +175,8 @@ def registerHiveEquivalentTask(project, String taskName, String subcommand, Stri
       cmd += runDir.absolutePath
       args = cmd
       logger.lifecycle("${taskName}: ${subcommand} over ${runDir}" +
-        (simLimit != null ? " matching --sim.limit '${simLimit}'" : " (all tests)"))
+        (simLimit != null ? " matching --sim.limit '${simLimit}'" : " (all tests)") +
+        (presetSimLimit != null ? " [preset — -PsimLimit ignored]" : ""))
     }
   }
 }
@@ -188,6 +192,34 @@ registerHiveEquivalentTask(project, 'consumeEngineTests', 'engine-test', 'blockc
 registerHiveEquivalentTask(project, 'consumeRlpTests', 'block-test', 'blockchain_tests',
   'Hive consume-rlp equivalent: replays blockchain_tests fixtures through the RLP block-import path.',
   [])
+
+// The two hive runs published at hive.ethpandaops.io, so that reproducing one is a task name
+// rather than a copied regex. The filters are transcribed from each run's runMetadata.hiveCommand:
+//
+//   glamsterdam        https://hive.ethpandaops.io/#/test/glamsterdam/1787867407-75e9079746599601ca1c6f8ffd9aab2a
+//   glamsterdam-quick  https://hive.ethpandaops.io/#/test/glamsterdam-quick/1787875966-3c9b3411ee5e78d8b8c2fa25af6e899f
+//
+// Both hive runs pull tests-glamsterdam-devnet@v8.1.2 while devnetTarConfig pins v8.1.1, so the
+// selected test counts will not match to the unit until that is bumped.
+def GLAMSTERDAM_SIM_LIMIT = '.*fork_(Amsterdam|BPO2ToAmsterdamAtTime15k|Osaka).*'
+def GLAMSTERDAM_QUICK_SIM_LIMIT =
+  '.*(2780|7708|7732|7778|7843|7928|7954|7975|7976|7981|7997|8024|8037|8038|8045|8061|8070|8159|8246|8282).*'
+
+registerHiveEquivalentTask(project, 'consumeEngineTestsGlamsterdam', 'engine-test', 'blockchain_tests_engine',
+  'consumeEngineTests with the glamsterdam hive run\'s fork filter baked in.',
+  [], GLAMSTERDAM_SIM_LIMIT)
+
+registerHiveEquivalentTask(project, 'consumeRlpTestsGlamsterdam', 'block-test', 'blockchain_tests',
+  'consumeRlpTests with the glamsterdam hive run\'s fork filter baked in.',
+  [], GLAMSTERDAM_SIM_LIMIT)
+
+registerHiveEquivalentTask(project, 'consumeEngineTestsGlamsterdamQuick', 'engine-test', 'blockchain_tests_engine',
+  'consumeEngineTests with the glamsterdam-quick hive run\'s EIP filter baked in.',
+  [], GLAMSTERDAM_QUICK_SIM_LIMIT)
+
+registerHiveEquivalentTask(project, 'consumeRlpTestsGlamsterdamQuick', 'block-test', 'blockchain_tests',
+  'consumeRlpTests with the glamsterdam-quick hive run\'s EIP filter baked in.',
+  [], GLAMSTERDAM_QUICK_SIM_LIMIT)
 
 // No hive simulator consumes state_tests — they are the EVM/state-transition-only slice, covered by
 // neither consume-engine nor consume-rlp. Kept because that coverage is real, and it reuses the same
