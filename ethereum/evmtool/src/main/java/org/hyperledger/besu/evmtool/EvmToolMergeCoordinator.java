@@ -101,16 +101,10 @@ public class EvmToolMergeCoordinator implements MergeMiningCoordinator {
 
   @Override
   public BlockProcessingResult validateBlock(final Block block) {
-    return protocolSchedule
-        .getByBlockHeader(block.getHeader())
-        .getBlockValidator()
-        .validateAndProcessBlock(
-            protocolContext,
-            block,
-            HeaderValidationMode.FULL,
-            HeaderValidationMode.NONE,
-            Optional.empty(),
-            false);
+    // No engine method calls this — newPayload goes through rememberBlock — so rather than carry a
+    // second copy of the validate-and-process call that nothing exercises, say so.
+    throw new UnsupportedOperationException(
+        "Block validation without import not used by engine-test");
   }
 
   @Override

@@ -357,22 +357,9 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
       } catch (final RuntimeException e) {
         // Charge an execution error — failing to build the chain or schedule, say — to the test
         // that caused it, so one broken fixture cannot take the rest of the file down with it.
-        final String reason = "execution error: " + e;
-        if (!jsonArray) {
-          parentCommand.out.println("FAIL: " + entry.getKey() + " - " + reason);
-        }
-        results.recordFailure(entry.getKey(), reason);
-        if (jsonArray) {
-          // No blockchain to read a head hash from — the failure happened building it.
-          final ObjectNode result = SHARED_PARAMS_MAPPER.createObjectNode();
-          result.put("name", entry.getKey());
-          result.put("pass", false);
-          result.put("fork", entry.getValue().getNetwork());
-          result.put("lastBlockHash", "");
-          result.put("lastPayloadStatus", "");
-          result.put("error", reason);
-          jsonArrayResults.add(result);
-        }
+        // No blockchain to report: the failure happened building it.
+        recordResult(
+            entry.getKey(), entry.getValue(), null, false, "execution error: " + e, results);
       }
     }
   }
@@ -538,7 +525,6 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
     boolean testPassed = true;
     String failureReason = "";
     String lastPayloadStatus = "";
-    String lastValidationError = "";
 
     final EngineTestCaseSpec.EngineNewPayload[] payloads = spec.getEngineNewPayloads();
     if (payloads == null || payloads.length == 0) {
@@ -672,9 +658,6 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
         final PayloadStatusV1 status =
             (PayloadStatusV1) ((JsonRpcSuccessResponse) response).getResult();
         lastPayloadStatus = status.getStatusAsString();
-        if (status.getError() != null && !status.getError().isEmpty()) {
-          lastValidationError = status.getError();
-        }
 
         // A fixture that expects an Engine API errorCode requires an actual JSON-RPC error
         // response; a status response, even INVALID, does not satisfy it. This is the distinction
@@ -799,7 +782,6 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
         testPassed,
         testPassed ? "" : failureReason,
         lastPayloadStatus,
-        testPassed ? lastValidationError : failureReason,
         results);
   }
 
@@ -811,14 +793,18 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
       final boolean testPassed,
       final String failureReason,
       final FixtureRunner.TestResults results) {
-    recordResult(test, spec, blockchain, testPassed, failureReason, "", failureReason, results);
+    recordResult(test, spec, blockchain, testPassed, failureReason, "", results);
   }
 
   /**
    * The one place a test's outcome is reported, so that every exit path — including the early
-   * returns for an unsupported fork or a missing payload — produces both a summary entry and, under
-   * {@code --json-array}, a row. A consumer diffing rows against an expected test list would
-   * otherwise see those tests silently absent rather than failed.
+   * returns for an unsupported fork or a missing payload, and an exception thrown before the chain
+   * was even built — produces both a summary entry and, under {@code --json-array}, a row. A
+   * consumer diffing rows against an expected test list would otherwise see those tests silently
+   * absent rather than failed.
+   *
+   * @param blockchain the chain to report a head hash from, or null when the failure happened
+   *     before there was one
    */
   private void recordResult(
       final String test,
@@ -827,7 +813,6 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
       final boolean testPassed,
       final String failureReason,
       final String lastPayloadStatus,
-      final String error,
       final FixtureRunner.TestResults results) {
     if (testPassed) {
       if (verbose) {
@@ -844,13 +829,16 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
     }
 
     if (jsonArray) {
-      final ObjectNode result = SHARED_PARAMS_MAPPER.createObjectNode();
+      final ObjectNode result = FixtureRunner.newResultNode();
       result.put("name", test);
       result.put("pass", testPassed);
       result.put("fork", spec.getNetwork());
-      result.put("lastBlockHash", blockchain.getChainHeadHash().toHexString());
+      result.put(
+          "lastBlockHash", blockchain == null ? "" : blockchain.getChainHeadHash().toHexString());
       result.put("lastPayloadStatus", lastPayloadStatus);
-      result.put("error", error);
+      // Empty on a pass: a test that correctly saw an expected INVALID payload has no error to
+      // report, and filling this in from that payload's message made passing rows look failed.
+      result.put("error", failureReason);
       jsonArrayResults.add(result);
     }
   }
