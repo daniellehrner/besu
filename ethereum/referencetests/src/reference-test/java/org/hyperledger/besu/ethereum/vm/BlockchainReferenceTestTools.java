@@ -103,8 +103,10 @@ public class BlockchainReferenceTestTools {
             params.ignoreAll();
         }
 
-        // Consumes a huge amount of memory
+        // Consumes a huge amount of memory. The execution-spec-tests port additionally runs through
+        // block building, which holds on to even more memory and runs out of heap.
         params.ignore("static_Call1MB1024Calldepth");
+        params.ignore("test_static_call1_mb1024_calldepth");
         params.ignore("ShanghaiLove_");
 
         // Absurd amount of gas, doesn't run in parallel
@@ -122,6 +124,16 @@ public class BlockchainReferenceTestTools {
 
         // These are for the older reference tests but EIP-2537 is covered by eip2537_bls_12_381_precompiles in the execution-spec-tests
         params.ignore("/stEIP2537/");
+
+        // EIP-7610 (revert creation when the destination address has non-empty storage) was never
+        // part of the spec and has been dropped retroactively for every fork, see
+        // https://github.com/ethereum/execution-specs/pull/3417. Upstream has deleted these tests
+        // from ethereum/tests, but the submodule is still pinned to a revision that contains them.
+        params.ignore("create2collisionStorageParis");
+        params.ignore("dynamicAccountOverwriteEmpty_Paris");
+        params.ignore("InitCollisionParis");
+        params.ignore("RevertInCreateInInitCreate2Paris");
+        params.ignore("RevertInCreateInInit_Paris");
     }
 
     private BlockchainReferenceTestTools() {
