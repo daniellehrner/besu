@@ -114,6 +114,11 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
   /** Process exit code: 0 when all executed tests pass, 1 when any failed. */
   private volatile int exitCode = 0;
 
+  /**
+   * Whether any test reached the shared engine machinery, and so whether it needs shutting down.
+   */
+  private volatile boolean harnessUsed = false;
+
   @Option(
       names = {"--test-name"},
       description =
@@ -242,6 +247,13 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
         results.printSummary(parentCommand.out);
       }
       exitCode = results.failed() > 0 || setupFailed || ranNothing ? 1 : 0;
+      // The Vertx event loop and the scheduler pools are not daemon threads, so leaving them
+      // running keeps a JVM that does not exit alive for good. EvmTool.main does exit, but an
+      // in-process caller — a future unit test, as EvmToolSpecTests already is for state-test —
+      // would hang. Only after the run: they are shared by every test in it.
+      if (harnessUsed) {
+        EngineHarness.shutdown();
+      }
     }
   }
 
@@ -314,6 +326,20 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
           @Override
           public void stop() {}
         };
+
+    /**
+     * Stops the event loop and the executor pools, so a caller that does not exit the JVM is not
+     * left with them running for its lifetime.
+     */
+    private static void shutdown() {
+      SCHEDULER.stop();
+      try {
+        SCHEDULER.awaitStop();
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      VERTX.close();
+    }
 
     private EngineHarness() {}
   }
@@ -432,7 +458,9 @@ public class EngineTestSubCommand implements Runnable, IExitCodeGenerator {
       final ProtocolContext context,
       final FixtureRunner.TestResults results) {
 
-    // Use shared static instances to avoid thread exhaustion across tests
+    // Use shared static instances to avoid thread exhaustion across tests. Recorded so run() knows
+    // whether there is anything to shut down without touching the holder and initialising it.
+    harnessUsed = true;
     final EvmToolMergeCoordinator coordinator =
         new EvmToolMergeCoordinator(context, schedule, EngineHarness.SCHEDULER);
 
