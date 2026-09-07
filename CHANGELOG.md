@@ -23,14 +23,14 @@
 - `--rpc-tx-feecap` will treat a value of 0 as limiting fees to 0. Today it treats 0 as "do not cap fees". To achieve similar behaviour set it to a suitably large value to effectively prevent any fee capping.
 
 ### Bug fixes
-- `debug_traceTransaction`, `debug_traceCall` and `debug_traceBlock*` no longer capture a full EVM memory snapshot on every opcode when a non-default tracer (`callTracer`, `prestateTracer`, `4byteTracer`) is requested without `enableMemory`. A contract holding a large memory buffer retained one full snapshot per memory-writing opcode, which could exhaust the heap.
-- `callTracer` now reports the correct `input` for CREATE2, and for call and create operations that do not spawn a callee frame.
 - Reject malformed RLPx ECIES handshake payloads under 32 bytes cleanly with `InvalidCipherTextException` instead of raising an unhandled `NegativeArraySizeException`. [#11218](https://github.com/besu-eth/besu/pull/11218)
 - GraphQL `logs(filter: ...)` no longer fails when the filter's `topics` field is omitted or explicitly null, on both the top-level `logs` query and the block-scoped one. The schema declares `topics` nullable and documents "[] or nil matches any topic list", but the field was dereferenced unguarded, so a documented-valid query returned a `DataFetchingException` and `data: null`. [#11188](https://github.com/besu-eth/besu/pull/11188)
 - The Engine API JWT fast-path cache now compares the presented bearer token against the cached one with `MessageDigest.isEqual` over UTF-8 bytes instead of `String.equals`, so the comparison does not return early on the first differing byte.
 - Fix ENR fork ID not updating after timestamp-scheduled forks when no block lands exactly on the fork timestamp. [#10882](https://github.com/besu-eth/besu/issues/10882)
 - Besu no longer announces the EIP-4844 version 0 size of a blob transaction while serving the EIP-7594 version 1 (cell proofs) encoding. From Osaka on, a locally submitted version 0 blob transaction is upgraded to version 1 before it is pooled, but the pre-upgrade transaction was the one broadcast, so `NewPooledTransactionHashes` under-announced it by 6,226 bytes per blob against what `GetPooledTransactions` then served, and go-ethereum peers responded with `dropPeer()`. [#11203](https://github.com/besu-eth/besu/pull/11203)
 - `admin_logsRemoveCache` no longer reports `Cache Removed` when nothing was removed. `TransactionLogBloomCacher.removeSegments` skips the whole deletion while log bloom caching is in progress, so the RPC returned success while every cache file was still on disk. It now returns an error in that case. [#11080](https://github.com/besu-eth/besu/pull/11080)
+- `debug_traceTransaction`, `debug_traceCall` and `debug_traceBlock*` no longer capture a full EVM memory snapshot on every opcode when a non-default tracer (`callTracer`, `prestateTracer`, `4byteTracer`) is requested without `enableMemory`. A contract holding a large memory buffer retained one full snapshot per memory-writing opcode, which could exhaust the heap.
+- `callTracer` now reports the correct `input` for CREATE2, and for call and create operations that do not spawn a callee frame.
 
 ### Additions and Improvements
 
