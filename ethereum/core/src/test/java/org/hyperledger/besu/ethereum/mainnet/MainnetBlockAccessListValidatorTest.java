@@ -24,7 +24,9 @@ import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
+import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
+import org.hyperledger.besu.evm.gascalculator.StateGasCostCalculator;
 
 import java.util.List;
 import java.util.Optional;
@@ -55,10 +57,39 @@ class MainnetBlockAccessListValidatorTest {
     final ProtocolSpec protocolSpec = mock(ProtocolSpec.class);
     final org.hyperledger.besu.evm.gascalculator.GasCalculator gasCalculator =
         mock(org.hyperledger.besu.evm.gascalculator.GasCalculator.class);
+    final StateGasCostCalculator stateGasCostCalculator = mock(StateGasCostCalculator.class);
+    when(stateGasCostCalculator.transactionRegularGasLimit()).thenReturn(Long.MAX_VALUE);
     when(gasCalculator.getBlockAccessListItemCost()).thenReturn(itemCost);
+    when(gasCalculator.stateGasCostCalculator()).thenReturn(stateGasCostCalculator);
     when(protocolSpec.getGasCalculator()).thenReturn(gasCalculator);
+    when(protocolSpec.getBlockGasAccountingStrategy()).thenReturn((transaction, result) -> 0L);
     when(protocolSchedule.getByBlockHeader(any())).thenReturn(protocolSpec);
     return new MainnetBlockAccessListValidator(protocolSchedule);
+  }
+
+  private static Transaction transactionWithGasLimit(final long gasLimit) {
+    final Transaction transaction = mock(Transaction.class);
+    when(transaction.getGasLimit()).thenReturn(gasLimit);
+    return transaction;
+  }
+
+  /** 1 address + 1 storage change + 4 reads = 6 items, over budget at gas 10,000. */
+  private static BlockAccessList overBudgetBal() {
+    return new BlockAccessList(
+        List.of(
+            new BlockAccessList.AccountChanges(
+                ADDR_1,
+                List.of(
+                    new BlockAccessList.SlotChanges(
+                        SLOT_1, List.of(new BlockAccessList.StorageChange(0, UInt256.ZERO)))),
+                List.of(
+                    new BlockAccessList.SlotRead(SLOT_2),
+                    new BlockAccessList.SlotRead(SLOT_3),
+                    new BlockAccessList.SlotRead(new StorageSlotKey(UInt256.valueOf(4))),
+                    new BlockAccessList.SlotRead(new StorageSlotKey(UInt256.valueOf(5)))),
+                List.of(),
+                List.of(),
+                List.of())));
   }
 
   private static BlockHeader headerWithBal(final BlockAccessList bal, final long gasLimit) {
@@ -159,48 +190,48 @@ class MainnetBlockAccessListValidatorTest {
 
     @Test
     void failsWhenExceedingMaxItems() {
-      final BlockAccessList.AccountChanges account =
-          new BlockAccessList.AccountChanges(
-              ADDR_1,
-              List.of(
-                  new BlockAccessList.SlotChanges(
-                      SLOT_1, List.of(new BlockAccessList.StorageChange(0, UInt256.ZERO)))),
-              List.of(
-                  new BlockAccessList.SlotRead(SLOT_2),
-                  new BlockAccessList.SlotRead(SLOT_3),
-                  new BlockAccessList.SlotRead(new StorageSlotKey(UInt256.valueOf(4))),
-                  new BlockAccessList.SlotRead(new StorageSlotKey(UInt256.valueOf(5)))),
-              List.of(),
-              List.of(),
-              List.of());
-      final BlockAccessList bal = new BlockAccessList(List.of(account));
-      // 1 addr + 1 storage change + 4 reads = 6 items. ITEM_COST=2000, gas 10_000 → max 5 items
+      final BlockAccessList bal = overBudgetBal();
+      // ITEM_COST=2000, gas 10_000 → max 5 items
       final BlockHeader header = headerWithBal(bal, 10_000L);
       Assertions.assertThat(validator().validate(Optional.of(bal), header, 0)).isFalse();
     }
 
     @Test
     void sizeCheckSkippedWhenItemCostZero() {
-      // BAL with 6 items would fail with itemCost=2000 and gas 10_000 (max 5 items)
-      final BlockAccessList.AccountChanges account =
-          new BlockAccessList.AccountChanges(
-              ADDR_1,
-              List.of(
-                  new BlockAccessList.SlotChanges(
-                      SLOT_1, List.of(new BlockAccessList.StorageChange(0, UInt256.ZERO)))),
-              List.of(
-                  new BlockAccessList.SlotRead(SLOT_2),
-                  new BlockAccessList.SlotRead(SLOT_3),
-                  new BlockAccessList.SlotRead(new StorageSlotKey(UInt256.valueOf(4))),
-                  new BlockAccessList.SlotRead(new StorageSlotKey(UInt256.valueOf(5)))),
-              List.of(),
-              List.of(),
-              List.of());
-      final BlockAccessList bal = new BlockAccessList(List.of(account));
+      final BlockAccessList bal = overBudgetBal();
       final BlockHeader header = headerWithBal(bal, 10_000L);
       // With itemCost=0 the size constraint is not applied (no division, check skipped)
       Assertions.assertThat(validatorWithItemCost(0L).validate(Optional.of(bal), header, 0))
           .isTrue();
+    }
+
+    @Test
+    void sizeCheckAppliedWhenFirstTransactionFitsTheBlockBudget() {
+      final BlockAccessList bal = overBudgetBal();
+      final BlockHeader header = headerWithBal(bal, 10_000L);
+      Assertions.assertThat(
+              validator()
+                  .validate(Optional.of(bal), header, List.of(transactionWithGasLimit(1_000L))))
+          .isFalse();
+    }
+
+    @Test
+    void sizeCheckStandsDownWhenFirstTransactionExceedsTheBlockBudget() {
+      // Execution rejects the transaction before it reaches the item budget, so the budget must
+      // leave that error to it.
+      final BlockAccessList bal = overBudgetBal();
+      final BlockHeader header = headerWithBal(bal, 10_000L);
+      Assertions.assertThat(
+              validator()
+                  .validate(Optional.of(bal), header, List.of(transactionWithGasLimit(10_001L))))
+          .isTrue();
+    }
+
+    @Test
+    void sizeCheckAppliedWhenBlockHasNoTransactions() {
+      final BlockAccessList bal = overBudgetBal();
+      final BlockHeader header = headerWithBal(bal, 10_000L);
+      Assertions.assertThat(validator().validate(Optional.of(bal), header, List.of())).isFalse();
     }
   }
 

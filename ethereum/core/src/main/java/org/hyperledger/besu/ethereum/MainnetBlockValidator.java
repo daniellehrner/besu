@@ -198,7 +198,7 @@ public class MainnetBlockValidator implements BlockValidator {
       }
 
       if (!blockAccessListValidator.validate(
-          blockAccessList, block.getHeader(), block.getBody().getTransactions().size())) {
+          blockAccessList, block.getHeader(), block.getBody().getTransactions())) {
         var result =
             new BlockProcessingResult(
                 String.format(

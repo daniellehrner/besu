@@ -19,9 +19,11 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.ProcessableBlockHeader;
+import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -122,7 +124,47 @@ public class MainnetBlockAccessListValidator implements BlockAccessListValidator
   public boolean validate(
       final Optional<BlockAccessList> blockAccessList,
       final BlockHeader blockHeader,
+      final List<Transaction> transactions) {
+    return validate(
+        blockAccessList,
+        blockHeader,
+        transactions.size(),
+        firstTransactionFitsBlockBudget(blockHeader, transactions));
+  }
+
+  @Override
+  public boolean validate(
+      final Optional<BlockAccessList> blockAccessList,
+      final BlockHeader blockHeader,
       final int nbTransactions) {
+    return validate(blockAccessList, blockHeader, nbTransactions, true);
+  }
+
+  /**
+   * The first transaction's block budget is settled before any state is touched, so when it is
+   * already over, execution owns the rejection and the item budget must not pre-empt it.
+   */
+  private boolean firstTransactionFitsBlockBudget(
+      final BlockHeader blockHeader, final List<Transaction> transactions) {
+    if (transactions.isEmpty()) {
+      return true;
+    }
+    final ProtocolSpec protocolSpec = protocolSchedule.getByBlockHeader(blockHeader);
+    return protocolSpec
+        .getBlockGasAccountingStrategy()
+        .hasBlockCapacity(
+            transactions.getFirst().getGasLimit(),
+            protocolSpec.getGasCalculator().stateGasCostCalculator().transactionRegularGasLimit(),
+            0L,
+            0L,
+            blockHeader.getGasLimit());
+  }
+
+  private boolean validate(
+      final Optional<BlockAccessList> blockAccessList,
+      final BlockHeader blockHeader,
+      final int nbTransactions,
+      final boolean applyItemBudget) {
     if (blockAccessList.isEmpty()) {
       return true;
     }
@@ -141,12 +183,14 @@ public class MainnetBlockAccessListValidator implements BlockAccessListValidator
       return false;
     }
 
-    final BlockAccessListItemSizeCheck lightSizeCheck =
-        validateExecutedBlockAccessListItemSize(
-            bal.eip7928ItemCount(), blockHeader, protocolSchedule.getByBlockHeader(blockHeader));
-    if (lightSizeCheck.isOverBudget()) {
-      LOG.warn(lightSizeCheck.overBudgetError().orElseThrow().errorMessage());
-      return false;
+    if (applyItemBudget) {
+      final BlockAccessListItemSizeCheck lightSizeCheck =
+          validateExecutedBlockAccessListItemSize(
+              bal.eip7928ItemCount(), blockHeader, protocolSchedule.getByBlockHeader(blockHeader));
+      if (lightSizeCheck.isOverBudget()) {
+        LOG.warn(lightSizeCheck.overBudgetError().orElseThrow().errorMessage());
+        return false;
+      }
     }
 
     if (balHashMismatchAgainstHeaderIfAny(bal, headerBalHash, Optional.empty(), false, false)

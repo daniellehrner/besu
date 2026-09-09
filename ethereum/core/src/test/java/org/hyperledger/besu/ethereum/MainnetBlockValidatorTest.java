@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.trie.pathbased.common.provider.WorldStateQueryParams.withBlockHeaderAndUpdateNodeHead;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -116,7 +116,7 @@ public class MainnetBlockValidatorTest {
     when(blockBodyValidator.validateBody(any(), any(), any(), any(), any(), any(), any()))
         .thenReturn(true);
     when(blockBodyValidator.validateBodyLight(any(), any(), any(), any(), any())).thenReturn(true);
-    when(blockAccessListValidator.validate(any(), any(), anyInt())).thenReturn(true);
+    when(blockAccessListValidator.validate(any(), any(), anyList())).thenReturn(true);
     when(blockProcessor.processBlock(
             eq(protocolContext), any(), any(), any(), eq(Optional.empty())))
         .thenReturn(successfulProcessingResult);
@@ -178,7 +178,7 @@ public class MainnetBlockValidatorTest {
                     List.of(),
                     List.of(),
                     List.of())));
-    when(blockAccessListValidator.validate(eq(Optional.of(bal)), any(), anyInt()))
+    when(blockAccessListValidator.validate(eq(Optional.of(bal)), any(), anyList()))
         .thenReturn(false);
 
     BlockProcessingResult result =
@@ -207,7 +207,7 @@ public class MainnetBlockValidatorTest {
                     List.of(),
                     List.of())));
     final Optional<BlockAccessList> optionalBal = Optional.of(bal);
-    when(blockAccessListValidator.validate(eq(optionalBal), any(), anyInt())).thenReturn(true);
+    when(blockAccessListValidator.validate(eq(optionalBal), any(), anyList())).thenReturn(true);
     when(blockProcessor.processBlock(eq(protocolContext), any(), any(), any(), eq(optionalBal)))
         .thenReturn(new BlockProcessingResult(Optional.empty(), false));
 
