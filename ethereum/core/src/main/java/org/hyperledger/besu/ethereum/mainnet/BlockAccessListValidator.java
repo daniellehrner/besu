@@ -30,7 +30,7 @@ public interface BlockAccessListValidator {
    * Amsterdam, where blocks must not contain a block access list.
    */
   BlockAccessListValidator ALWAYS_REJECT_BAL =
-      (blockAccessList, header, nbTransactions) ->
+      (blockAccessList, header, transactions) ->
           blockAccessList.isEmpty() && header.getBalHash().isEmpty();
 
   /**
@@ -39,27 +39,13 @@ public interface BlockAccessListValidator {
    *
    * @param blockAccessList the optional block access list to validate (empty if block has no BAL)
    * @param blockHeader the block header containing gas limit and other context
-   * @param nbTransactions number of transactions in the block (must be &ge; 0)
-   * @return true if the block access list is valid or absent, false otherwise
-   */
-  boolean validate(
-      Optional<BlockAccessList> blockAccessList, BlockHeader blockHeader, int nbTransactions);
-
-  /**
-   * As {@link #validate(Optional, BlockHeader, int)}, with the block's transactions available so
-   * the EIP-7928 item budget can stand down for a block execution would reject first.
-   *
-   * @param blockAccessList the optional block access list to validate (empty if block has no BAL)
-   * @param blockHeader the block header containing gas limit and other context
    * @param transactions the block's transactions, in block order
    * @return true if the block access list is valid or absent, false otherwise
    */
-  default boolean validate(
-      final Optional<BlockAccessList> blockAccessList,
-      final BlockHeader blockHeader,
-      final List<Transaction> transactions) {
-    return validate(blockAccessList, blockHeader, transactions.size());
-  }
+  boolean validate(
+      Optional<BlockAccessList> blockAccessList,
+      BlockHeader blockHeader,
+      List<Transaction> transactions);
 
   /**
    * During block execution: EIP-7928 item-size budget only (running count of addresses plus storage

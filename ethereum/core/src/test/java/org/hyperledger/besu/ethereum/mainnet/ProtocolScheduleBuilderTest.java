@@ -494,10 +494,10 @@ class ProtocolScheduleBuilderTest {
             .balHash(BodyValidation.balHash(invalidBal))
             .buildHeader();
 
-    assertThat(amsterdamBalValidator.validate(Optional.of(invalidBal), amsterdamHeader, 1))
+    assertThat(amsterdamBalValidator.validate(Optional.of(invalidBal), amsterdamHeader, List.of()))
         .as("Amsterdam must validate BAL and reject invalid BAL")
         .isFalse();
-    assertThat(osakaBalValidator.validate(Optional.of(invalidBal), osakaHeader, 1))
+    assertThat(osakaBalValidator.validate(Optional.of(invalidBal), osakaHeader, List.of()))
         .as("Before Amsterdam, any block with a BAL must be rejected")
         .isFalse();
 
@@ -517,10 +517,12 @@ class ProtocolScheduleBuilderTest {
             .gasLimit(30_000_000L)
             .balHash(BodyValidation.balHash(validBal))
             .buildHeader();
-    assertThat(amsterdamBalValidator.validate(Optional.of(validBal), amsterdamHeaderValidBal, 1))
+    assertThat(
+            amsterdamBalValidator.validate(
+                Optional.of(validBal), amsterdamHeaderValidBal, List.of()))
         .as("Amsterdam must accept valid BAL")
         .isTrue();
-    assertThat(osakaBalValidator.validate(Optional.of(validBal), osakaHeaderValidBal, 1))
+    assertThat(osakaBalValidator.validate(Optional.of(validBal), osakaHeaderValidBal, List.of()))
         .as("Before Amsterdam, any BAL (even empty) must be rejected")
         .isFalse();
   }

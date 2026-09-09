@@ -125,19 +125,37 @@ public class MainnetBlockAccessListValidator implements BlockAccessListValidator
       final Optional<BlockAccessList> blockAccessList,
       final BlockHeader blockHeader,
       final List<Transaction> transactions) {
-    return validate(
-        blockAccessList,
-        blockHeader,
-        transactions.size(),
-        everyTransactionFitsBlockBudget(blockHeader, transactions));
-  }
+    if (blockAccessList.isEmpty()) {
+      return true;
+    }
+    final BlockAccessList bal = blockAccessList.get();
+    final Optional<Hash> headerBalHash = blockHeader.getBalHash();
 
-  @Override
-  public boolean validate(
-      final Optional<BlockAccessList> blockAccessList,
-      final BlockHeader blockHeader,
-      final int nbTransactions) {
-    return validate(blockAccessList, blockHeader, nbTransactions, true);
+    if (headerBalHash.isEmpty()) {
+      LOG.warn("Header is missing balHash for block {}", blockHeader.getBlockHash());
+      return false;
+    }
+
+    final BlockAccessListItemSizeCheck lightSizeCheck =
+        validateExecutedBlockAccessListItemSize(
+            bal.eip7928ItemCount(), blockHeader, protocolSchedule.getByBlockHeader(blockHeader));
+    if (lightSizeCheck.isOverBudget()
+        && everyTransactionFitsBlockBudget(blockHeader, transactions)) {
+      LOG.warn(lightSizeCheck.overBudgetError().orElseThrow().errorMessage());
+      return false;
+    }
+
+    if (balHashMismatchAgainstHeaderIfAny(bal, headerBalHash, Optional.empty(), false, false)
+        .isPresent()) {
+      return false;
+    }
+
+    final long maxIndex = (long) transactions.size() + 1L;
+    if (!validateConstraints(bal, blockHeader, maxIndex)) {
+      return false;
+    }
+    LOG.trace("Block access list validated successfully for block {}", blockHeader.getNumber());
+    return true;
   }
 
   /**
@@ -164,52 +182,6 @@ public class MainnetBlockAccessListValidator implements BlockAccessListValidator
                     0L,
                     0L,
                     blockHeader.getGasLimit()));
-  }
-
-  private boolean validate(
-      final Optional<BlockAccessList> blockAccessList,
-      final BlockHeader blockHeader,
-      final int nbTransactions,
-      final boolean applyItemBudget) {
-    if (blockAccessList.isEmpty()) {
-      return true;
-    }
-    if (nbTransactions < 0) {
-      LOG.warn(
-          "Invalid nbTransactions {} for block {} (must be >= 0)",
-          nbTransactions,
-          blockHeader.getBlockHash());
-      return false;
-    }
-    final BlockAccessList bal = blockAccessList.get();
-    final Optional<Hash> headerBalHash = blockHeader.getBalHash();
-
-    if (headerBalHash.isEmpty()) {
-      LOG.warn("Header is missing balHash for block {}", blockHeader.getBlockHash());
-      return false;
-    }
-
-    if (applyItemBudget) {
-      final BlockAccessListItemSizeCheck lightSizeCheck =
-          validateExecutedBlockAccessListItemSize(
-              bal.eip7928ItemCount(), blockHeader, protocolSchedule.getByBlockHeader(blockHeader));
-      if (lightSizeCheck.isOverBudget()) {
-        LOG.warn(lightSizeCheck.overBudgetError().orElseThrow().errorMessage());
-        return false;
-      }
-    }
-
-    if (balHashMismatchAgainstHeaderIfAny(bal, headerBalHash, Optional.empty(), false, false)
-        .isPresent()) {
-      return false;
-    }
-
-    final long maxIndex = (long) nbTransactions + 1L;
-    if (!validateConstraints(bal, blockHeader, maxIndex)) {
-      return false;
-    }
-    LOG.trace("Block access list validated successfully for block {}", blockHeader.getNumber());
-    return true;
   }
 
   private void logBalHashMismatch(
