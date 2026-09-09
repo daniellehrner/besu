@@ -206,12 +206,15 @@ class MainnetBlockAccessListValidatorTest {
     }
 
     @Test
-    void sizeCheckAppliedWhenFirstTransactionFitsTheBlockBudget() {
+    void sizeCheckAppliedWhenEveryTransactionFitsTheBlockBudget() {
       final BlockAccessList bal = overBudgetBal();
       final BlockHeader header = headerWithBal(bal, 10_000L);
       Assertions.assertThat(
               validator()
-                  .validate(Optional.of(bal), header, List.of(transactionWithGasLimit(1_000L))))
+                  .validate(
+                      Optional.of(bal),
+                      header,
+                      List.of(transactionWithGasLimit(1_000L), transactionWithGasLimit(9_000L))))
           .isFalse();
     }
 
@@ -224,6 +227,19 @@ class MainnetBlockAccessListValidatorTest {
       Assertions.assertThat(
               validator()
                   .validate(Optional.of(bal), header, List.of(transactionWithGasLimit(10_001L))))
+          .isTrue();
+    }
+
+    @Test
+    void sizeCheckStandsDownWhenALaterTransactionExceedsTheBlockBudget() {
+      final BlockAccessList bal = overBudgetBal();
+      final BlockHeader header = headerWithBal(bal, 10_000L);
+      Assertions.assertThat(
+              validator()
+                  .validate(
+                      Optional.of(bal),
+                      header,
+                      List.of(transactionWithGasLimit(1_000L), transactionWithGasLimit(10_001L))))
           .isTrue();
     }
 

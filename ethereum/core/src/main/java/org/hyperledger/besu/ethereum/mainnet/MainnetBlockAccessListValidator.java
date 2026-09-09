@@ -129,7 +129,7 @@ public class MainnetBlockAccessListValidator implements BlockAccessListValidator
         blockAccessList,
         blockHeader,
         transactions.size(),
-        firstTransactionFitsBlockBudget(blockHeader, transactions));
+        everyTransactionFitsBlockBudget(blockHeader, transactions));
   }
 
   @Override
@@ -141,23 +141,29 @@ public class MainnetBlockAccessListValidator implements BlockAccessListValidator
   }
 
   /**
-   * The first transaction's block budget is settled before any state is touched, so when it is
-   * already over, execution owns the rejection and the item budget must not pre-empt it.
+   * A transaction whose gas limit does not fit an otherwise empty block can never fit, whatever ran
+   * before it, so execution owns that rejection and the item budget must not pre-empt it.
+   * Cumulative gas is the only part of the budget execution has to settle, so it is the zero here.
    */
-  private boolean firstTransactionFitsBlockBudget(
+  private boolean everyTransactionFitsBlockBudget(
       final BlockHeader blockHeader, final List<Transaction> transactions) {
     if (transactions.isEmpty()) {
       return true;
     }
     final ProtocolSpec protocolSpec = protocolSchedule.getByBlockHeader(blockHeader);
-    return protocolSpec
-        .getBlockGasAccountingStrategy()
-        .hasBlockCapacity(
-            transactions.getFirst().getGasLimit(),
-            protocolSpec.getGasCalculator().stateGasCostCalculator().transactionRegularGasLimit(),
-            0L,
-            0L,
-            blockHeader.getGasLimit());
+    final BlockGasAccountingStrategy blockGasAccountingStrategy =
+        protocolSpec.getBlockGasAccountingStrategy();
+    final long transactionRegularGasLimit =
+        protocolSpec.getGasCalculator().stateGasCostCalculator().transactionRegularGasLimit();
+    return transactions.stream()
+        .allMatch(
+            transaction ->
+                blockGasAccountingStrategy.hasBlockCapacity(
+                    transaction.getGasLimit(),
+                    transactionRegularGasLimit,
+                    0L,
+                    0L,
+                    blockHeader.getGasLimit()));
   }
 
   private boolean validate(
