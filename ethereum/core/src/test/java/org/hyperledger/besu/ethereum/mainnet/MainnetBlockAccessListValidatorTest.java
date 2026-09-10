@@ -26,7 +26,6 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
-import org.hyperledger.besu.evm.gascalculator.StateGasCostCalculator;
 
 import java.util.Collections;
 import java.util.List;
@@ -58,12 +57,8 @@ class MainnetBlockAccessListValidatorTest {
     final ProtocolSpec protocolSpec = mock(ProtocolSpec.class);
     final org.hyperledger.besu.evm.gascalculator.GasCalculator gasCalculator =
         mock(org.hyperledger.besu.evm.gascalculator.GasCalculator.class);
-    final StateGasCostCalculator stateGasCostCalculator = mock(StateGasCostCalculator.class);
-    when(stateGasCostCalculator.transactionRegularGasLimit()).thenReturn(Long.MAX_VALUE);
     when(gasCalculator.getBlockAccessListItemCost()).thenReturn(itemCost);
-    when(gasCalculator.stateGasCostCalculator()).thenReturn(stateGasCostCalculator);
     when(protocolSpec.getGasCalculator()).thenReturn(gasCalculator);
-    when(protocolSpec.getBlockGasAccountingStrategy()).thenReturn((transaction, result) -> 0L);
     when(protocolSchedule.getByBlockHeader(any())).thenReturn(protocolSpec);
     return new MainnetBlockAccessListValidator(protocolSchedule);
   }

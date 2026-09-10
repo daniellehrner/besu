@@ -160,28 +160,13 @@ public class MainnetBlockAccessListValidator implements BlockAccessListValidator
 
   /**
    * A transaction whose gas limit does not fit an otherwise empty block can never fit, whatever ran
-   * before it, so execution owns that rejection and the item budget must not pre-empt it.
-   * Cumulative gas is the only part of the budget execution has to settle, so it is the zero here.
+   * before it, so execution owns that rejection and the item budget must not pre-empt it. Every gas
+   * accounting strategy reduces to this comparison once cumulative gas is zero.
    */
-  private boolean everyTransactionFitsBlockBudget(
+  private static boolean everyTransactionFitsBlockBudget(
       final BlockHeader blockHeader, final List<Transaction> transactions) {
-    if (transactions.isEmpty()) {
-      return true;
-    }
-    final ProtocolSpec protocolSpec = protocolSchedule.getByBlockHeader(blockHeader);
-    final BlockGasAccountingStrategy blockGasAccountingStrategy =
-        protocolSpec.getBlockGasAccountingStrategy();
-    final long transactionRegularGasLimit =
-        protocolSpec.getGasCalculator().stateGasCostCalculator().transactionRegularGasLimit();
     return transactions.stream()
-        .allMatch(
-            transaction ->
-                blockGasAccountingStrategy.hasBlockCapacity(
-                    transaction.getGasLimit(),
-                    transactionRegularGasLimit,
-                    0L,
-                    0L,
-                    blockHeader.getGasLimit()));
+        .allMatch(transaction -> transaction.getGasLimit() <= blockHeader.getGasLimit());
   }
 
   private void logBalHashMismatch(
