@@ -19,11 +19,9 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.ProcessableBlockHeader;
-import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 
 import java.util.HashSet;
-import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -124,9 +122,16 @@ public class MainnetBlockAccessListValidator implements BlockAccessListValidator
   public boolean validate(
       final Optional<BlockAccessList> blockAccessList,
       final BlockHeader blockHeader,
-      final List<Transaction> transactions) {
+      final int nbTransactions) {
     if (blockAccessList.isEmpty()) {
       return true;
+    }
+    if (nbTransactions < 0) {
+      LOG.warn(
+          "Invalid nbTransactions {} for block {} (must be >= 0)",
+          nbTransactions,
+          blockHeader.getBlockHash());
+      return false;
     }
     final BlockAccessList bal = blockAccessList.get();
     final Optional<Hash> headerBalHash = blockHeader.getBalHash();
@@ -139,8 +144,7 @@ public class MainnetBlockAccessListValidator implements BlockAccessListValidator
     final BlockAccessListItemSizeCheck lightSizeCheck =
         validateExecutedBlockAccessListItemSize(
             bal.eip7928ItemCount(), blockHeader, protocolSchedule.getByBlockHeader(blockHeader));
-    if (lightSizeCheck.isOverBudget()
-        && everyTransactionFitsBlockBudget(blockHeader, transactions)) {
+    if (lightSizeCheck.isOverBudget()) {
       LOG.warn(lightSizeCheck.overBudgetError().orElseThrow().errorMessage());
       return false;
     }
@@ -150,23 +154,12 @@ public class MainnetBlockAccessListValidator implements BlockAccessListValidator
       return false;
     }
 
-    final long maxIndex = (long) transactions.size() + 1L;
+    final long maxIndex = (long) nbTransactions + 1L;
     if (!validateConstraints(bal, blockHeader, maxIndex)) {
       return false;
     }
     LOG.trace("Block access list validated successfully for block {}", blockHeader.getNumber());
     return true;
-  }
-
-  /**
-   * A transaction whose gas limit does not fit an otherwise empty block can never fit, whatever ran
-   * before it, so execution owns that rejection and the item budget must not pre-empt it. Every gas
-   * accounting strategy reduces to this comparison once cumulative gas is zero.
-   */
-  private static boolean everyTransactionFitsBlockBudget(
-      final BlockHeader blockHeader, final List<Transaction> transactions) {
-    return transactions.stream()
-        .allMatch(transaction -> transaction.getGasLimit() <= blockHeader.getGasLimit());
   }
 
   private void logBalHashMismatch(

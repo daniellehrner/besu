@@ -24,10 +24,8 @@ import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
-import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -63,35 +61,6 @@ class MainnetBlockAccessListValidatorTest {
     return new MainnetBlockAccessListValidator(protocolSchedule);
   }
 
-  private static Transaction transactionWithGasLimit(final long gasLimit) {
-    final Transaction transaction = mock(Transaction.class);
-    when(transaction.getGasLimit()).thenReturn(gasLimit);
-    return transaction;
-  }
-
-  private static List<Transaction> transactionsFittingBlock(final int count) {
-    return Collections.nCopies(count, transactionWithGasLimit(21_000L));
-  }
-
-  /** 1 address + 1 storage change + 4 reads = 6 items, over budget at gas 10,000. */
-  private static BlockAccessList overBudgetBal() {
-    return new BlockAccessList(
-        List.of(
-            new BlockAccessList.AccountChanges(
-                ADDR_1,
-                List.of(
-                    new BlockAccessList.SlotChanges(
-                        SLOT_1, List.of(new BlockAccessList.StorageChange(0, UInt256.ZERO)))),
-                List.of(
-                    new BlockAccessList.SlotRead(SLOT_2),
-                    new BlockAccessList.SlotRead(SLOT_3),
-                    new BlockAccessList.SlotRead(new StorageSlotKey(UInt256.valueOf(4))),
-                    new BlockAccessList.SlotRead(new StorageSlotKey(UInt256.valueOf(5)))),
-                List.of(),
-                List.of(),
-                List.of())));
-  }
-
   private static BlockHeader headerWithBal(final BlockAccessList bal, final long gasLimit) {
     return new BlockHeaderTestFixture()
         .gasLimit(gasLimit)
@@ -106,7 +75,7 @@ class MainnetBlockAccessListValidatorTest {
     void emptyBAL() {
       final BlockAccessList bal = new BlockAccessList(List.of());
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isTrue();
     }
 
@@ -117,7 +86,7 @@ class MainnetBlockAccessListValidatorTest {
               ADDR_1, List.of(), List.of(), List.of(), List.of(), List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isTrue();
     }
 
@@ -138,7 +107,7 @@ class MainnetBlockAccessListValidatorTest {
               ADDR_2, List.of(), List.of(), List.of(), List.of(), List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account1, account2));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isTrue();
     }
 
@@ -159,8 +128,7 @@ class MainnetBlockAccessListValidatorTest {
               ADDR_2, List.of(), List.of(), List.of(), List.of(), List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account1, account2));
       // 2 addresses + 1 storage key = 3 items, max = 3 with gas 6000 (Prague ITEM_COST=2000)
-      Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 6_000L), List.of()))
+      Assertions.assertThat(validator().validate(Optional.of(bal), headerWithBal(bal, 6_000L), 0))
           .isTrue();
     }
   }
@@ -173,7 +141,7 @@ class MainnetBlockAccessListValidatorTest {
       final BlockAccessList bal = new BlockAccessList(List.of());
       final BlockHeader header = new BlockHeaderTestFixture().gasLimit(30_000_000L).buildHeader();
       Assertions.assertThat(header.getBalHash()).isEmpty();
-      Assertions.assertThat(validator().validate(Optional.of(bal), header, List.of())).isFalse();
+      Assertions.assertThat(validator().validate(Optional.of(bal), header, 0)).isFalse();
     }
 
     @Test
@@ -182,7 +150,7 @@ class MainnetBlockAccessListValidatorTest {
       final Hash wrongHash = Hash.fromHexString("01".repeat(32));
       final BlockHeader header =
           new BlockHeaderTestFixture().gasLimit(30_000_000L).balHash(wrongHash).buildHeader();
-      Assertions.assertThat(validator().validate(Optional.of(bal), header, List.of())).isFalse();
+      Assertions.assertThat(validator().validate(Optional.of(bal), header, 0)).isFalse();
     }
   }
 
@@ -191,64 +159,48 @@ class MainnetBlockAccessListValidatorTest {
 
     @Test
     void failsWhenExceedingMaxItems() {
-      final BlockAccessList bal = overBudgetBal();
-      // ITEM_COST=2000, gas 10_000 → max 5 items
+      final BlockAccessList.AccountChanges account =
+          new BlockAccessList.AccountChanges(
+              ADDR_1,
+              List.of(
+                  new BlockAccessList.SlotChanges(
+                      SLOT_1, List.of(new BlockAccessList.StorageChange(0, UInt256.ZERO)))),
+              List.of(
+                  new BlockAccessList.SlotRead(SLOT_2),
+                  new BlockAccessList.SlotRead(SLOT_3),
+                  new BlockAccessList.SlotRead(new StorageSlotKey(UInt256.valueOf(4))),
+                  new BlockAccessList.SlotRead(new StorageSlotKey(UInt256.valueOf(5)))),
+              List.of(),
+              List.of(),
+              List.of());
+      final BlockAccessList bal = new BlockAccessList(List.of(account));
+      // 1 addr + 1 storage change + 4 reads = 6 items. ITEM_COST=2000, gas 10_000 → max 5 items
       final BlockHeader header = headerWithBal(bal, 10_000L);
-      Assertions.assertThat(validator().validate(Optional.of(bal), header, List.of())).isFalse();
+      Assertions.assertThat(validator().validate(Optional.of(bal), header, 0)).isFalse();
     }
 
     @Test
     void sizeCheckSkippedWhenItemCostZero() {
-      final BlockAccessList bal = overBudgetBal();
+      // BAL with 6 items would fail with itemCost=2000 and gas 10_000 (max 5 items)
+      final BlockAccessList.AccountChanges account =
+          new BlockAccessList.AccountChanges(
+              ADDR_1,
+              List.of(
+                  new BlockAccessList.SlotChanges(
+                      SLOT_1, List.of(new BlockAccessList.StorageChange(0, UInt256.ZERO)))),
+              List.of(
+                  new BlockAccessList.SlotRead(SLOT_2),
+                  new BlockAccessList.SlotRead(SLOT_3),
+                  new BlockAccessList.SlotRead(new StorageSlotKey(UInt256.valueOf(4))),
+                  new BlockAccessList.SlotRead(new StorageSlotKey(UInt256.valueOf(5)))),
+              List.of(),
+              List.of(),
+              List.of());
+      final BlockAccessList bal = new BlockAccessList(List.of(account));
       final BlockHeader header = headerWithBal(bal, 10_000L);
       // With itemCost=0 the size constraint is not applied (no division, check skipped)
-      Assertions.assertThat(validatorWithItemCost(0L).validate(Optional.of(bal), header, List.of()))
+      Assertions.assertThat(validatorWithItemCost(0L).validate(Optional.of(bal), header, 0))
           .isTrue();
-    }
-
-    @Test
-    void sizeCheckAppliedWhenEveryTransactionFitsTheBlockBudget() {
-      final BlockAccessList bal = overBudgetBal();
-      final BlockHeader header = headerWithBal(bal, 10_000L);
-      Assertions.assertThat(
-              validator()
-                  .validate(
-                      Optional.of(bal),
-                      header,
-                      List.of(transactionWithGasLimit(1_000L), transactionWithGasLimit(9_000L))))
-          .isFalse();
-    }
-
-    @Test
-    void sizeCheckStandsDownWhenFirstTransactionExceedsTheBlockBudget() {
-      // Execution rejects the transaction before it reaches the item budget, so the budget must
-      // leave that error to it.
-      final BlockAccessList bal = overBudgetBal();
-      final BlockHeader header = headerWithBal(bal, 10_000L);
-      Assertions.assertThat(
-              validator()
-                  .validate(Optional.of(bal), header, List.of(transactionWithGasLimit(10_001L))))
-          .isTrue();
-    }
-
-    @Test
-    void sizeCheckStandsDownWhenALaterTransactionExceedsTheBlockBudget() {
-      final BlockAccessList bal = overBudgetBal();
-      final BlockHeader header = headerWithBal(bal, 10_000L);
-      Assertions.assertThat(
-              validator()
-                  .validate(
-                      Optional.of(bal),
-                      header,
-                      List.of(transactionWithGasLimit(1_000L), transactionWithGasLimit(10_001L))))
-          .isTrue();
-    }
-
-    @Test
-    void sizeCheckAppliedWhenBlockHasNoTransactions() {
-      final BlockAccessList bal = overBudgetBal();
-      final BlockHeader header = headerWithBal(bal, 10_000L);
-      Assertions.assertThat(validator().validate(Optional.of(bal), header, List.of())).isFalse();
     }
   }
 
@@ -265,7 +217,7 @@ class MainnetBlockAccessListValidatorTest {
               ADDR_1, List.of(), List.of(), List.of(), List.of(), List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account1, account2SameAddress));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
 
@@ -285,7 +237,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
 
@@ -301,7 +253,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
 
@@ -317,7 +269,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
 
@@ -335,7 +287,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
 
@@ -356,7 +308,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
 
@@ -374,7 +326,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
 
@@ -391,7 +343,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
 
@@ -409,7 +361,7 @@ class MainnetBlockAccessListValidatorTest {
                   new BlockAccessList.CodeChange(0, Bytes.of(2))));
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
 
@@ -429,13 +381,26 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isTrue();
     }
   }
 
   @Nested
   class IndexRangeValidation {
+
+    @Test
+    void failsWhenNbTransactionsNegative() {
+      // nbTransactions must be >= 0; reject when negative and BAL is present
+      final BlockAccessList.AccountChanges account =
+          new BlockAccessList.AccountChanges(
+              ADDR_1, List.of(), List.of(), List.of(), List.of(), List.of());
+      final BlockAccessList balWithAccount = new BlockAccessList(List.of(account));
+      final BlockHeader headerWithAccount = headerWithBal(balWithAccount, 30_000_000L);
+      Assertions.assertThat(
+              validator().validate(Optional.of(balWithAccount), headerWithAccount, -1))
+          .isFalse();
+    }
 
     @Test
     void failsWhenBlockAccessIndexExceedsTransactionCountPlusOne() {
@@ -450,9 +415,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       final BlockHeader header = headerWithBal(bal, 30_000_000L);
-      Assertions.assertThat(
-              validator().validate(Optional.of(bal), header, transactionsFittingBlock(2)))
-          .isFalse();
+      Assertions.assertThat(validator().validate(Optional.of(bal), header, 2)).isFalse();
     }
 
     @Test
@@ -470,9 +433,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       final BlockHeader header = headerWithBal(bal, 30_000_000L);
-      Assertions.assertThat(
-              validator().validate(Optional.of(bal), header, transactionsFittingBlock(1)))
-          .isTrue();
+      Assertions.assertThat(validator().validate(Optional.of(bal), header, 1)).isTrue();
     }
 
     @Test
@@ -488,9 +449,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       final BlockHeader header = headerWithBal(bal, 30_000_000L);
-      Assertions.assertThat(
-              validator().validate(Optional.of(bal), header, transactionsFittingBlock(10)))
-          .isTrue();
+      Assertions.assertThat(validator().validate(Optional.of(bal), header, 10)).isTrue();
     }
   }
 
@@ -508,7 +467,7 @@ class MainnetBlockAccessListValidatorTest {
               ADDR_2, List.of(), List.of(), List.of(), List.of(), List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(a2, a1));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
 
@@ -528,7 +487,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
 
@@ -549,7 +508,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
 
@@ -565,7 +524,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
 
@@ -583,7 +542,7 @@ class MainnetBlockAccessListValidatorTest {
               List.of());
       final BlockAccessList bal = new BlockAccessList(List.of(account));
       Assertions.assertThat(
-              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), List.of()))
+              validator().validate(Optional.of(bal), headerWithBal(bal, 30_000_000L), 0))
           .isFalse();
     }
   }

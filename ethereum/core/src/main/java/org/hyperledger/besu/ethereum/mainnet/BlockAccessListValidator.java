@@ -16,10 +16,8 @@ package org.hyperledger.besu.ethereum.mainnet;
 
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.ProcessableBlockHeader;
-import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 
-import java.util.List;
 import java.util.Optional;
 
 /** Validates block access lists according to protocol rules. */
@@ -30,7 +28,7 @@ public interface BlockAccessListValidator {
    * Amsterdam, where blocks must not contain a block access list.
    */
   BlockAccessListValidator ALWAYS_REJECT_BAL =
-      (blockAccessList, header, transactions) ->
+      (blockAccessList, header, nbTransactions) ->
           blockAccessList.isEmpty() && header.getBalHash().isEmpty();
 
   /**
@@ -39,13 +37,11 @@ public interface BlockAccessListValidator {
    *
    * @param blockAccessList the optional block access list to validate (empty if block has no BAL)
    * @param blockHeader the block header containing gas limit and other context
-   * @param transactions the block's transactions, in block order
+   * @param nbTransactions number of transactions in the block (must be &ge; 0)
    * @return true if the block access list is valid or absent, false otherwise
    */
   boolean validate(
-      Optional<BlockAccessList> blockAccessList,
-      BlockHeader blockHeader,
-      List<Transaction> transactions);
+      Optional<BlockAccessList> blockAccessList, BlockHeader blockHeader, int nbTransactions);
 
   /**
    * During block execution: EIP-7928 item-size budget only (running count of addresses plus storage
