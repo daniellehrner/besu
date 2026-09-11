@@ -103,15 +103,6 @@ public class BlockchainReferenceTestTools {
             params.ignoreAll();
         }
 
-        // Consumes a huge amount of memory. The execution-spec-tests port additionally runs through
-        // block building, which holds on to even more memory and runs out of heap.
-        params.ignore("static_Call1MB1024Calldepth");
-        params.ignore("test_static_call1_mb1024_calldepth");
-        params.ignore("ShanghaiLove_");
-
-        // Absurd amount of gas, doesn't run in parallel
-        params.ignore("randomStatetest94_\\w+");
-
         // Don't do time-consuming tests
         params.ignore("CALLBlake2f_MaxRounds");
         params.ignore("loopMul_");
