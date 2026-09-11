@@ -37,6 +37,7 @@
 
 ### Additions and Improvements
 - Implement native `callTracer` execution tracing, reducing memory use for `debug_trace*`. [#11077](https://github.com/besu-eth/besu/pull/11077)
+- Implement native `4byteTracer` execution tracing, reducing memory use for `debug_trace*`. [#11271](https://github.com/besu-eth/besu/pull/11271)
 
 ## 26.8.1
 
