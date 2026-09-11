@@ -228,7 +228,7 @@ public class MainnetBlockValidatorTest {
   }
 
   @Test
-  public void validateAndProcessBlock_whenTransactionExceedsBlockGasLimitSkipsBalValidation() {
+  public void validateAndProcessBlock_whenTransactionExceedsBlockGasLimit() {
     final Transaction oversizedTransaction = mock(Transaction.class);
     when(oversizedTransaction.getGasLimit()).thenReturn(block.getHeader().getGasLimit() + 1);
     final Block blockWithOversizedTransaction =
@@ -237,8 +237,6 @@ public class MainnetBlockValidatorTest {
             new BlockBody(List.of(oversizedTransaction), block.getBody().getOmmers()));
     final Optional<BlockAccessList> bal = Optional.of(new BlockAccessList(List.of()));
     when(blockAccessListValidator.validate(any(), any(), anyInt())).thenReturn(false);
-    when(blockProcessor.processBlock(eq(protocolContext), any(), any(), any(), eq(bal)))
-        .thenReturn(new BlockProcessingResult(Optional.empty(), false));
 
     BlockProcessingResult result =
         mainnetFrontierBlockValidator.validateAndProcessBlock(
@@ -249,9 +247,10 @@ public class MainnetBlockValidatorTest {
             bal,
             true);
 
-    assertThat(result.isSuccessful()).isTrue();
+    assertValidationFailed(result, "provided gas insufficient");
     verify(blockAccessListValidator, never()).validate(any(), any(), anyInt());
-    assertNoBadBlocks();
+    verify(blockProcessor, never()).processBlock(eq(protocolContext), any(), any(), any(), eq(bal));
+    assertThat(badBlockManager.getBadBlocks()).containsExactly(blockWithOversizedTransaction);
   }
 
   @Test

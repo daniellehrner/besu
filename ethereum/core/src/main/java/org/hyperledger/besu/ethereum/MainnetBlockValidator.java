@@ -199,10 +199,15 @@ public class MainnetBlockValidator implements BlockValidator {
       }
 
       // A transaction whose gas limit does not fit an otherwise empty block can never fit, whatever
-      // ran before it, so execution owns that rejection and the access list must not pre-empt it.
-      if (everyTransactionFitsBlockGasLimit(block)
-          && !blockAccessListValidator.validate(
-              blockAccessList, block.getHeader(), block.getBody().getTransactions().size())) {
+      // ran before it, so no execution can make the block valid and the gas limit is the reason.
+      if (transactionsExceedBlockGasLimit(block)) {
+        final var result = BlockProcessingResult.INSUFFICIENT_BLOCK_GAS;
+        handleFailedBlockProcessing(block, blockAccessList, result, shouldRecordBadBlock, context);
+        return result;
+      }
+
+      if (!blockAccessListValidator.validate(
+          blockAccessList, block.getHeader(), block.getBody().getTransactions().size())) {
         var result =
             new BlockProcessingResult(
                 String.format(
@@ -322,14 +327,14 @@ public class MainnetBlockValidator implements BlockValidator {
     }
   }
 
-  private static boolean everyTransactionFitsBlockGasLimit(final Block block) {
+  private static boolean transactionsExceedBlockGasLimit(final Block block) {
     final long blockGasLimit = block.getHeader().getGasLimit();
     for (final Transaction transaction : block.getBody().getTransactions()) {
       if (transaction.getGasLimit() > blockGasLimit) {
-        return false;
+        return true;
       }
     }
-    return true;
+    return false;
   }
 
   /**
