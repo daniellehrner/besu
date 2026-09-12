@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -33,6 +34,7 @@ import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -94,6 +96,65 @@ class BonsaiCachedMerkleTrieLoaderTest {
     final Hash hashAccountZero = accounts.get(0).addressHash();
     assertThat(cachedTrie.get(hashAccountZero.getBytes()))
         .isEqualTo(trie.get(hashAccountZero.getBytes()));
+  }
+
+  @Test
+  void preloadsAreHandedOverOnceABatchIsFull() {
+    final BonsaiWorldStateKeyValueStorage emptyStorage =
+        new BonsaiWorldStateKeyValueStorage(
+            new InMemoryKeyValueStorageProvider(),
+            new NoOpMetricsSystem(),
+            DataStorageConfiguration.DEFAULT_BONSAI_CONFIG);
+    for (int i = 0; i < BonsaiCachedMerkleTrieLoader.BATCH_SIZE; i++) {
+      merkleTrieLoader.preLoadAccount(
+          inMemoryWorldState, Hash.wrap(trie.getRootHash()), accounts.get(i % accounts.size()));
+    }
+    final Hash hashAccountZero = accounts.get(0).addressHash();
+    await()
+        .atMost(Duration.ofSeconds(10))
+        .untilAsserted(
+            () ->
+                assertThat(
+                        new StoredMerklePatriciaTrie<>(
+                                (Bytes location, Bytes32 hash) ->
+                                    Optional.ofNullable(
+                                        merkleTrieLoader
+                                            .getAccountStateTrieNode(
+                                                emptyStorage, location, Bytes32.wrap(hash))
+                                            .orElse(null)),
+                                trie.getRootHash(),
+                                Function.identity(),
+                                Function.identity())
+                            .get(hashAccountZero.getBytes()))
+                    .isEqualTo(trie.get(hashAccountZero.getBytes())));
+  }
+
+  @Test
+  void aPartialBatchIsHandedOverWhenNodesAreRead() {
+    final BonsaiWorldStateKeyValueStorage emptyStorage =
+        new BonsaiWorldStateKeyValueStorage(
+            new InMemoryKeyValueStorageProvider(),
+            new NoOpMetricsSystem(),
+            DataStorageConfiguration.DEFAULT_BONSAI_CONFIG);
+    merkleTrieLoader.preLoadAccount(
+        inMemoryWorldState, Hash.wrap(trie.getRootHash()), accounts.get(0));
+    // The first read is what hands the batch over, so it may still miss; later ones must hit.
+    merkleTrieLoader.getAccountStateTrieNode(emptyStorage, Bytes.EMPTY, trie.getRootHash());
+    final Hash hashAccountZero = accounts.get(0).addressHash();
+    await()
+        .atMost(Duration.ofSeconds(10))
+        .untilAsserted(
+            () ->
+                assertThat(
+                        new StoredMerklePatriciaTrie<>(
+                                (Bytes location, Bytes32 hash) ->
+                                    merkleTrieLoader.getAccountStateTrieNode(
+                                        emptyStorage, location, Bytes32.wrap(hash)),
+                                trie.getRootHash(),
+                                Function.identity(),
+                                Function.identity())
+                            .get(hashAccountZero.getBytes()))
+                    .isEqualTo(trie.get(hashAccountZero.getBytes())));
   }
 
   @Test

@@ -26,10 +26,14 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.StorageSubscr
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.metrics.ObservableMetricsSystem;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -41,6 +45,16 @@ import org.apache.tuweni.bytes.Bytes32;
 public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
 
   private static final ExecutorService VIRTUAL_POOL = Executors.newVirtualThreadPerTaskExecutor();
+
+  /**
+   * Preloads are requested one slot at a time from the block's critical path, and starting a thread
+   * per request costs more there than the request itself. Requests are therefore queued and handed
+   * to the pool in batches, from a thread that is not the one executing the block.
+   */
+  @VisibleForTesting public static final int BATCH_SIZE = 32;
+
+  private final Queue<Runnable> pending = new ConcurrentLinkedQueue<>();
+  private final AtomicInteger pendingCount = new AtomicInteger();
 
   private static final int ACCOUNT_CACHE_SIZE = 100_000;
   private static final int STORAGE_CACHE_SIZE = 200_000;
@@ -58,9 +72,7 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
       final Hash worldStateRootHash,
       final Address account) {
-    CompletableFuture.runAsync(
-        () -> cacheAccountNodes(worldStateKeyValueStorage, worldStateRootHash, account),
-        VIRTUAL_POOL);
+    enqueue(() -> cacheAccountNodes(worldStateKeyValueStorage, worldStateRootHash, account));
   }
 
   @VisibleForTesting
@@ -93,8 +105,35 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
       final Address account,
       final StorageSlotKey slotKey) {
-    CompletableFuture.runAsync(
-        () -> cacheStorageNodes(worldStateKeyValueStorage, account, slotKey), VIRTUAL_POOL);
+    enqueue(() -> cacheStorageNodes(worldStateKeyValueStorage, account, slotKey));
+  }
+
+  private void flushIfPending() {
+    if (pendingCount.get() > 0) {
+      flush();
+    }
+  }
+
+  private void enqueue(final Runnable load) {
+    pending.add(load);
+    if (pendingCount.incrementAndGet() >= BATCH_SIZE) {
+      flush();
+    }
+  }
+
+  /** Hands every queued preload to the pool. */
+  @VisibleForTesting
+  void flush() {
+    final List<Runnable> batch = new ArrayList<>(BATCH_SIZE);
+    Runnable load;
+    while ((load = pending.poll()) != null) {
+      batch.add(load);
+    }
+    if (batch.isEmpty()) {
+      return;
+    }
+    pendingCount.addAndGet(-batch.size());
+    VIRTUAL_POOL.execute(() -> batch.forEach(VIRTUAL_POOL::execute));
   }
 
   @VisibleForTesting
@@ -140,6 +179,7 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
     if (nodeHash.equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
       return Optional.of(MerkleTrie.EMPTY_TRIE_NODE);
     } else {
+      flushIfPending();
       return Optional.ofNullable(accountNodes.getIfPresent(nodeHash))
           .or(() -> worldStateKeyValueStorage.getAccountStateTrieNode(location, nodeHash));
     }
@@ -153,6 +193,7 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
     if (nodeHash.equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
       return Optional.of(MerkleTrie.EMPTY_TRIE_NODE);
     } else {
+      flushIfPending();
       return Optional.ofNullable(storageNodes.getIfPresent(nodeHash))
           .or(
               () ->
