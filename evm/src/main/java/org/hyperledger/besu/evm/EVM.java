@@ -576,6 +576,40 @@ public class EVM {
    * skeleton stub establishes the dispatch structure for incremental v2 operation rollout.
    */
   // Note: like runToHalt, this is performance-critical code. Benchmark before refactoring.
+  /**
+   * Opcodes whose v2 implementation reads and writes nothing but the stack and the frame's
+   * environment. While these run, the program counter and the remaining gas live in locals of the
+   * dispatch loop instead of frame fields, so charging an opcode and stepping past it is register
+   * arithmetic. Everything else, and every opcode while a tracer is attached, sees the frame
+   * brought up to date first and the loop reloads from it afterwards. Opcodes not marked here are
+   * treated as frame-owned, so a missing entry costs two stores and two loads, never correctness.
+   */
+  private static final boolean[] LOOP_OWNS_STATE = new boolean[256];
+
+  static {
+    // arithmetic and bitwise, without EXP which charges by exponent size
+    for (int op = 0x01; op <= 0x1e; op++) {
+      LOOP_OWNS_STATE[op] = op != 0x0a && op != 0x0c && op != 0x0d && op != 0x0e && op != 0x0f;
+    }
+    // environment and block values pushed from the frame, without BALANCE and BLOCKHASH
+    for (final int op :
+        new int[] {
+          0x30, 0x32, 0x33, 0x34, 0x35, 0x36, 0x38, 0x3a, 0x3d, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46,
+          0x47, 0x48, 0x49, 0x4a, 0x4b
+        }) {
+      LOOP_OWNS_STATE[op] = true;
+    }
+    // stack only
+    LOOP_OWNS_STATE[0x50] = true;
+    LOOP_OWNS_STATE[0x59] = true;
+    LOOP_OWNS_STATE[0x5b] = true;
+    LOOP_OWNS_STATE[0x5f] = true;
+    for (int op = 0x60; op <= 0x9f; op++) {
+      LOOP_OWNS_STATE[op] = true;
+    }
+    LOOP_OWNS_STATE[0xfe] = true;
+  }
+
   private void runToHaltV2(final MessageFrame frame, final OperationTracer operationTracer) {
     evmSpecVersion.maybeWarnVersion();
 
@@ -588,9 +622,15 @@ public class EVM {
     if (frame.getState() != MessageFrame.State.CODE_EXECUTING) {
       return;
     }
+    int pc = frame.getPC();
+    long gas = frame.getRemainingGas();
     while (true) {
-      final int pc = frame.getPC();
       final int opcode = pc < code.length ? code[pc] & 0xff : 0;
+      final boolean loopOwned = !tracing && LOOP_OWNS_STATE[opcode];
+      if (!loopOwned) {
+        frame.setPC(pc);
+        frame.setGasRemaining(gas);
+      }
       if (tracing) {
         frame.setCurrentOperation(pc < code.length ? operationArray[opcode] : endOfScriptStop);
         operationTracer.tracePreExecution(frame);
@@ -675,9 +715,16 @@ public class EVM {
                   0x7c,
                   0x7d,
                   0x7e,
-                  0x7f ->
-                  PushOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), code, pc, opcode - PushOperationV2.PUSH_BASE);
+                  0x7f -> {
+                final int pushSize = opcode - PushOperationV2.PUSH_BASE;
+                final OperationResult pushResult =
+                    PushOperationV2.staticOperation(frame, frame.stackDataV2(), code, pc, pushSize);
+                // the immediate bytes are skipped here; a frame-owned step reloads pc anyway
+                if (pushResult.getHaltReason() == null) {
+                  pc += pushSize;
+                }
+                yield pushResult;
+              }
               case 0x80, // DUP1-16
                   0x81,
                   0x82,
@@ -885,11 +932,23 @@ public class EVM {
         result = UNDERFLOW_RESPONSE;
       }
       final ExceptionalHaltReason haltReason = result.getHaltReason();
+      if (loopOwned) {
+        if (haltReason == null) {
+          gas -= result.getGasCost();
+          if (gas >= 0) {
+            pc += result.getPcIncrement();
+            continue;
+          }
+        }
+        // halting: the frame takes the state back so the handling below sees what it expects
+        frame.setPC(pc);
+        frame.setGasRemaining(gas);
+      }
       if (haltReason != null) {
         LOG.trace("MessageFrame evaluation halted because of {}", haltReason);
         frame.setExceptionalHaltReason(Optional.of(haltReason));
         frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
-      } else if (frame.decrementRemainingGas(result.getGasCost()) < 0) {
+      } else if (loopOwned ? gas < 0 : frame.decrementRemainingGas(result.getGasCost()) < 0) {
         frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
         frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
       }
@@ -899,7 +958,9 @@ public class EVM {
         }
         return;
       }
-      frame.setPC(frame.getPC() + result.getPcIncrement());
+      pc = frame.getPC() + result.getPcIncrement();
+      gas = frame.getRemainingGas();
+      frame.setPC(pc);
       if (tracing) {
         operationTracer.tracePostExecution(frame, result);
       }
