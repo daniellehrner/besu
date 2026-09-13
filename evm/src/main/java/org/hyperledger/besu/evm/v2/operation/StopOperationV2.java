@@ -14,31 +14,40 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.pushBytes32;
-
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
 
-/** The Prev randao operation. */
-public class PrevRanDaoOperationV2 extends AbstractFixedCostOperationV2 {
+import org.apache.tuweni.bytes.Bytes;
+
+/** EVM v2 STOP operation. Sets frame state to CODE_SUCCESS with empty output. */
+public class StopOperationV2 extends AbstractFixedCostOperationV2 {
+
+  private static final OperationResult STOP_SUCCESS = new OperationResult(0, null);
 
   /**
-   * Instantiates a new Prev randao operation.
+   * Instantiates a new Stop operation.
    *
    * @param gasCalculator the gas calculator
    */
-  public PrevRanDaoOperationV2(final GasCalculator gasCalculator) {
-    super(0x44, "PREVRANDAO", 0, 1, gasCalculator, gasCalculator.getBaseTierGasCost());
+  public StopOperationV2(final GasCalculator gasCalculator) {
+    super(0x00, "STOP", 0, 0, gasCalculator, gasCalculator.getZeroTierGasCost());
   }
 
   @Override
   public Operation.OperationResult executeFixedCostOperation(final MessageFrame frame) {
-    if (!frame.stackHasSpaceV2(1)) return OVERFLOW_RESPONSE;
-    final long[] stack = frame.stackDataV2();
-    final int top = frame.stackTopV2();
-    pushBytes32(frame.getBlockValues().getMixHashOrPrevRandao(), stack, top);
-    frame.setTopV2(top + 1);
-    return successResponse;
+    return staticOperation(frame);
+  }
+
+  /**
+   * Performs Stop operation.
+   *
+   * @param frame the frame
+   * @return the operation result
+   */
+  public static OperationResult staticOperation(final MessageFrame frame) {
+    frame.setState(MessageFrame.State.CODE_SUCCESS);
+    frame.setOutputData(Bytes.EMPTY);
+    return STOP_SUCCESS;
   }
 }

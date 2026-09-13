@@ -14,19 +14,21 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.pushWei;
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.pushZero;
-
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
+import org.hyperledger.besu.evm.v2.StackArithmetic;
 
-/** The Self balance operation. */
+/**
+ * EVM v2 SELFBALANCE operation (0x47, Istanbul+).
+ *
+ * <p>Pushes the balance of the currently executing contract onto the stack. Fixed cost (low tier).
+ */
 public class SelfBalanceOperationV2 extends AbstractFixedCostOperationV2 {
 
   /**
-   * Instantiates a new Self balance operation.
+   * Instantiates a new SelfBalance operation.
    *
    * @param gasCalculator the gas calculator
    */
@@ -36,16 +38,26 @@ public class SelfBalanceOperationV2 extends AbstractFixedCostOperationV2 {
 
   @Override
   public Operation.OperationResult executeFixedCostOperation(final MessageFrame frame) {
+    return staticOperation(frame, frame.stackDataV2());
+  }
+
+  /**
+   * Execute SELFBALANCE on the v2 long[] stack.
+   *
+   * @param frame the message frame
+   * @param s the stack data
+   * @return the operation result
+   */
+  public static Operation.OperationResult staticOperation(
+      final MessageFrame frame, final long[] s) {
     if (!frame.stackHasSpaceV2(1)) return OVERFLOW_RESPONSE;
-    final long[] s = frame.stackDataV2();
     final int top = frame.stackTopV2();
     final Account account = getAccount(frame.getRecipientAddress(), frame);
     if (account == null) {
-      pushZero(s, top);
+      frame.setTopV2(StackArithmetic.pushZero(s, top));
     } else {
-      pushWei(account.getBalance(), s, top);
+      frame.setTopV2(StackArithmetic.pushWei(s, top, account.getBalance()));
     }
-    frame.setTopV2(top + 1);
-    return successResponse;
+    return new Operation.OperationResult(5, null);
   }
 }
