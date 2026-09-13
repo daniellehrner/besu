@@ -21,6 +21,7 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.VersionedHash;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
+import org.hyperledger.besu.evm.internal.WarmStorageTable;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -43,7 +44,7 @@ public class TxValues {
   private final BlockHashLookup blockHashLookup;
   private final int maxStackSize;
   private final UndoSet<Address> warmedUpAddresses;
-  private final UndoTable<Address, Bytes32, Boolean> warmedUpStorage;
+  private final WarmStorageTable warmedUpStorage;
   private final Address originator;
   private final Wei gasPrice;
   private final Wei blobGasPrice;
@@ -62,7 +63,7 @@ public class TxValues {
       final BlockHashLookup blockHashLookup,
       final int maxStackSize,
       final UndoSet<Address> warmedUpAddresses,
-      final UndoTable<Address, Bytes32, Boolean> warmedUpStorage,
+      final WarmStorageTable warmedUpStorage,
       final Address originator,
       final Wei gasPrice,
       final Wei blobGasPrice,
@@ -126,12 +127,13 @@ public class TxValues {
     // TreeBasedTable/TreeSet (sorted by each key's natural ordering) are used instead of
     // HashBasedTable/HashSet: Address and Bytes32 hash with a grindable base-31 hash and never
     // declare Comparable<Self> directly, so HashMap/HashBasedTable bucket treeification never
-    // engages, letting an attacker force O(n) bucket walks per insert.
+    // engages, letting an attacker force O(n) bucket walks per insert. The warm-slot table hashes
+    // with secret constants instead, which is what lets it be flat.
     return new TxValues(
         blockHashLookup,
         maxStackSize,
         warmedUpAddresses,
-        UndoTable.of(TreeBasedTable.create()),
+        new WarmStorageTable(),
         originator,
         gasPrice,
         blobGasPrice,
@@ -195,7 +197,7 @@ public class TxValues {
    *
    * @return the warmed-up storage slots
    */
-  public UndoTable<Address, Bytes32, Boolean> warmedUpStorage() {
+  public WarmStorageTable warmedUpStorage() {
     return warmedUpStorage;
   }
 
