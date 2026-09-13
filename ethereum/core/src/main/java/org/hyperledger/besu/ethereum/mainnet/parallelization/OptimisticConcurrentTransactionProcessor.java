@@ -19,6 +19,7 @@ import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Transaction;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.MainnetTransactionProcessor;
 import org.hyperledger.besu.ethereum.mainnet.TransactionValidationParams;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.AccessLocationTracker;
@@ -249,6 +250,7 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         }
         return Optional.of(transactionProcessingResult);
       } else {
+        BlockImportTimings.mark(BlockImportTimings.Phase.TX_CONFLICT);
         blockAccumulator.importPriorStateFromSource(transactionAccumulator);
         if (conflictingButCachedTransactionCounter.isPresent())
           conflictingButCachedTransactionCounter.get().inc();
@@ -258,6 +260,7 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       }
     }
     if (future != null) {
+      BlockImportTimings.mark(BlockImportTimings.Phase.TX_UNFINISHED);
       future.cancel(true);
     }
     return Optional.empty();

@@ -76,12 +76,31 @@ public final class BlockImportTimings {
     /** Forwarding or rewinding the chain head on a fork choice update. */
     FORK_CHOICE_CHAIN_HEAD("fcu_head"),
     /** Recording the finalized and safe blocks on a fork choice update. */
-    FORK_CHOICE_FINALITY("fcu_finality");
+    FORK_CHOICE_FINALITY("fcu_finality"),
+    /** Speculative results discarded because they conflicted with an earlier transaction. */
+    TX_CONFLICT("conflict", true),
+    /** Transactions re-executed because their speculative execution had not finished. */
+    TX_UNFINISHED("unfinished", true);
 
     private final String label;
+    private final boolean countOnly;
 
     Phase(final String label) {
+      this(label, false);
+    }
+
+    Phase(final String label, final boolean countOnly) {
       this.label = label;
+      this.countOnly = countOnly;
+    }
+
+    /**
+     * Whether the phase only counts occurrences and carries no duration of its own.
+     *
+     * @return true for a count-only phase
+     */
+    public boolean isCountOnly() {
+      return countOnly;
     }
 
     /**
@@ -197,6 +216,18 @@ public final class BlockImportTimings {
     }
   }
 
+  /**
+   * Counts an occurrence of a count-only phase when an import is being timed on this thread.
+   *
+   * @param phase the phase to count
+   */
+  public static void mark(final Phase phase) {
+    final BlockImportTimings timings = CURRENT.get();
+    if (timings != null) {
+      timings.phaseCounts[phase.ordinal()]++;
+    }
+  }
+
   private void add(final Phase phase, final long nanos) {
     phaseNanos[phase.ordinal()] += nanos;
     phaseCounts[phase.ordinal()]++;
@@ -270,8 +301,11 @@ public final class BlockImportTimings {
       if (count == 0) {
         continue;
       }
-      out.append(phase.label()).append(' ').append(millis(phaseNanos[phase.ordinal()]));
-      if (count > 1) {
+      out.append(phase.label());
+      if (!phase.isCountOnly()) {
+        out.append(' ').append(millis(phaseNanos[phase.ordinal()]));
+      }
+      if (count > 1 || phase.isCountOnly()) {
         out.append(" (").append(count).append(')');
       }
       out.append(" | ");
@@ -307,14 +341,14 @@ public final class BlockImportTimings {
   }
 
   /**
-   * Records every entered phase, the total, the CPU time, the GC time and the remainder into the
-   * histogram, labelled by phase.
+   * Records every entered timed phase, the total, the CPU time, the GC time and the remainder into
+   * the histogram, labelled by phase. Count-only phases are not durations and are left out.
    *
    * @param histogram the histogram to observe into, in seconds
    */
   public void recordTo(final LabelledMetric<Histogram> histogram) {
     for (final Phase phase : Phase.values()) {
-      if (phaseCounts[phase.ordinal()] > 0) {
+      if (phaseCounts[phase.ordinal()] > 0 && !phase.isCountOnly()) {
         histogram.labels(phase.label()).observe(seconds(phaseNanos[phase.ordinal()]));
       }
     }
