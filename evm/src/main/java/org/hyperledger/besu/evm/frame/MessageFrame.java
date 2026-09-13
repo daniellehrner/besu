@@ -30,6 +30,7 @@ import org.hyperledger.besu.evm.internal.MemoryEntry;
 import org.hyperledger.besu.evm.internal.OperandStack;
 import org.hyperledger.besu.evm.internal.StorageEntry;
 import org.hyperledger.besu.evm.internal.UnderflowException;
+import org.hyperledger.besu.evm.internal.WarmStorageTable;
 import org.hyperledger.besu.evm.operation.Operation;
 import org.hyperledger.besu.evm.v2.StackPool;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
@@ -47,7 +48,6 @@ import java.util.function.Consumer;
 
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Multimap;
-import com.google.common.collect.Table;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.bytes.MutableBytes;
@@ -1210,7 +1210,7 @@ public class MessageFrame {
    * @return true if the storage slot was already warmed up
    */
   public boolean warmUpStorage(final Address address, final Bytes32 slot) {
-    return txValues.warmedUpStorage().put(address, slot, Boolean.TRUE) != null;
+    return txValues.warmedUpStorage().warmUp(address, slot);
   }
 
   /**
@@ -1484,7 +1484,7 @@ public class MessageFrame {
    *
    * @return the warmed up storage
    */
-  public Table<Address, Bytes32, Boolean> getWarmedUpStorage() {
+  public WarmStorageTable getWarmedUpStorage() {
     return txValues.warmedUpStorage();
   }
 
