@@ -211,7 +211,8 @@ public class MessageFrame {
   private long gasRemaining;
   private int pc;
   private final Memory memory = new Memory();
-  private final OperandStack stack;
+  // allocated on first use for v2 frames, which run on the long[] stack and never touch it
+  private OperandStack stack;
   // EVM v2 stack: 4 longs per 256-bit word (index 0 = most significant, index 3 = least
   // significant)
   private long[] stackDataV2;
@@ -288,7 +289,7 @@ public class MessageFrame {
     this.type = type;
     this.worldUpdater = worldUpdater;
     this.gasRemaining = initialGas;
-    this.stack = new OperandStack(txValues.maxStackSize());
+    this.stack = enableEvmV2 ? null : new OperandStack(txValues.maxStackSize());
     this.stackDataV2 = enableEvmV2 ? StackPool.borrow(txValues.maxStackSize()) : null;
     this.stackTopV2 = 0;
     this.stackMaxSizeV2 = txValues.maxStackSize();
@@ -441,7 +442,7 @@ public class MessageFrame {
    * @throws UnderflowException if the offset is out of range
    */
   public Bytes getStackItem(final int offset) {
-    return stack.get(offset);
+    return stack().get(offset);
   }
 
   /**
@@ -451,7 +452,7 @@ public class MessageFrame {
    * @throws UnderflowException if the stack is empty
    */
   public Bytes popStackItem() {
-    return stack.pop();
+    return stack().pop();
   }
 
   /**
@@ -460,7 +461,7 @@ public class MessageFrame {
    * @param n The number of items to pop off the stack
    */
   public void popStackItems(final int n) {
-    stack.bulkPop(n);
+    stack().bulkPop(n);
   }
 
   /**
@@ -469,7 +470,7 @@ public class MessageFrame {
    * @param value The value to push onto the stack.
    */
   public void pushStackItem(final Bytes value) {
-    stack.push(value);
+    stack().push(value);
   }
 
   /**
@@ -480,7 +481,7 @@ public class MessageFrame {
    * @throws IllegalStateException if the stack is too small
    */
   public void setStackItem(final int offset, final Bytes value) {
-    stack.set(offset, value);
+    stack().set(offset, value);
   }
 
   /**
@@ -489,7 +490,14 @@ public class MessageFrame {
    * @return The current stack size
    */
   public int stackSize() {
-    return stack.size();
+    return stack().size();
+  }
+
+  private OperandStack stack() {
+    if (stack == null) {
+      stack = new OperandStack(txValues.maxStackSize());
+    }
+    return stack;
   }
 
   // region --- EVM v2 long[] stack operations ---

@@ -165,6 +165,7 @@ public class SystemCallProcessor {
     MessageFrame.Builder builder =
         MessageFrame.builder()
             .maxStackSize(DEFAULT_MAX_STACK_SIZE)
+            .enableEvmV2(processor.getEvm().getEvmConfiguration().enableEvmV2())
             .worldUpdater(worldUpdater)
             .initialGas(SYSTEM_CALL_GAS_LIMIT)
             .originator(SYSTEM_ADDRESS)
