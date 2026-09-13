@@ -579,21 +579,22 @@ public class EVM {
   private void runToHaltV2(final MessageFrame frame, final OperationTracer operationTracer) {
     evmSpecVersion.maybeWarnVersion();
 
-    byte[] code = frame.getCode().getBytes().toArrayUnsafe();
-    Operation[] operationArray = operations.getOperations();
-    while (frame.getState() == MessageFrame.State.CODE_EXECUTING) {
-      Operation currentOperation;
-      int opcode;
-      int pc = frame.getPC();
-      if (pc < code.length) {
-        opcode = code[pc] & 0xff;
-        currentOperation = operationArray[opcode];
-      } else {
-        opcode = 0;
-        currentOperation = endOfScriptStop;
+    final byte[] code = frame.getCode().getBytes().toArrayUnsafe();
+    final Operation[] operationArray = operations.getOperations();
+    // Block import runs without a tracer. The two tracer hooks and the current-operation
+    // bookkeeping that only tracers read are then skipped on every opcode; the fallback branch
+    // below still records the operation it hands to the standard interpreter.
+    final boolean tracing = operationTracer != OperationTracer.NO_TRACING;
+    if (frame.getState() != MessageFrame.State.CODE_EXECUTING) {
+      return;
+    }
+    while (true) {
+      final int pc = frame.getPC();
+      final int opcode = pc < code.length ? code[pc] & 0xff : 0;
+      if (tracing) {
+        frame.setCurrentOperation(pc < code.length ? operationArray[opcode] : endOfScriptStop);
+        operationTracer.tracePreExecution(frame);
       }
-      frame.setCurrentOperation(currentOperation);
-      operationTracer.tracePreExecution(frame);
 
       OperationResult result;
       try {
@@ -872,6 +873,8 @@ public class EVM {
                       ? PayOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator)
                       : InvalidOperation.invalidOperationResult(opcode);
               default -> {
+                final Operation currentOperation =
+                    pc < code.length ? operationArray[opcode] : endOfScriptStop;
                 frame.setCurrentOperation(currentOperation);
                 yield currentOperation.execute(frame, this);
               }
@@ -890,12 +893,16 @@ public class EVM {
         frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
         frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
       }
-      if (frame.getState() == MessageFrame.State.CODE_EXECUTING) {
-        final int currentPC = frame.getPC();
-        final int opSize = result.getPcIncrement();
-        frame.setPC(currentPC + opSize);
+      if (frame.getState() != MessageFrame.State.CODE_EXECUTING) {
+        if (tracing) {
+          operationTracer.tracePostExecution(frame, result);
+        }
+        return;
       }
-      operationTracer.tracePostExecution(frame, result);
+      frame.setPC(frame.getPC() + result.getPcIncrement());
+      if (tracing) {
+        operationTracer.tracePostExecution(frame, result);
+      }
     }
   }
 
