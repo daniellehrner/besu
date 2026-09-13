@@ -37,6 +37,7 @@
 ### Additions and Improvements
 - Implement native `callTracer` execution tracing, reducing memory use for `debug_trace*`. [#11077](https://github.com/besu-eth/besu/pull/11077)
 - Implement native `4byteTracer` execution tracing, reducing memory use for `debug_trace*`. [#11271](https://github.com/besu-eth/besu/pull/11271)
+- `--Xevm-v2` now runs every opcode on the experimental flat-stack interpreter instead of falling back to the standard one for opcodes it did not implement, so the two interpreters can be compared on real blocks. The flag remains experimental and off by default.
 
 ## 26.8.1
 
