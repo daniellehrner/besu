@@ -117,6 +117,34 @@ class BlockImportTimingsTest {
   }
 
   @Test
+  void countOnlyPhasesAreCountedDescribedAndLeftOutOfTheHistogram() {
+    final Map<String, Double> observed = new HashMap<>();
+    final LabelledMetric<Histogram> histogram = labels -> amount -> observed.put(labels[0], amount);
+
+    final BlockImportTimings timings = BlockImportTimings.begin();
+    try {
+      BlockImportTimings.mark(Phase.TX_UNFINISHED);
+      BlockImportTimings.mark(Phase.TX_CONFLICT);
+      BlockImportTimings.mark(Phase.TX_CONFLICT);
+    } finally {
+      timings.finish();
+    }
+    timings.recordTo(histogram);
+
+    assertThat(timings.count(Phase.TX_CONFLICT)).isEqualTo(2);
+    assertThat(timings.describe()).startsWith("conflict (2) | unfinished (1) | total ");
+    assertThat(observed.keySet()).containsExactlyInAnyOrder("total", "cpu", "gc", "remainder");
+  }
+
+  @Test
+  void markOutsideAnImportIsIgnored() {
+    BlockImportTimings.mark(Phase.TX_CONFLICT);
+    final BlockImportTimings timings = BlockImportTimings.begin();
+    timings.finish();
+    assertThat(timings.count(Phase.TX_CONFLICT)).isZero();
+  }
+
+  @Test
   void histogramIsCreatedOnTheBlockProcessingCategory() {
     assertThat(BlockImportTimings.createHistogram(new NoOpMetricsSystem())).isNotNull();
   }
