@@ -17,7 +17,6 @@ package org.hyperledger.besu.evm.v2.operation;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
-import org.hyperledger.besu.evm.v2.StackArithmetic;
 
 import org.apache.tuweni.bytes.Bytes;
 
@@ -70,11 +69,24 @@ public class CallDataLoadOperationV2 extends AbstractFixedCostOperationV2 {
 
     final int offset = (int) s[off + 3];
     final Bytes data = frame.getInputData();
-    if (offset < data.size()) {
-      final byte[] result = new byte[32];
-      final int toCopy = Math.min(32, data.size() - offset);
-      System.arraycopy(data.slice(offset, toCopy).toArrayUnsafe(), 0, result, 0, toCopy);
-      StackArithmetic.fromBytesAt(s, top, 0, result, 0, 32);
+    final int size = data.size();
+    // Read the word straight out of the input: slicing and copying it first cost two allocations
+    // on one of the most frequent opcodes.
+    if (size - offset >= 32) {
+      s[off] = data.getLong(offset);
+      s[off + 1] = data.getLong(offset + 8);
+      s[off + 2] = data.getLong(offset + 16);
+      s[off + 3] = data.getLong(offset + 24);
+    } else if (offset < size) {
+      // The word runs past the end of the input; the missing bytes read as zero.
+      for (int word = 0; word < 4; word++) {
+        long value = 0L;
+        for (int i = 0; i < 8; i++) {
+          final int index = offset + (word << 3) + i;
+          value = (value << 8) | (index < size ? (data.get(index) & 0xffL) : 0L);
+        }
+        s[off + word] = value;
+      }
     } else {
       s[off] = 0;
       s[off + 1] = 0;
