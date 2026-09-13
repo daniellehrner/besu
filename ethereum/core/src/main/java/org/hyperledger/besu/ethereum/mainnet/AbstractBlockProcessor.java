@@ -263,9 +263,12 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
               blockHashLookup,
               !blockTracer.isEnabled() ? OperationTracer.NO_TRACING : blockTracer,
               blockAccessListBuilder);
-      protocolSpec
-          .getPreExecutionProcessor()
-          .process(blockProcessingContext, preExecutionAccessLocationTracker);
+      BlockImportTimings.time(
+          BlockImportTimings.Phase.PRE_EXECUTION,
+          () ->
+              protocolSpec
+                  .getPreExecutionProcessor()
+                  .process(blockProcessingContext, preExecutionAccessLocationTracker));
 
       Optional<BlockHeader> maybeParentHeader =
           blockchain.getBlockHeader(blockHeader.getParentHash());
@@ -280,6 +283,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
                               calculateExcessBlobGasForParent(protocolSpec, parentHeader)))
               .orElse(Wei.ZERO);
 
+      final long dispatchStart = System.nanoTime();
       preProcessingContext =
           preprocessingBlockFunction.run(
               protocolContext,
@@ -291,6 +295,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
               blockAccessListBuilder,
               blockAccessList,
               maybeParentHeader);
+      BlockImportTimings.addSince(BlockImportTimings.Phase.PARALLEL_DISPATCH, dispatchStart);
 
       boolean parallelizedTxFound = false;
       int nbParallelTx = 0;
@@ -393,6 +398,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
           nbParallelTx++;
         }
       }
+      final long postExecutionStart = System.nanoTime();
       final var optionalHeaderBlobGasUsed = blockHeader.getBlobGasUsed();
       if (optionalHeaderBlobGasUsed.isPresent()) {
         final long headerBlobGasUsed = optionalHeaderBlobGasUsed.get();
@@ -535,6 +541,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
 
       LOG.trace("traceEndBlock for {}", blockHeader.getNumber());
       blockTracer.traceEndBlock(blockHeader, blockBody);
+      BlockImportTimings.addSince(BlockImportTimings.Phase.POST_EXECUTION, postExecutionStart);
 
       try {
         worldState.persist(blockHeader, stateRootCommitter);
@@ -596,16 +603,19 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
       final int location,
       final BlockHashLookup blockHashLookup,
       final Optional<AccessLocationTracker> accessLocationTracker) {
-    return transactionProcessor.processTransaction(
-        transactionUpdater,
-        blockProcessingContext.getBlockHeader(),
-        transaction,
-        miningBeneficiary,
-        blockProcessingContext.getOperationTracer(),
-        blockHashLookup,
-        TransactionValidationParams.processingBlock(),
-        blobGasPrice,
-        accessLocationTracker);
+    return BlockImportTimings.time(
+        BlockImportTimings.Phase.TX_EXECUTE,
+        () ->
+            transactionProcessor.processTransaction(
+                transactionUpdater,
+                blockProcessingContext.getBlockHeader(),
+                transaction,
+                miningBeneficiary,
+                blockProcessingContext.getOperationTracer(),
+                blockHashLookup,
+                TransactionValidationParams.processingBlock(),
+                blobGasPrice,
+                accessLocationTracker));
   }
 
   @SuppressWarnings(

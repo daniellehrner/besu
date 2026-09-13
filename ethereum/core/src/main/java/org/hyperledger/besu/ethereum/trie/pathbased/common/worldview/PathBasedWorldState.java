@@ -22,6 +22,7 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBa
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListOverlay;
 import org.hyperledger.besu.ethereum.mainnet.staterootcommitter.DefaultStateRootCommitter;
 import org.hyperledger.besu.ethereum.mainnet.staterootcommitter.TrieDisabledStateRootCommitter;
@@ -215,9 +216,13 @@ public abstract class PathBasedWorldState
     Runnable cacheWorldState = () -> {};
 
     try {
-      final StateRootComputation computation = committer.compute(this, blockHeader, accumulator);
+      final StateRootComputation computation =
+          BlockImportTimings.time(
+              BlockImportTimings.Phase.STATE_ROOT,
+              () -> committer.compute(this, blockHeader, accumulator));
       if (!isStorageFrozen()) {
-        computation.applyTo(stateUpdater);
+        BlockImportTimings.time(
+            BlockImportTimings.Phase.STATE_COMMIT, () -> computation.applyTo(stateUpdater));
       }
       final Hash calculatedRootHash = computation.root();
 
@@ -260,12 +265,13 @@ public abstract class PathBasedWorldState
     } finally {
       if (success) {
         // commit the trielog transaction ahead of the state, in case of an abnormal shutdown:
-        saveTrieLog.run();
+        BlockImportTimings.time(BlockImportTimings.Phase.TRIE_LOG, saveTrieLog);
         // commit only the composed worldstate, as trielog transaction is already complete:
-        stateUpdater.commitComposedOnly();
+        BlockImportTimings.time(
+            BlockImportTimings.Phase.STATE_COMMIT, stateUpdater::commitComposedOnly);
         if (!isStorageFrozen) {
           // optionally save the committed worldstate state in the cache
-          cacheWorldState.run();
+          BlockImportTimings.time(BlockImportTimings.Phase.STATE_COMMIT, cacheWorldState);
         }
         accumulator.reset();
       } else {
