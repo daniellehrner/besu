@@ -360,6 +360,8 @@ public class MainnetTransactionProcessor {
       final MessageFrame.Builder commonMessageFrameBuilder =
           MessageFrame.builder()
               .maxStackSize(maxStackSize)
+              // gives the top-level frame a pooled v2 stack instead of one allocated on entry
+              .enableEvmV2(messageCallProcessor.getEvm().getEvmConfiguration().enableEvmV2())
               .worldUpdater(worldUpdater.updater())
               .initialGas(initialGas)
               .initialStateGasReservoir(initialStateGasReservoir)
