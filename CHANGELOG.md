@@ -63,6 +63,7 @@
 - Schedule the Amsterdam fork on Sepolia at timestamp `1791294816` (Tue, 06 Oct 2026, 13:53:36 UTC). [#11333](https://github.com/besu-eth/besu/pull/11333)
 - Update `Bouncycastle` to 1.85 to address CVEs `CVE-2026-8763` and `CVE-2026-13506`. [#11336](https://github.com/besu-eth/besu/pull/11336)
 - `--Xevm-v2` now runs every opcode on the experimental flat-stack interpreter instead of falling back to the standard one for opcodes it did not implement, so the two interpreters can be compared on real blocks. The flag remains experimental and off by default.
+- Log and export a per-phase timing breakdown of every block import and fork choice update on the engine API. Each `Import #N` line lists the wall time of header validation, world state lookup, speculative dispatch, reused and re-executed transactions, state root, trie log, commit, body validation and block storage, together with the importing thread's CPU time and the GC time that elapsed, and the same figures are exported as the `besu_block_processing_import_phase_seconds` histogram labelled by phase.
 
 ## 26.8.1
 
