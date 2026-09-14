@@ -975,42 +975,58 @@ public class StackArithmetic {
       s[dst + 3] = 0;
       return top + 1;
     }
-    final int copyLen = Math.min(len, code.length - start);
+    final int end = start + len;
 
+    if (end <= code.length && start >= 8) {
+      // Each limb is one aligned-to-the-end read; the highest limb reads up to seven bytes that
+      // precede the immediate and masks them off, so no limb is assembled byte by byte. The
+      // opcode byte guarantees at least one byte before the immediate, and start >= 8 keeps the
+      // widest read in bounds.
+      final int limbs = (len + 7) >> 3;
+      final int rem = len - ((limbs - 1) << 3);
+      final long mask = rem == 8 ? -1L : (1L << (rem << 3)) - 1L;
+      switch (limbs) {
+        case 1 -> {
+          s[dst] = 0;
+          s[dst + 1] = 0;
+          s[dst + 2] = 0;
+          s[dst + 3] = getLong(code, end - 8) & mask;
+        }
+        case 2 -> {
+          s[dst] = 0;
+          s[dst + 1] = 0;
+          s[dst + 2] = getLong(code, end - 16) & mask;
+          s[dst + 3] = getLong(code, end - 8);
+        }
+        case 3 -> {
+          s[dst] = 0;
+          s[dst + 1] = getLong(code, end - 24) & mask;
+          s[dst + 2] = getLong(code, end - 16);
+          s[dst + 3] = getLong(code, end - 8);
+        }
+        default -> {
+          s[dst] = getLong(code, end - 32) & mask;
+          s[dst + 1] = getLong(code, end - 24);
+          s[dst + 2] = getLong(code, end - 16);
+          s[dst + 3] = getLong(code, end - 8);
+        }
+      }
+      return top + 1;
+    }
+
+    // Immediate within the first bytes of the code, or truncated by the end of the code: the
+    // missing bytes read as zero.
+    final int copyLen = Math.min(len, code.length - start);
     s[dst] = 0;
     s[dst + 1] = 0;
     s[dst + 2] = 0;
     s[dst + 3] = 0;
-
-    if (copyLen == len) {
-      // Fast path: all bytes available (common case — not near end of code)
-      if (len <= 8) {
-        s[dst + 3] = buildLong(code, start, len);
-      } else if (len <= 16) {
-        final int hiLen = len - 8;
-        s[dst + 2] = buildLong(code, start, hiLen);
-        s[dst + 3] = bytesToLong(code, start + hiLen);
-      } else if (len <= 24) {
-        final int hiLen = len - 16;
-        s[dst + 1] = buildLong(code, start, hiLen);
-        s[dst + 2] = bytesToLong(code, start + hiLen);
-        s[dst + 3] = bytesToLong(code, start + hiLen + 8);
-      } else {
-        final int hiLen = len - 24;
-        s[dst] = buildLong(code, start, hiLen);
-        s[dst + 1] = bytesToLong(code, start + hiLen);
-        s[dst + 2] = bytesToLong(code, start + hiLen + 8);
-        s[dst + 3] = bytesToLong(code, start + hiLen + 16);
-      }
-    } else {
-      // Truncated push (rare: near end of code). Right-pad with zeros.
-      int bytePos = len - 1;
-      for (int i = 0; i < copyLen; i++) {
-        int limbOffset = 3 - (bytePos >> 3);
-        int shift = (bytePos & 7) << 3;
-        s[dst + limbOffset] |= (code[start + i] & 0xFFL) << shift;
-        bytePos--;
-      }
+    int bytePos = len - 1;
+    for (int i = 0; i < copyLen; i++) {
+      final int limbOffset = 3 - (bytePos >> 3);
+      final int shift = (bytePos & 7) << 3;
+      s[dst + limbOffset] |= (code[start + i] & 0xFFL) << shift;
+      bytePos--;
     }
     return top + 1;
   }
@@ -1370,14 +1386,6 @@ public class StackArithmetic {
   }
 
   /** Build a long from 1-8 big-endian bytes. */
-  private static long buildLong(final byte[] src, final int off, final int len) {
-    long v = 0;
-    for (int i = off, end = off + len; i < end; i++) {
-      v = (v << 8) | (src[i] & 0xFFL);
-    }
-    return v;
-  }
-
   /** Decode 8 big-endian bytes from src[off] into a long. */
   private static long bytesToLong(final byte[] src, final int off) {
     return getLong(src, off);
