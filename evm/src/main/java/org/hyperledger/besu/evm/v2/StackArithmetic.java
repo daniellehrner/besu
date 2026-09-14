@@ -620,8 +620,9 @@ public class StackArithmetic {
   public static int signExtend(final long[] s, final int top) {
     final int a = (top - 1) << 2; // byte index b
     final int b = (top - 2) << 2; // value
-    // If b >= 31, no extension needed
-    if (s[a] != 0 || s[a + 1] != 0 || s[a + 2] != 0 || s[a + 3] >= 31) {
+    // No extension for a byte index of 31 or more; the low limb is unsigned, so a set top bit
+    // means a huge index, not a negative one
+    if (s[a] != 0 || s[a + 1] != 0 || s[a + 2] != 0 || s[a + 3] < 0 || s[a + 3] >= 31) {
       // result is just the value unchanged
       return top - 1;
     }
