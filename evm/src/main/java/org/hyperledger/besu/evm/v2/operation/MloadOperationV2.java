@@ -59,8 +59,7 @@ public class MloadOperationV2 extends AbstractOperationV2 {
       return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
     }
 
-    final byte[] bytes = frame.readMutableMemory(location, 32, true).copy().toArrayUnsafe();
-    StackArithmetic.fromBytesAt(stack, top, 0, bytes, 0, 32);
+    frame.readMemoryWord(location, stack, top, 0);
     return new OperationResult(cost, null);
   }
 }

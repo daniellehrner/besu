@@ -22,8 +22,6 @@ import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
 
-import org.apache.tuweni.bytes.Bytes;
-
 /**
  * EVM v2 KECCAK256 operation (0x20).
  *
@@ -68,8 +66,9 @@ public class Keccak256OperationV2 extends AbstractOperationV2 {
       return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
     }
 
-    final Bytes bytes = frame.readMutableMemory(from, length);
-    final byte[] hashBytes = keccak256(bytes).toArrayUnsafe();
+    // hash the memory range in place: a copy and two wrappers per KECCAK256 otherwise
+    final int start = frame.memoryRange(from, length);
+    final byte[] hashBytes = keccak256(frame.memoryBytes(), start, (int) length);
     // Pop 2, push 1: net effect is top - 1
     final int newTop = top - 1;
     frame.setTopV2(newTop);

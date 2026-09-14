@@ -350,6 +350,7 @@ public class EVM {
 
     byte[] code = frame.getCode().getBytes().toArrayUnsafe();
     Operation[] operationArray = operations.getOperations();
+    frame.setRecordUpdatesForTracer(operationTracer != OperationTracer.NO_TRACING);
     while (frame.getState() == MessageFrame.State.CODE_EXECUTING) {
       Operation currentOperation;
       int opcode;
@@ -619,6 +620,7 @@ public class EVM {
     // bookkeeping that only tracers read are then skipped on every opcode; the fallback branch
     // below still records the operation it hands to the standard interpreter.
     final boolean tracing = operationTracer != OperationTracer.NO_TRACING;
+    frame.setRecordUpdatesForTracer(tracing);
     if (frame.getState() != MessageFrame.State.CODE_EXECUTING) {
       return;
     }
