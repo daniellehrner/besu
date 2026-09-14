@@ -25,6 +25,7 @@ import java.util.OptionalInt;
  * @param jumpDestCacheWeightKB the jump destination cache weight in kb
  * @param worldUpdaterMode the world updater mode
  * @param enableOptimizedOpcodes enable optimized implementation of certain opcodes in the EVM
+ * @param evmV2Loop which interpreter loop EVM v2 runs
  * @param enableEvmV2 enable experimental EVM v2 with long[] stack representation
  * @param evmStackSize the maximum evm stack size
  * @param maxCodeSizeOverride An optional override of the maximum code size set by the EVM fork
@@ -36,11 +37,21 @@ public record EvmConfiguration(
     WorldUpdaterMode worldUpdaterMode,
     boolean enableOptimizedOpcodes,
     boolean enableEvmV2,
+    EvmV2Loop evmV2Loop,
     Integer evmStackSize,
     Optional<Integer> maxCodeSizeOverride,
     Optional<Integer> maxInitcodeSizeOverride) {
 
   /** How should the world state update be handled within transactions? */
+  /** Which interpreter loop the experimental EVM v2 runs. */
+  public enum EvmV2Loop {
+    /** The switch loop with per-operation stack and gas checks. */
+    SWITCH,
+    /** The loop that checks stack and gas from per-opcode tables ahead of the switch. */
+    TABLE
+  }
+
+  /** The world updater mode. */
   public enum WorldUpdaterMode {
     /**
      * Stack updates, requiring original account and storage values to read through the whole stack
@@ -70,6 +81,7 @@ public record EvmConfiguration(
         worldstateUpdateMode,
         enableOptimizedOpcodes,
         false,
+        EvmV2Loop.SWITCH,
         MessageFrame.DEFAULT_MAX_STACK_SIZE,
         Optional.empty(),
         Optional.empty());
@@ -93,6 +105,33 @@ public record EvmConfiguration(
         worldstateUpdateMode,
         enableOptimizedOpcodes,
         enableEvmV2,
+        EvmV2Loop.SWITCH,
+        MessageFrame.DEFAULT_MAX_STACK_SIZE,
+        Optional.empty(),
+        Optional.empty());
+  }
+
+  /**
+   * Create a new EVM configuration selecting the EVM v2 loop.
+   *
+   * @param jumpDestCacheWeightKilobytes the jump dest cache weight kilobytes
+   * @param worldstateUpdateMode the worldstate update mode
+   * @param enableOptimizedOpcodes whether to enable optimized opcodes
+   * @param enableEvmV2 whether to enable experimental EVM v2
+   * @param evmV2Loop which loop EVM v2 runs
+   */
+  public EvmConfiguration(
+      final Long jumpDestCacheWeightKilobytes,
+      final WorldUpdaterMode worldstateUpdateMode,
+      final boolean enableOptimizedOpcodes,
+      final boolean enableEvmV2,
+      final EvmV2Loop evmV2Loop) {
+    this(
+        jumpDestCacheWeightKilobytes,
+        worldstateUpdateMode,
+        enableOptimizedOpcodes,
+        enableEvmV2,
+        evmV2Loop,
         MessageFrame.DEFAULT_MAX_STACK_SIZE,
         Optional.empty(),
         Optional.empty());
@@ -125,6 +164,7 @@ public record EvmConfiguration(
         worldUpdaterMode,
         enableOptimizedOpcodes,
         enableEvmV2,
+        evmV2Loop,
         newEvmStackSize.orElse(MessageFrame.DEFAULT_MAX_STACK_SIZE),
         newMaxCodeSize.isPresent() ? Optional.of(newMaxCodeSize.getAsInt()) : Optional.empty(),
         newMaxInitcodeSize.isPresent()

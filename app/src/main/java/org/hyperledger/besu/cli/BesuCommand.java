@@ -3156,6 +3156,7 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
         .setWorldStateUpdateMode(unstableEvmOptions.toDomainObject().worldUpdaterMode())
         .setEnabledOpcodeOptimizations(unstableEvmOptions.toDomainObject().enableOptimizedOpcodes())
         .setEvmV2(unstableEvmOptions.toDomainObject().enableEvmV2())
+        .setEvmV2Loop(unstableEvmOptions.toDomainObject().evmV2Loop().name())
         .setPluginContext(this.besuPluginContext)
         .setHistoryExpiryPruneEnabled(getDataStorageConfiguration().getHistoryExpiryPruneEnabled())
         .setBlobDBSettings(rocksDBPlugin.getBlobDBSettings())

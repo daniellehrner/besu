@@ -35,6 +35,9 @@ public class EvmOptions implements CLIOptions<EvmConfiguration> {
   /** The constant EVM_V2. */
   public static final String EVM_V2 = "--Xevm-v2";
 
+  /** The EVM v2 loop option name. */
+  public static final String EVM_V2_LOOP = "--Xevm-v2-loop";
+
   /** Default constructor. */
   EvmOptions() {}
 
@@ -83,10 +86,23 @@ public class EvmOptions implements CLIOptions<EvmConfiguration> {
       arity = "1")
   private boolean enableEvmV2 = false;
 
+  @CommandLine.Option(
+      names = {EVM_V2_LOOP},
+      description =
+          "Which interpreter loop the experimental EVM v2 runs: SWITCH or TABLE (default: SWITCH)",
+      fallbackValue = "SWITCH",
+      hidden = true,
+      arity = "1")
+  private EvmConfiguration.EvmV2Loop evmV2Loop = EvmConfiguration.EvmV2Loop.SWITCH;
+
   @Override
   public EvmConfiguration toDomainObject() {
     return new EvmConfiguration(
-        jumpDestCacheWeightKilobytes, worldstateUpdateMode, enableOptimizedOpcodes, enableEvmV2);
+        jumpDestCacheWeightKilobytes,
+        worldstateUpdateMode,
+        enableOptimizedOpcodes,
+        enableEvmV2,
+        evmV2Loop);
   }
 
   @Override

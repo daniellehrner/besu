@@ -89,6 +89,7 @@ import org.hyperledger.besu.evm.operation.VirtualOperation;
 import org.hyperledger.besu.evm.operation.XorOperation;
 import org.hyperledger.besu.evm.operation.XorOperationOptimized;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
+import org.hyperledger.besu.evm.v2.loop.TableLoop;
 import org.hyperledger.besu.evm.v2.operation.AddModOperationV2;
 import org.hyperledger.besu.evm.v2.operation.AddOperationV2;
 import org.hyperledger.besu.evm.v2.operation.AddressOperationV2;
@@ -224,6 +225,9 @@ public class EVM {
 
   private final JumpDestOnlyCodeCache jumpDestOnlyCodeCache;
 
+  // The v2 loop that checks stack and gas from tables, when configured; null runs the switch loop
+  private final TableLoop tableLoop;
+
   /**
    * Instantiates a new Evm.
    *
@@ -263,6 +267,11 @@ public class EVM {
       chainIdOperationV2 = null;
     }
     gasOperationV2 = new GasOperationV2(gasCalculator);
+    tableLoop =
+        evmConfiguration.enableEvmV2()
+                && evmConfiguration.evmV2Loop() == EvmConfiguration.EvmV2Loop.TABLE
+            ? new TableLoop(this, operations)
+            : null;
   }
 
   /**
@@ -343,7 +352,11 @@ public class EVM {
 
     if (evmConfiguration.enableEvmV2()) {
       frame.ensureV2Stack();
-      runToHaltV2(frame, operationTracer);
+      if (tableLoop != null) {
+        tableLoop.run(frame, operationTracer);
+      } else {
+        runToHaltV2(frame, operationTracer);
+      }
       return;
     }
     evmSpecVersion.maybeWarnVersion();
@@ -974,6 +987,15 @@ public class EVM {
    *
    * @return Operations array
    */
+  /**
+   * The operations registered for this EVM's fork.
+   *
+   * @return the registry
+   */
+  public OperationRegistry getOperations() {
+    return operations;
+  }
+
   public Operation[] getOperationsUnsafe() {
     return operations.getOperations();
   }
