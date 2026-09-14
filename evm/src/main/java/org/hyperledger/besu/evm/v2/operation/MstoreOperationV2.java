@@ -21,8 +21,6 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
 
-import org.apache.tuweni.bytes.Bytes;
-
 /** The MSTORE operation for EVM v2. */
 public class MstoreOperationV2 extends AbstractOperationV2 {
 
@@ -61,9 +59,7 @@ public class MstoreOperationV2 extends AbstractOperationV2 {
       return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
     }
 
-    final byte[] bytes = new byte[32];
-    StackArithmetic.toBytesAt(stack, top, 1, bytes);
-    frame.writeMemoryRightAligned(location, 32, Bytes.wrap(bytes), true);
+    frame.writeMemoryWord(location, stack, top, 1);
     frame.setTopV2(top - 2);
     return new OperationResult(cost, null);
   }

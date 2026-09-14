@@ -92,6 +92,20 @@ public abstract class Hash {
   }
 
   /**
+   * Digest a range of a byte array using keccak-256.
+   *
+   * @param input the array holding the bytes to digest
+   * @param offset the first byte to digest
+   * @param length the number of bytes to digest
+   * @return the 32-byte digest
+   */
+  public static byte[] keccak256(final byte[] input, final int offset, final int length) {
+    final MessageDigest digest = KECCAK256_DIGEST.get();
+    digest.update(input, offset, length);
+    return digest.digest();
+  }
+
+  /**
    * Digest using RIPEMD-160.
    *
    * @param input The input bytes to produce the digest for.

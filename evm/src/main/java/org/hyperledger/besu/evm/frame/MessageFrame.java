@@ -31,6 +31,7 @@ import org.hyperledger.besu.evm.internal.UnderflowException;
 import org.hyperledger.besu.evm.internal.WarmAddressSet;
 import org.hyperledger.besu.evm.internal.WarmStorageTable;
 import org.hyperledger.besu.evm.operation.Operation;
+import org.hyperledger.besu.evm.v2.StackArithmetic;
 import org.hyperledger.besu.evm.v2.StackPool;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
@@ -248,6 +249,9 @@ public class MessageFrame {
   private Operation currentOperation;
   private final Consumer<MessageFrame> completer;
   private Optional<MemoryEntry> maybeUpdatedMemory = Optional.empty();
+  // only tracers read the recorded memory and storage updates, and recording them costs a copy
+  // and two allocations per memory write
+  private boolean recordUpdatesForTracer = true;
   private Optional<StorageEntry> maybeUpdatedStorage = Optional.empty();
 
   private final TxValues txValues;
@@ -647,6 +651,61 @@ public class MessageFrame {
   }
 
   /**
+   * Reads the 32-byte word at a memory location straight into a v2 stack slot, expanding memory as
+   * needed.
+   *
+   * @param location the first byte of the word
+   * @param s the stack data
+   * @param top the stack top
+   * @param depth the slot depth from the top
+   */
+  public void readMemoryWord(final long location, final long[] s, final int top, final int depth) {
+    final int start = memory.ensureRange(location, Bytes32.SIZE);
+    StackArithmetic.fromBytesAt(s, top, depth, memory.bytes(), start, Bytes32.SIZE);
+    if (recordUpdatesForTracer) {
+      setUpdatedMemory(location, memory.getBytes(location, Bytes32.SIZE));
+    }
+  }
+
+  /**
+   * Writes a v2 stack slot as a 32-byte word at a memory location, expanding memory as needed.
+   *
+   * @param location the first byte of the word
+   * @param s the stack data
+   * @param top the stack top
+   * @param depth the slot depth from the top
+   */
+  public void writeMemoryWord(final long location, final long[] s, final int top, final int depth) {
+    final int start = memory.ensureRange(location, Bytes32.SIZE);
+    StackArithmetic.toBytesAt(s, top, depth, memory.bytes(), start);
+    if (recordUpdatesForTracer) {
+      setUpdatedMemory(location, memory.getBytes(location, Bytes32.SIZE));
+    }
+  }
+
+  /**
+   * Expands memory to cover a range and returns where it starts in the backing array, for callers
+   * that read memory in place instead of through a copy.
+   *
+   * @param offset the first byte of the range
+   * @param length the length of the range
+   * @return the index of the first byte in the array returned by {@link #memoryBytes()}
+   */
+  public int memoryRange(final long offset, final long length) {
+    return memory.ensureRange(offset, length);
+  }
+
+  /**
+   * The memory's backing array. It is replaced whenever memory grows, so it must be fetched after
+   * {@link #memoryRange} and not held beyond the current operation.
+   *
+   * @return the backing array
+   */
+  public byte[] memoryBytes() {
+    return memory.bytes();
+  }
+
+  /**
    * Read bytes in memory as mutable. Contents should not be considered stable outside the scope of
    * the current operation.
    *
@@ -692,7 +751,7 @@ public class MessageFrame {
   public MutableBytes readMutableMemory(
       final long offset, final long length, final boolean explicitMemoryRead) {
     final MutableBytes memBytes = memory.getMutableBytes(offset, length);
-    if (explicitMemoryRead) {
+    if (explicitMemoryRead && recordUpdatesForTracer) {
       setUpdatedMemory(offset, memBytes);
     }
     return memBytes;
@@ -707,7 +766,7 @@ public class MessageFrame {
    */
   public void writeMemory(final long offset, final byte value, final boolean explicitMemoryUpdate) {
     memory.setByte(offset, value);
-    if (explicitMemoryUpdate) {
+    if (explicitMemoryUpdate && recordUpdatesForTracer) {
       setUpdatedMemory(offset, Bytes.of(value));
     }
   }
@@ -734,7 +793,7 @@ public class MessageFrame {
   public void writeMemory(
       final long offset, final long length, final Bytes value, final boolean explicitMemoryUpdate) {
     memory.setBytes(offset, length, value);
-    if (explicitMemoryUpdate) {
+    if (explicitMemoryUpdate && recordUpdatesForTracer) {
       setUpdatedMemory(offset, 0, length, value);
     }
   }
@@ -752,7 +811,7 @@ public class MessageFrame {
   public void writeMemoryRightAligned(
       final long offset, final long length, final Bytes value, final boolean explicitMemoryUpdate) {
     memory.setBytesRightAligned(offset, length, value);
-    if (explicitMemoryUpdate) {
+    if (explicitMemoryUpdate && recordUpdatesForTracer) {
       setUpdatedMemoryRightAligned(offset, length, value);
     }
   }
@@ -786,7 +845,7 @@ public class MessageFrame {
       final Bytes value,
       final boolean explicitMemoryUpdate) {
     memory.setBytes(offset, sourceOffset, length, value);
-    if (explicitMemoryUpdate && length > 0) {
+    if (explicitMemoryUpdate && recordUpdatesForTracer && length > 0) {
       setUpdatedMemory(offset, sourceOffset, length, value);
     }
   }
@@ -805,7 +864,7 @@ public class MessageFrame {
       final long dst, final long src, final long length, final boolean explicitMemoryUpdate) {
     if (length > 0) {
       memory.copy(dst, src, length);
-      if (explicitMemoryUpdate) {
+      if (explicitMemoryUpdate && recordUpdatesForTracer) {
         setUpdatedMemory(dst, memory.getBytes(dst, length));
       }
     }
@@ -855,7 +914,19 @@ public class MessageFrame {
    * @param value the value
    */
   public void storageWasUpdated(final UInt256 storageAddress, final Bytes value) {
-    maybeUpdatedStorage = Optional.of(new StorageEntry(storageAddress, value));
+    if (recordUpdatesForTracer) {
+      maybeUpdatedStorage = Optional.of(new StorageEntry(storageAddress, value));
+    }
+  }
+
+  /**
+   * Whether memory and storage updates are recorded for tracers. On by default; the interpreter
+   * turns it off when it runs without a tracer.
+   *
+   * @param record true to record updates
+   */
+  public void setRecordUpdatesForTracer(final boolean record) {
+    this.recordUpdatesForTracer = record;
   }
 
   /**

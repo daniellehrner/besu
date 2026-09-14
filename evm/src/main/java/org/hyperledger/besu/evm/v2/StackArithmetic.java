@@ -1183,6 +1183,24 @@ public class StackArithmetic {
   }
 
   /**
+   * Write 32 big-endian bytes from slot at depth into dst starting at dstOff.
+   *
+   * @param s the stack array
+   * @param top the current top index
+   * @param depth the 0-based depth from the top
+   * @param dst the destination byte array
+   * @param dstOff the offset in the destination at which the word starts
+   */
+  public static void toBytesAt(
+      final long[] s, final int top, final int depth, final byte[] dst, final int dstOff) {
+    final int off = (top - 1 - depth) << 2;
+    longIntoBytes(dst, dstOff, s[off]);
+    longIntoBytes(dst, dstOff + 8, s[off + 1]);
+    longIntoBytes(dst, dstOff + 16, s[off + 2]);
+    longIntoBytes(dst, dstOff + 24, s[off + 3]);
+  }
+
+  /**
    * Read bytes into slot at depth from src[srcOff..srcOff+len). Pads with zeros.
    *
    * @param s the stack array
