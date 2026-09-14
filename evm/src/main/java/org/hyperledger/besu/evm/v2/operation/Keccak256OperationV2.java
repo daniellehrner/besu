@@ -18,9 +18,11 @@ import static org.hyperledger.besu.crypto.Hash.keccak256;
 
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
+import org.hyperledger.besu.evm.frame.ExceptionalHaltReason.DefaultExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
+import org.hyperledger.besu.evm.v2.loop.LoopResult;
 
 /**
  * EVM v2 KECCAK256 operation (0x20).
@@ -75,5 +77,36 @@ public class Keccak256OperationV2 extends AbstractOperationV2 {
     StackArithmetic.fromBytesAt(s, newTop, 0, hashBytes, 0, hashBytes.length);
 
     return new OperationResult(cost, null);
+  }
+
+  /**
+   * Executes the operation on the table loop's contract: the loop has checked the stack and owns
+   * the program counter, the gas and the stack top.
+   *
+   * @param frame the frame
+   * @param s the stack data
+   * @param top the stack top
+   * @param pc the program counter of this operation
+   * @param gas the gas remaining before this operation
+   * @param gasCalculator the gas calculator
+   * @return the packed result
+   */
+  public static long exec(
+      final MessageFrame frame,
+      final long[] s,
+      final int top,
+      final int pc,
+      final long gas,
+      final GasCalculator gasCalculator) {
+    final long from = StackArithmetic.clampedToLong(s, top, 0);
+    final long length = StackArithmetic.clampedToLong(s, top, 1);
+    final long cost = gasCalculator.keccak256OperationGasCost(frame, from, length);
+    if (gas < cost) {
+      return LoopResult.halt(DefaultExceptionalHaltReason.INSUFFICIENT_GAS);
+    }
+    final int start = frame.memoryRange(from, length);
+    final byte[] hashBytes = keccak256(frame.memoryBytes(), start, (int) length);
+    StackArithmetic.fromBytesAt(s, top - 1, 0, hashBytes, 0, hashBytes.length);
+    return LoopResult.ok(top - 1, pc + 1, cost);
   }
 }

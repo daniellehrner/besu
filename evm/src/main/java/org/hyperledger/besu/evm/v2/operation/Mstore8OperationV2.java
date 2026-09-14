@@ -16,10 +16,12 @@ package org.hyperledger.besu.evm.v2.operation;
 
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
+import org.hyperledger.besu.evm.frame.ExceptionalHaltReason.DefaultExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
+import org.hyperledger.besu.evm.v2.loop.LoopResult;
 
 /** The MSTORE8 operation for EVM v2. */
 public class Mstore8OperationV2 extends AbstractOperationV2 {
@@ -63,5 +65,33 @@ public class Mstore8OperationV2 extends AbstractOperationV2 {
     frame.writeMemory(location, theByte, true);
     frame.setTopV2(top - 2);
     return new OperationResult(cost, null);
+  }
+
+  /**
+   * Executes the operation on the table loop's contract: the loop has checked the stack and owns
+   * the program counter, the gas and the stack top.
+   *
+   * @param frame the frame
+   * @param s the stack data
+   * @param top the stack top
+   * @param pc the program counter of this operation
+   * @param gas the gas remaining before this operation
+   * @param gasCalculator the gas calculator
+   * @return the packed result
+   */
+  public static long exec(
+      final MessageFrame frame,
+      final long[] s,
+      final int top,
+      final int pc,
+      final long gas,
+      final GasCalculator gasCalculator) {
+    final long location = StackArithmetic.clampedToLong(s, top, 0);
+    final long cost = gasCalculator.mStore8OperationGasCost(frame, location);
+    if (gas < cost) {
+      return LoopResult.halt(DefaultExceptionalHaltReason.INSUFFICIENT_GAS);
+    }
+    frame.writeMemory(location, (byte) (StackArithmetic.longAt(s, top, 1) & 0xFF), true);
+    return LoopResult.ok(top - 2, pc + 1, cost);
   }
 }

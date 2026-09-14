@@ -95,6 +95,21 @@ class TableLoopTest {
       return new Outcome(
           "", "", 0L, 0, List.of(), Bytes.EMPTY, Bytes.EMPTY, e.getClass().getSimpleName());
     }
+    if (frame.getState() == MessageFrame.State.EXCEPTIONAL_HALT) {
+      // the frame is discarded and its gas consumed after an exceptional halt, so only the
+      // reason remains observable; the switch loop leaves the pc after a PUSH's immediate when
+      // the PUSH runs out of gas, where the table loop and the standard loop leave it on the
+      // PUSH itself
+      return new Outcome(
+          frame.getState().name(),
+          frame.getExceptionalHaltReason().map(Object::toString).orElse(""),
+          0L,
+          0,
+          List.of(),
+          Bytes.EMPTY,
+          Bytes.EMPTY,
+          null);
+    }
     final List<Long> stack = new ArrayList<>();
     for (int i = 0; i < frame.stackTopV2() * 4; i++) {
       stack.add(frame.stackDataV2()[i]);

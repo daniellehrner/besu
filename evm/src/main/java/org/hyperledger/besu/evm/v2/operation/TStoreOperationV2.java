@@ -15,9 +15,11 @@
 package org.hyperledger.besu.evm.v2.operation;
 
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
+import org.hyperledger.besu.evm.frame.ExceptionalHaltReason.DefaultExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
+import org.hyperledger.besu.evm.v2.loop.LoopResult;
 
 import org.apache.tuweni.bytes.Bytes32;
 
@@ -84,5 +86,34 @@ public class TStoreOperationV2 extends AbstractFixedCostOperationV2 {
     frame.setTransientStorageValue(frame.getRecipientAddress(), slot, value);
 
     return TSTORE_SUCCESS;
+  }
+
+  /**
+   * Executes the operation on the table loop's contract: the loop has checked the stack and owns
+   * the program counter, the gas and the stack top. The gas is charged here, after the static
+   * check, so that a static frame halts for the state change and not for gas.
+   *
+   * @param frame the frame
+   * @param s the stack data
+   * @param top the stack top
+   * @param pc the program counter of this operation
+   * @param gas the gas remaining before this operation
+   * @return the packed result
+   */
+  public static long exec(
+      final MessageFrame frame, final long[] s, final int top, final int pc, final long gas) {
+    if (frame.isStatic()) {
+      return LoopResult.halt(DefaultExceptionalHaltReason.ILLEGAL_STATE_CHANGE);
+    }
+    if (gas < GAS_COST) {
+      return LoopResult.halt(DefaultExceptionalHaltReason.INSUFFICIENT_GAS);
+    }
+    final byte[] keyBytes = new byte[32];
+    final byte[] valueBytes = new byte[32];
+    StackArithmetic.toBytesAt(s, top, 0, keyBytes);
+    StackArithmetic.toBytesAt(s, top, 1, valueBytes);
+    frame.setTransientStorageValue(
+        frame.getRecipientAddress(), Bytes32.wrap(keyBytes), Bytes32.wrap(valueBytes));
+    return LoopResult.ok(top - 2, pc + 1, GAS_COST);
   }
 }

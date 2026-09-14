@@ -116,21 +116,77 @@ public final class LoopTables {
     inOut(0xfd, 2, 0); // REVERT
     inOut(0xff, 1, 0); // SELFDESTRUCT
 
+    // operations already on the native contract
+    final long veryLow = gasCalculator.getVeryLowTierGasCost();
+    final long low = gasCalculator.getLowTierGasCost();
+    final long mid = gasCalculator.getMidTierGasCost();
+    native0(0x01, veryLow); // ADD
+    native0(0x02, low); // MUL
+    native0(0x03, veryLow); // SUB
+    native0(0x04, low); // DIV
+    native0(0x05, low); // SDIV
+    native0(0x06, low); // MOD
+    native0(0x07, low); // SMOD
+    native0(0x08, mid); // ADDMOD
+    native0(0x09, mid); // MULMOD
+    native0(0x0a, 0L); // EXP charges its own gas
+    native0(0x0b, low); // SIGNEXTEND
+    for (int opcode = 0x10; opcode <= 0x1d; opcode++) {
+      native0(opcode, veryLow); // LT..SAR
+    }
+    native0(0x1e, low); // CLZ
+    final long base = gasCalculator.getBaseTierGasCost();
+    native0(0x20, 0L); // KECCAK256 charges its own gas
+    native0(0x30, base); // ADDRESS
+    native0(0x32, base); // ORIGIN
+    native0(0x33, base); // CALLER
+    native0(0x34, base); // CALLVALUE
+    native0(0x35, veryLow); // CALLDATALOAD
+    native0(0x36, base); // CALLDATASIZE
+    native0(0x37, 0L); // CALLDATACOPY
+    native0(0x38, base); // CODESIZE
+    native0(0x39, 0L); // CODECOPY
+    native0(0x3a, base); // GASPRICE
+    native0(0x3d, base); // RETURNDATASIZE
+    native0(0x3e, 0L); // RETURNDATACOPY
+    for (int opcode = 0x41; opcode <= 0x46; opcode++) {
+      native0(opcode, base); // COINBASE..CHAINID
+    }
+    native0(0x47, low); // SELFBALANCE
+    native0(0x48, base); // BASEFEE
+    native0(0x49, veryLow); // BLOBHASH
+    native0(0x4a, base); // BLOBBASEFEE
+    native0(0x4b, base); // SLOTNUM
+    native0(0x51, 0L); // MLOAD
+    native0(0x52, 0L); // MSTORE
+    native0(0x53, 0L); // MSTORE8
+    native0(0x56, mid); // JUMP
+    native0(0x57, gasCalculator.getHighTierGasCost()); // JUMPI
+    native0(0x58, base); // PC
+    native0(0x59, base); // MSIZE
+    native0(0x5a, base); // GAS
+    native0(0x5c, gasCalculator.getWarmStorageReadCost()); // TLOAD
+    native0(0x5d, 0L); // TSTORE charges its own gas after its static check
+    native0(0x5e, 0L); // MCOPY
+    for (int opcode = 0x60; opcode <= 0x7f; opcode++) {
+      native0(opcode, veryLow); // PUSH1-32
+    }
+    native0(0x50, gasCalculator.getBaseTierGasCost()); // POP
+    native0(0x5b, gasCalculator.getJumpDestOperationGasCost()); // JUMPDEST
+    native0(0x5f, gasCalculator.getBaseTierGasCost()); // PUSH0
+    for (int opcode = 0x80; opcode <= 0x9f; opcode++) { // DUP1-16, SWAP1-16
+      native0(opcode, gasCalculator.getVeryLowTierGasCost());
+    }
+
     // an opcode the fork does not have halts as an invalid operation whatever the stack holds,
     // so the loop must not report a stack fault for it first
     final Operation[] ops = operations.getOperations();
     for (int opcode = 0; opcode < 256; opcode++) {
       if (ops[opcode] == null || ops[opcode] instanceof InvalidOperation) {
         inOut(opcode, 0, 0);
+        flags[opcode] = 0;
+        fixedGas[opcode] = 0L;
       }
-    }
-
-    // operations already on the native contract
-    native0(0x50, gasCalculator.getBaseTierGasCost()); // POP
-    native0(0x5b, gasCalculator.getJumpDestOperationGasCost()); // JUMPDEST
-    native0(0x5f, gasCalculator.getBaseTierGasCost()); // PUSH0
-    for (int opcode = 0x80; opcode <= 0x9f; opcode++) { // DUP1-16, SWAP1-16
-      native0(opcode, gasCalculator.getVeryLowTierGasCost());
     }
   }
 

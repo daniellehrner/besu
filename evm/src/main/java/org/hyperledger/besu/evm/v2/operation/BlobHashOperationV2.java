@@ -20,6 +20,7 @@ import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
+import org.hyperledger.besu.evm.v2.loop.LoopResult;
 
 import java.util.List;
 
@@ -79,5 +80,29 @@ public class BlobHashOperationV2 extends AbstractOperationV2 {
       StackArithmetic.putAt(s, top, 0, 0L, 0L, 0L, 0L);
     }
     return new OperationResult(3, null);
+  }
+
+  /**
+   * Executes the operation on the table loop's contract: the loop has checked the stack and charged
+   * the fixed gas, and owns the program counter and the stack top.
+   *
+   * @param frame the frame
+   * @param s the stack data
+   * @param top the stack top
+   * @param pc the program counter of this operation
+   * @return the packed result
+   */
+  public static long exec(final MessageFrame frame, final long[] s, final int top, final int pc) {
+    if (frame.getVersionedHashes().isPresent() && StackArithmetic.fitsInInt(s, top, 0)) {
+      final List<VersionedHash> versionedHashes = frame.getVersionedHashes().get();
+      final int index = (int) StackArithmetic.longAt(s, top, 0);
+      if (index >= 0 && index < versionedHashes.size()) {
+        final byte[] hashBytes = versionedHashes.get(index).getBytes().toArrayUnsafe();
+        StackArithmetic.fromBytesAt(s, top, 0, hashBytes, 0, hashBytes.length);
+        return LoopResult.ok(top, pc + 1);
+      }
+    }
+    StackArithmetic.putAt(s, top, 0, 0L, 0L, 0L, 0L);
+    return LoopResult.ok(top, pc + 1);
   }
 }

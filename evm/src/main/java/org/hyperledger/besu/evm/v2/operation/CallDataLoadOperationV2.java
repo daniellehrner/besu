@@ -17,6 +17,7 @@ package org.hyperledger.besu.evm.v2.operation;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
+import org.hyperledger.besu.evm.v2.loop.LoopResult;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
@@ -59,7 +60,26 @@ public class CallDataLoadOperationV2 extends AbstractFixedCostOperationV2 {
   public static Operation.OperationResult staticOperation(
       final MessageFrame frame, final long[] s) {
     if (!frame.stackHasItemsV2(1)) return UNDERFLOW_RESPONSE;
-    final int top = frame.stackTopV2();
+    load(frame, s, frame.stackTopV2());
+    return CALLDATALOAD_SUCCESS;
+  }
+
+  /**
+   * Executes the operation on the table loop's contract.
+   *
+   * @param frame the frame
+   * @param s the stack data
+   * @param top the stack top
+   * @param pc the program counter of this operation
+   * @return the packed result
+   */
+  public static long exec(final MessageFrame frame, final long[] s, final int top, final int pc) {
+    load(frame, s, top);
+    return LoopResult.ok(top, pc + 1);
+  }
+
+  /** Replaces the offset on top of the stack with the word of input data it points at. */
+  private static void load(final MessageFrame frame, final long[] s, final int top) {
     final int off = (top - 1) << 2;
 
     // If the offset doesn't fit in a non-negative int, result is zero
@@ -68,7 +88,7 @@ public class CallDataLoadOperationV2 extends AbstractFixedCostOperationV2 {
       s[off + 1] = 0;
       s[off + 2] = 0;
       s[off + 3] = 0;
-      return CALLDATALOAD_SUCCESS;
+      return;
     }
 
     final int offset = (int) s[off + 3];
@@ -95,7 +115,5 @@ public class CallDataLoadOperationV2 extends AbstractFixedCostOperationV2 {
       s[off + 2] = 0;
       s[off + 3] = 0;
     }
-
-    return CALLDATALOAD_SUCCESS;
   }
 }

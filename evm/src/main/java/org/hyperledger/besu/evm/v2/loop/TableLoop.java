@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.evm.v2.loop;
 
+import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.EvmSpecVersion;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
@@ -33,92 +34,43 @@ import org.hyperledger.besu.evm.operation.StopOperation;
 import org.hyperledger.besu.evm.operation.VirtualOperation;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
-import org.hyperledger.besu.evm.v2.operation.AddModOperationV2;
-import org.hyperledger.besu.evm.v2.operation.AddOperationV2;
-import org.hyperledger.besu.evm.v2.operation.AddressOperationV2;
-import org.hyperledger.besu.evm.v2.operation.AndOperationV2;
 import org.hyperledger.besu.evm.v2.operation.BalanceOperationV2;
-import org.hyperledger.besu.evm.v2.operation.BaseFeeOperationV2;
-import org.hyperledger.besu.evm.v2.operation.BlobBaseFeeOperationV2;
 import org.hyperledger.besu.evm.v2.operation.BlobHashOperationV2;
 import org.hyperledger.besu.evm.v2.operation.BlockHashOperationV2;
-import org.hyperledger.besu.evm.v2.operation.ByteOperationV2;
 import org.hyperledger.besu.evm.v2.operation.CallCodeOperationV2;
 import org.hyperledger.besu.evm.v2.operation.CallDataCopyOperationV2;
 import org.hyperledger.besu.evm.v2.operation.CallDataLoadOperationV2;
-import org.hyperledger.besu.evm.v2.operation.CallDataSizeOperationV2;
 import org.hyperledger.besu.evm.v2.operation.CallOperationV2;
-import org.hyperledger.besu.evm.v2.operation.CallValueOperationV2;
-import org.hyperledger.besu.evm.v2.operation.CallerOperationV2;
-import org.hyperledger.besu.evm.v2.operation.ChainIdOperationV2;
-import org.hyperledger.besu.evm.v2.operation.ClzOperationV2;
 import org.hyperledger.besu.evm.v2.operation.CodeCopyOperationV2;
-import org.hyperledger.besu.evm.v2.operation.CodeSizeOperationV2;
-import org.hyperledger.besu.evm.v2.operation.CoinbaseOperationV2;
 import org.hyperledger.besu.evm.v2.operation.Create2OperationV2;
 import org.hyperledger.besu.evm.v2.operation.CreateOperationV2;
 import org.hyperledger.besu.evm.v2.operation.DelegateCallOperationV2;
-import org.hyperledger.besu.evm.v2.operation.DifficultyOperationV2;
-import org.hyperledger.besu.evm.v2.operation.DivOperationV2;
 import org.hyperledger.besu.evm.v2.operation.DupNOperationV2;
-import org.hyperledger.besu.evm.v2.operation.EqOperationV2;
 import org.hyperledger.besu.evm.v2.operation.ExchangeOperationV2;
-import org.hyperledger.besu.evm.v2.operation.ExpOperationV2;
 import org.hyperledger.besu.evm.v2.operation.ExtCodeCopyOperationV2;
 import org.hyperledger.besu.evm.v2.operation.ExtCodeHashOperationV2;
 import org.hyperledger.besu.evm.v2.operation.ExtCodeSizeOperationV2;
-import org.hyperledger.besu.evm.v2.operation.GasLimitOperationV2;
-import org.hyperledger.besu.evm.v2.operation.GasOperationV2;
-import org.hyperledger.besu.evm.v2.operation.GasPriceOperationV2;
-import org.hyperledger.besu.evm.v2.operation.GtOperationV2;
 import org.hyperledger.besu.evm.v2.operation.InvalidOperationV2;
-import org.hyperledger.besu.evm.v2.operation.IsZeroOperationV2;
-import org.hyperledger.besu.evm.v2.operation.JumpOperationV2;
-import org.hyperledger.besu.evm.v2.operation.JumpiOperationV2;
 import org.hyperledger.besu.evm.v2.operation.Keccak256OperationV2;
 import org.hyperledger.besu.evm.v2.operation.LogOperationV2;
-import org.hyperledger.besu.evm.v2.operation.LtOperationV2;
 import org.hyperledger.besu.evm.v2.operation.MCopyOperationV2;
-import org.hyperledger.besu.evm.v2.operation.MSizeOperationV2;
 import org.hyperledger.besu.evm.v2.operation.MloadOperationV2;
-import org.hyperledger.besu.evm.v2.operation.ModOperationV2;
 import org.hyperledger.besu.evm.v2.operation.Mstore8OperationV2;
 import org.hyperledger.besu.evm.v2.operation.MstoreOperationV2;
-import org.hyperledger.besu.evm.v2.operation.MulModOperationV2;
-import org.hyperledger.besu.evm.v2.operation.MulOperationV2;
-import org.hyperledger.besu.evm.v2.operation.NotOperationV2;
-import org.hyperledger.besu.evm.v2.operation.NumberOperationV2;
-import org.hyperledger.besu.evm.v2.operation.OrOperationV2;
-import org.hyperledger.besu.evm.v2.operation.OriginOperationV2;
 import org.hyperledger.besu.evm.v2.operation.PayOperationV2;
-import org.hyperledger.besu.evm.v2.operation.PcOperationV2;
-import org.hyperledger.besu.evm.v2.operation.PrevRandaoOperationV2;
 import org.hyperledger.besu.evm.v2.operation.PushOperationV2;
 import org.hyperledger.besu.evm.v2.operation.ReturnDataCopyOperationV2;
-import org.hyperledger.besu.evm.v2.operation.ReturnDataSizeOperationV2;
 import org.hyperledger.besu.evm.v2.operation.ReturnOperationV2;
 import org.hyperledger.besu.evm.v2.operation.RevertOperationV2;
-import org.hyperledger.besu.evm.v2.operation.SDivOperationV2;
 import org.hyperledger.besu.evm.v2.operation.SLoadOperationV2;
-import org.hyperledger.besu.evm.v2.operation.SModOperationV2;
 import org.hyperledger.besu.evm.v2.operation.SStoreOperationV2;
-import org.hyperledger.besu.evm.v2.operation.SarOperationV2;
 import org.hyperledger.besu.evm.v2.operation.SelfBalanceOperationV2;
 import org.hyperledger.besu.evm.v2.operation.SelfDestructOperationV2;
-import org.hyperledger.besu.evm.v2.operation.SgtOperationV2;
-import org.hyperledger.besu.evm.v2.operation.ShlOperationV2;
-import org.hyperledger.besu.evm.v2.operation.ShrOperationV2;
-import org.hyperledger.besu.evm.v2.operation.SignExtendOperationV2;
-import org.hyperledger.besu.evm.v2.operation.SlotNumOperationV2;
-import org.hyperledger.besu.evm.v2.operation.SltOperationV2;
 import org.hyperledger.besu.evm.v2.operation.StaticCallOperationV2;
 import org.hyperledger.besu.evm.v2.operation.StopOperationV2;
-import org.hyperledger.besu.evm.v2.operation.SubOperationV2;
 import org.hyperledger.besu.evm.v2.operation.SwapNOperationV2;
 import org.hyperledger.besu.evm.v2.operation.TLoadOperationV2;
 import org.hyperledger.besu.evm.v2.operation.TStoreOperationV2;
-import org.hyperledger.besu.evm.v2.operation.TimestampOperationV2;
-import org.hyperledger.besu.evm.v2.operation.XorOperationV2;
 
 import java.util.Optional;
 
@@ -138,6 +90,8 @@ public final class TableLoop {
       new OperationResult(0L, DefaultExceptionalHaltReason.TOO_MANY_STACK_ITEMS);
   private static final OperationResult UNDERFLOW_RESPONSE =
       new OperationResult(0L, DefaultExceptionalHaltReason.INSUFFICIENT_STACK_ITEMS);
+  private static final long INVALID =
+      LoopResult.halt(DefaultExceptionalHaltReason.INVALID_OPERATION);
   private static final int DUP_BASE = 0x7f;
   private static final int SWAP_BASE = 0x8f;
 
@@ -146,8 +100,7 @@ public final class TableLoop {
   private final Operation[] operationArray;
   private final Operation endOfScriptStop;
   private final LoopTables tables;
-  private final ChainIdOperationV2 chainIdOperationV2;
-  private final GasOperationV2 gasOperationV2;
+  private final byte[] chainId;
   private final boolean enableByzantium;
   private final boolean enableConstantinople;
   private final boolean enableIstanbul;
@@ -171,11 +124,8 @@ public final class TableLoop {
     this.endOfScriptStop = new VirtualOperation(new StopOperation(gasCalculator));
     this.tables = new LoopTables(operations, gasCalculator);
     final Operation chainIdOp = operations.get(ChainIdOperation.OPCODE);
-    this.chainIdOperationV2 =
-        chainIdOp instanceof ChainIdOperation cid
-            ? new ChainIdOperationV2(gasCalculator, cid.getChainId())
-            : null;
-    this.gasOperationV2 = new GasOperationV2(gasCalculator);
+    this.chainId =
+        chainIdOp instanceof ChainIdOperation cid ? cid.getChainId().toArrayUnsafe() : null;
     final int fork = evm.getEvmVersion().ordinal();
     enableByzantium = EvmSpecVersion.BYZANTIUM.ordinal() <= fork;
     enableConstantinople = EvmSpecVersion.CONSTANTINOPLE.ordinal() <= fork;
@@ -245,7 +195,7 @@ public final class TableLoop {
                 r =
                     enableShanghai
                         ? LoopResult.ok(StackArithmetic.pushZero(s, top), pc + 1)
-                        : LoopResult.halt(DefaultExceptionalHaltReason.INVALID_OPERATION);
+                        : INVALID;
             case 0x80,
                 0x81,
                 0x82,
@@ -281,48 +231,45 @@ public final class TableLoop {
                 0x9f ->
                 r = LoopResult.ok(StackArithmetic.swap(s, top, opcode - SWAP_BASE), pc + 1);
             // ---- operations still on the old contract
-            case 0x01 -> result = AddOperationV2.staticOperation(frame);
-            case 0x02 -> result = MulOperationV2.staticOperation(frame);
-            case 0x03 -> result = SubOperationV2.staticOperation(frame);
-            case 0x04 -> result = DivOperationV2.staticOperation(frame);
-            case 0x05 -> result = SDivOperationV2.staticOperation(frame);
-            case 0x06 -> result = ModOperationV2.staticOperation(frame);
-            case 0x07 -> result = SModOperationV2.staticOperation(frame);
-            case 0x08 -> result = AddModOperationV2.staticOperation(frame);
-            case 0x09 -> result = MulModOperationV2.staticOperation(frame);
-            case 0x0a -> result = ExpOperationV2.staticOperation(frame, s, gasCalculator);
-            case 0x0b -> result = SignExtendOperationV2.staticOperation(frame, s);
-            case 0x10 -> result = LtOperationV2.staticOperation(frame, s);
-            case 0x11 -> result = GtOperationV2.staticOperation(frame, s);
-            case 0x12 -> result = SltOperationV2.staticOperation(frame, s);
-            case 0x13 -> result = SgtOperationV2.staticOperation(frame, s);
-            case 0x14 -> result = EqOperationV2.staticOperation(frame, s);
-            case 0x15 -> result = IsZeroOperationV2.staticOperation(frame, s);
-            case 0x16 -> result = AndOperationV2.staticOperation(frame, s);
-            case 0x17 -> result = OrOperationV2.staticOperation(frame, s);
-            case 0x18 -> result = XorOperationV2.staticOperation(frame, s);
-            case 0x19 -> result = NotOperationV2.staticOperation(frame, s);
-            case 0x1a -> result = ByteOperationV2.staticOperation(frame, s);
+            case 0x01 -> r = LoopResult.ok(StackArithmetic.add(s, top), pc + 1);
+            case 0x02 -> r = LoopResult.ok(StackArithmetic.mul(s, top), pc + 1);
+            case 0x03 -> r = LoopResult.ok(StackArithmetic.sub(s, top), pc + 1);
+            case 0x04 -> r = LoopResult.ok(StackArithmetic.div(s, top), pc + 1);
+            case 0x05 -> r = LoopResult.ok(StackArithmetic.signedDiv(s, top), pc + 1);
+            case 0x06 -> r = LoopResult.ok(StackArithmetic.mod(s, top), pc + 1);
+            case 0x07 -> r = LoopResult.ok(StackArithmetic.signedMod(s, top), pc + 1);
+            case 0x08 -> r = LoopResult.ok(StackArithmetic.addMod(s, top), pc + 1);
+            case 0x09 -> r = LoopResult.ok(StackArithmetic.mulMod(s, top), pc + 1);
+            case 0x0a -> r = exp(s, top, pc, gas);
+            case 0x0b -> r = LoopResult.ok(StackArithmetic.signExtend(s, top), pc + 1);
+            case 0x10 -> r = LoopResult.ok(StackArithmetic.lt(s, top), pc + 1);
+            case 0x11 -> r = LoopResult.ok(StackArithmetic.gt(s, top), pc + 1);
+            case 0x12 -> r = LoopResult.ok(StackArithmetic.slt(s, top), pc + 1);
+            case 0x13 -> r = LoopResult.ok(StackArithmetic.sgt(s, top), pc + 1);
+            case 0x14 -> r = LoopResult.ok(StackArithmetic.eq(s, top), pc + 1);
+            case 0x15 -> r = LoopResult.ok(StackArithmetic.isZero(s, top), pc + 1);
+            case 0x16 -> r = LoopResult.ok(StackArithmetic.and(s, top), pc + 1);
+            case 0x17 -> r = LoopResult.ok(StackArithmetic.or(s, top), pc + 1);
+            case 0x18 -> r = LoopResult.ok(StackArithmetic.xor(s, top), pc + 1);
+            case 0x19 -> r = LoopResult.ok(StackArithmetic.not(s, top), pc + 1);
+            case 0x1a -> r = LoopResult.ok(StackArithmetic.byte_(s, top), pc + 1);
             case 0x1b ->
-                result =
+                r =
                     enableConstantinople
-                        ? ShlOperationV2.staticOperation(frame)
-                        : InvalidOperation.invalidOperationResult(opcode);
+                        ? LoopResult.ok(StackArithmetic.shl(s, top), pc + 1)
+                        : INVALID;
             case 0x1c ->
-                result =
+                r =
                     enableConstantinople
-                        ? ShrOperationV2.staticOperation(frame)
-                        : InvalidOperation.invalidOperationResult(opcode);
+                        ? LoopResult.ok(StackArithmetic.shr(s, top), pc + 1)
+                        : INVALID;
             case 0x1d ->
-                result =
+                r =
                     enableConstantinople
-                        ? SarOperationV2.staticOperation(frame)
-                        : InvalidOperation.invalidOperationResult(opcode);
+                        ? LoopResult.ok(StackArithmetic.sar(s, top), pc + 1)
+                        : INVALID;
             case 0x1e ->
-                result =
-                    enableOsaka
-                        ? ClzOperationV2.staticOperation(frame, s)
-                        : InvalidOperation.invalidOperationResult(opcode);
+                r = enableOsaka ? LoopResult.ok(StackArithmetic.clz(s, top), pc + 1) : INVALID;
             case 0x60,
                 0x61,
                 0x62,
@@ -354,10 +301,12 @@ public final class TableLoop {
                 0x7c,
                 0x7d,
                 0x7e,
-                0x7f ->
-                result =
-                    PushOperationV2.staticOperation(
-                        frame, s, code, pc, opcode - PushOperationV2.PUSH_BASE);
+                0x7f -> {
+              final int size = opcode - PushOperationV2.PUSH_BASE;
+              r =
+                  LoopResult.ok(
+                      StackArithmetic.pushFromBytes(s, top, code, pc + 1, size), pc + 1 + size);
+            }
             case 0xe6 -> // DUPN (EIP-8024)
                 result =
                     enableAmsterdam
@@ -373,14 +322,14 @@ public final class TableLoop {
                     enableAmsterdam
                         ? ExchangeOperationV2.staticOperation(frame, s, code, pc)
                         : InvalidOperation.invalidOperationResult(opcode);
-            case 0x51 -> result = MloadOperationV2.staticOperation(frame, s, gasCalculator);
-            case 0x52 -> result = MstoreOperationV2.staticOperation(frame, s, gasCalculator);
-            case 0x53 -> result = Mstore8OperationV2.staticOperation(frame, s, gasCalculator);
+            case 0x51 -> r = MloadOperationV2.exec(frame, s, top, pc, gas, gasCalculator);
+            case 0x52 -> r = MstoreOperationV2.exec(frame, s, top, pc, gas, gasCalculator);
+            case 0x53 -> r = Mstore8OperationV2.exec(frame, s, top, pc, gas, gasCalculator);
             case 0x5e ->
-                result =
+                r =
                     enableCancun
-                        ? MCopyOperationV2.staticOperation(frame, s, gasCalculator)
-                        : InvalidOperation.invalidOperationResult(opcode);
+                        ? MCopyOperationV2.exec(frame, s, top, pc, gas, gasCalculator)
+                        : INVALID;
             case 0xf0 -> result = CreateOperationV2.staticOperation(frame, s, gasCalculator, evm);
             case 0xf1 -> result = CallOperationV2.staticOperation(frame, s, gasCalculator, evm);
             case 0xf2 -> result = CallCodeOperationV2.staticOperation(frame, s, gasCalculator, evm);
@@ -394,29 +343,21 @@ public final class TableLoop {
                 result =
                     SStoreOperationV2.staticOperation(
                         frame, s, gasCalculator, SStoreOperationV2.EIP_1706_MINIMUM);
-            case 0x5c ->
-                result =
-                    enableCancun
-                        ? TLoadOperationV2.staticOperation(frame, s)
-                        : InvalidOperation.invalidOperationResult(opcode);
+            case 0x5c -> r = enableCancun ? TLoadOperationV2.exec(frame, s, top, pc) : INVALID;
             case 0x5d ->
-                result =
-                    enableCancun
-                        ? TStoreOperationV2.staticOperation(frame, s)
-                        : InvalidOperation.invalidOperationResult(opcode);
-            // Data copy / hash / account operations
-            case 0x20 -> result = Keccak256OperationV2.staticOperation(frame, s, gasCalculator);
+                r = enableCancun ? TStoreOperationV2.exec(frame, s, top, pc, gas) : INVALID;
+            case 0x20 -> r = Keccak256OperationV2.exec(frame, s, top, pc, gas, gasCalculator);
             case 0x31 -> result = BalanceOperationV2.staticOperation(frame, s, gasCalculator);
-            case 0x35 -> result = CallDataLoadOperationV2.staticOperation(frame, s);
-            case 0x37 -> result = CallDataCopyOperationV2.staticOperation(frame, s, gasCalculator);
-            case 0x39 -> result = CodeCopyOperationV2.staticOperation(frame, s, gasCalculator);
+            case 0x35 -> r = CallDataLoadOperationV2.exec(frame, s, top, pc);
+            case 0x37 -> r = CallDataCopyOperationV2.exec(frame, s, top, pc, gas, gasCalculator);
+            case 0x39 -> r = CodeCopyOperationV2.exec(frame, s, top, pc, gas, gasCalculator);
             case 0x3b -> result = ExtCodeSizeOperationV2.staticOperation(frame, s, gasCalculator);
             case 0x3c -> result = ExtCodeCopyOperationV2.staticOperation(frame, s, gasCalculator);
             case 0x3e ->
-                result =
+                r =
                     enableByzantium
-                        ? ReturnDataCopyOperationV2.staticOperation(frame, s, gasCalculator)
-                        : InvalidOperation.invalidOperationResult(opcode);
+                        ? ReturnDataCopyOperationV2.exec(frame, s, top, pc, gas, gasCalculator)
+                        : INVALID;
             case 0x3f ->
                 result =
                     enableConstantinople
@@ -424,64 +365,93 @@ public final class TableLoop {
                         : InvalidOperation.invalidOperationResult(opcode);
             case 0x40 -> result = BlockHashOperationV2.staticOperation(frame, s);
             case 0x47 ->
-                result =
-                    enableIstanbul
-                        ? SelfBalanceOperationV2.staticOperation(frame, s)
-                        : InvalidOperation.invalidOperationResult(opcode);
-            case 0x49 ->
-                result =
-                    enableCancun
-                        ? BlobHashOperationV2.staticOperation(frame, s)
-                        : InvalidOperation.invalidOperationResult(opcode);
-            // Environment push operations (0 → 1)
-            case 0x30 -> result = AddressOperationV2.staticOperation(frame, s);
-            case 0x32 -> result = OriginOperationV2.staticOperation(frame, s);
-            case 0x33 -> result = CallerOperationV2.staticOperation(frame, s);
-            case 0x34 -> result = CallValueOperationV2.staticOperation(frame, s);
-            case 0x36 -> result = CallDataSizeOperationV2.staticOperation(frame, s);
-            case 0x38 -> result = CodeSizeOperationV2.staticOperation(frame, s);
-            case 0x3a -> result = GasPriceOperationV2.staticOperation(frame, s);
+                r = enableIstanbul ? SelfBalanceOperationV2.exec(frame, s, top, pc) : INVALID;
+            case 0x49 -> r = enableCancun ? BlobHashOperationV2.exec(frame, s, top, pc) : INVALID;
+            case 0x30 ->
+                r =
+                    LoopResult.ok(
+                        StackArithmetic.pushAddress(s, top, frame.getRecipientAddress()), pc + 1);
+            case 0x32 ->
+                r =
+                    LoopResult.ok(
+                        StackArithmetic.pushAddress(s, top, frame.getOriginatorAddress()), pc + 1);
+            case 0x33 ->
+                r =
+                    LoopResult.ok(
+                        StackArithmetic.pushAddress(s, top, frame.getSenderAddress()), pc + 1);
+            case 0x34 ->
+                r =
+                    LoopResult.ok(
+                        StackArithmetic.pushWei(s, top, frame.getApparentValue()), pc + 1);
+            case 0x36 ->
+                r =
+                    LoopResult.ok(
+                        StackArithmetic.pushLong(s, top, frame.getInputData().size()), pc + 1);
+            case 0x38 ->
+                r =
+                    LoopResult.ok(
+                        StackArithmetic.pushLong(s, top, frame.getCode().getSize()), pc + 1);
+            case 0x3a ->
+                r = LoopResult.ok(StackArithmetic.pushWei(s, top, frame.getGasPrice()), pc + 1);
             case 0x3d ->
-                result =
+                r =
                     enableByzantium
-                        ? ReturnDataSizeOperationV2.staticOperation(frame, s)
-                        : InvalidOperation.invalidOperationResult(opcode);
-            case 0x41 -> result = CoinbaseOperationV2.staticOperation(frame, s);
-            case 0x42 -> result = TimestampOperationV2.staticOperation(frame, s);
-            case 0x43 -> result = NumberOperationV2.staticOperation(frame, s);
-            case 0x44 ->
-                result =
-                    enableParis
-                        ? PrevRandaoOperationV2.staticOperation(frame, s)
-                        : DifficultyOperationV2.staticOperation(frame, s);
-            case 0x45 -> result = GasLimitOperationV2.staticOperation(frame, s);
-            case 0x46 -> // CHAINID (Istanbul+)
-                result =
-                    chainIdOperationV2 != null
-                        ? chainIdOperationV2.executeFixedCostOperation(frame)
-                        : InvalidOperation.invalidOperationResult(opcode);
-            case 0x48 -> // BASEFEE (London+)
-                result =
-                    enableLondon
-                        ? BaseFeeOperationV2.staticOperation(frame, s)
-                        : InvalidOperation.invalidOperationResult(opcode);
-            case 0x4a -> // BLOBBASEFEE (Cancun+)
-                result =
+                        ? LoopResult.ok(
+                            StackArithmetic.pushLong(s, top, frame.getReturnData().size()), pc + 1)
+                        : INVALID;
+            case 0x41 ->
+                r =
+                    LoopResult.ok(
+                        StackArithmetic.pushAddress(s, top, frame.getMiningBeneficiary()), pc + 1);
+            case 0x42 ->
+                r =
+                    LoopResult.ok(
+                        StackArithmetic.pushLong(s, top, frame.getBlockValues().getTimestamp()),
+                        pc + 1);
+            case 0x43 ->
+                r =
+                    LoopResult.ok(
+                        StackArithmetic.pushLong(s, top, frame.getBlockValues().getNumber()),
+                        pc + 1);
+            case 0x44 -> r = LoopResult.ok(pushDifficulty(frame, s, top), pc + 1);
+            case 0x45 ->
+                r =
+                    LoopResult.ok(
+                        StackArithmetic.pushLong(s, top, frame.getBlockValues().getGasLimit()),
+                        pc + 1);
+            case 0x46 ->
+                r =
+                    chainId != null
+                        ? LoopResult.ok(
+                            StackArithmetic.pushFromBytes(s, top, chainId, 0, chainId.length),
+                            pc + 1)
+                        : INVALID;
+            case 0x48 -> r = enableLondon ? pushBaseFee(frame, s, top, pc) : INVALID;
+            case 0x4a ->
+                r =
                     enableCancun
-                        ? BlobBaseFeeOperationV2.staticOperation(frame, s)
-                        : InvalidOperation.invalidOperationResult(opcode);
-            case 0x4b -> // SLOTNUM (Amsterdam+)
-                result =
+                        ? LoopResult.ok(
+                            StackArithmetic.pushWei(s, top, frame.getBlobGasPrice()), pc + 1)
+                        : INVALID;
+            case 0x4b ->
+                r =
                     enableAmsterdam
-                        ? SlotNumOperationV2.staticOperation(frame, s)
-                        : InvalidOperation.invalidOperationResult(opcode);
-            case 0x58 -> result = PcOperationV2.staticOperation(frame, s);
-            case 0x59 -> result = MSizeOperationV2.staticOperation(frame, s);
-            case 0x5a -> result = gasOperationV2.executeFixedCostOperation(frame);
-            // Control flow operations
+                        ? LoopResult.ok(
+                            StackArithmetic.pushLong(
+                                s, top, frame.getBlockValues().getSlotNumber()),
+                            pc + 1)
+                        : INVALID;
+            case 0x58 -> r = LoopResult.ok(StackArithmetic.pushLong(s, top, pc), pc + 1);
+            case 0x59 ->
+                r = LoopResult.ok(StackArithmetic.pushLong(s, top, frame.memoryByteSize()), pc + 1);
+            case 0x5a -> r = LoopResult.ok(StackArithmetic.pushLong(s, top, gas), pc + 1);
             case 0x00 -> result = StopOperationV2.staticOperation(frame);
-            case 0x56 -> result = JumpOperationV2.staticOperation(frame, s);
-            case 0x57 -> result = JumpiOperationV2.staticOperation(frame, s);
+            case 0x56 -> r = jump(frame, s, top - 1, top - 1);
+            case 0x57 ->
+                r =
+                    StackArithmetic.isZeroAt(s, top, 1)
+                        ? LoopResult.ok(top - 2, pc + 1)
+                        : jump(frame, s, top - 1, top - 2);
             case 0xf3 -> result = ReturnOperationV2.staticOperation(frame, s, gasCalculator);
             case 0xfd -> // REVERT (Byzantium+)
                 result =
@@ -577,6 +547,51 @@ public final class TableLoop {
         }
       }
     }
+  }
+
+  /**
+   * Jumps to the destination in a stack slot. The destination slot is read before the stack top is
+   * lowered, so JUMPI passes the slot of its destination and the top it leaves behind.
+   */
+  private static long jump(
+      final MessageFrame frame, final long[] s, final int slot, final int newTop) {
+    final int off = slot << 2;
+    if (s[off] != 0
+        || s[off + 1] != 0
+        || s[off + 2] != 0
+        || s[off + 3] < 0
+        || s[off + 3] > Integer.MAX_VALUE) {
+      return LoopResult.halt(DefaultExceptionalHaltReason.INVALID_JUMP_DESTINATION);
+    }
+    final int destination = (int) s[off + 3];
+    if (frame.getCode().isJumpDestInvalid(destination)) {
+      return LoopResult.halt(DefaultExceptionalHaltReason.INVALID_JUMP_DESTINATION);
+    }
+    return LoopResult.ok(newTop, destination);
+  }
+
+  private int pushDifficulty(final MessageFrame frame, final long[] s, final int top) {
+    final byte[] bytes =
+        enableParis
+            ? frame.getBlockValues().getMixHashOrPrevRandao().toArrayUnsafe()
+            : frame.getBlockValues().getDifficultyBytes().toArrayUnsafe();
+    return StackArithmetic.pushFromBytes(s, top, bytes, 0, bytes.length);
+  }
+
+  private static long pushBaseFee(
+      final MessageFrame frame, final long[] s, final int top, final int pc) {
+    final Optional<Wei> baseFee = frame.getBlockValues().getBaseFee();
+    return baseFee.isPresent()
+        ? LoopResult.ok(StackArithmetic.pushWei(s, top, baseFee.get()), pc + 1)
+        : INVALID;
+  }
+
+  private long exp(final long[] s, final int top, final int pc, final long gas) {
+    final long cost = gasCalculator.expOperationGasCost(StackArithmetic.byteLengthAt(s, top, 1));
+    if (gas < cost) {
+      return LoopResult.halt(DefaultExceptionalHaltReason.INSUFFICIENT_GAS);
+    }
+    return LoopResult.ok(StackArithmetic.exp(s, top), pc + 1, cost);
   }
 
   /** Translates the result of an operation on the old contract, after it ran. */
