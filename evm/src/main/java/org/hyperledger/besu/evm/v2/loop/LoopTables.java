@@ -29,6 +29,9 @@ public final class LoopTables {
   /** The loop checks stack and gas from the tables and the case returns a packed result. */
   static final int NATIVE = 1;
 
+  /** The operation may end or suspend the frame; the loop checks the frame state after it. */
+  static final int STATE = 2;
+
   /** Items each opcode reads or pops. */
   public final byte[] stackIn = new byte[256];
 
@@ -137,7 +140,9 @@ public final class LoopTables {
     native0(0x1e, low); // CLZ
     final long base = gasCalculator.getBaseTierGasCost();
     native0(0x20, 0L); // KECCAK256 charges its own gas
+    native0(0x00, 0L); // STOP
     native0(0x30, base); // ADDRESS
+    native0(0x31, 0L); // BALANCE
     native0(0x32, base); // ORIGIN
     native0(0x33, base); // CALLER
     native0(0x34, base); // CALLVALUE
@@ -147,8 +152,12 @@ public final class LoopTables {
     native0(0x38, base); // CODESIZE
     native0(0x39, 0L); // CODECOPY
     native0(0x3a, base); // GASPRICE
+    native0(0x3b, 0L); // EXTCODESIZE
+    native0(0x3c, 0L); // EXTCODECOPY
     native0(0x3d, base); // RETURNDATASIZE
     native0(0x3e, 0L); // RETURNDATACOPY
+    native0(0x3f, 0L); // EXTCODEHASH
+    native0(0x40, gasCalculator.getBlockHashOperationGasCost()); // BLOCKHASH
     for (int opcode = 0x41; opcode <= 0x46; opcode++) {
       native0(opcode, base); // COINBASE..CHAINID
     }
@@ -160,6 +169,7 @@ public final class LoopTables {
     native0(0x51, 0L); // MLOAD
     native0(0x52, 0L); // MSTORE
     native0(0x53, 0L); // MSTORE8
+    native0(0x54, 0L); // SLOAD
     native0(0x56, mid); // JUMP
     native0(0x57, gasCalculator.getHighTierGasCost()); // JUMPI
     native0(0x58, base); // PC
@@ -171,6 +181,15 @@ public final class LoopTables {
     for (int opcode = 0x60; opcode <= 0x7f; opcode++) {
       native0(opcode, veryLow); // PUSH1-32
     }
+    for (int opcode = 0xa0; opcode <= 0xa4; opcode++) {
+      native0(opcode, 0L); // LOG0-4
+    }
+    native0(0xf3, 0L); // RETURN
+    native0(0xfd, 0L); // REVERT
+    native0(0xfe, 0L); // INVALID
+    flags[0x00] |= STATE;
+    flags[0xf3] |= STATE;
+    flags[0xfd] |= STATE;
     native0(0x50, gasCalculator.getBaseTierGasCost()); // POP
     native0(0x5b, gasCalculator.getJumpDestOperationGasCost()); // JUMPDEST
     native0(0x5f, gasCalculator.getBaseTierGasCost()); // PUSH0

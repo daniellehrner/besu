@@ -50,7 +50,6 @@ import org.hyperledger.besu.evm.v2.operation.ExchangeOperationV2;
 import org.hyperledger.besu.evm.v2.operation.ExtCodeCopyOperationV2;
 import org.hyperledger.besu.evm.v2.operation.ExtCodeHashOperationV2;
 import org.hyperledger.besu.evm.v2.operation.ExtCodeSizeOperationV2;
-import org.hyperledger.besu.evm.v2.operation.InvalidOperationV2;
 import org.hyperledger.besu.evm.v2.operation.Keccak256OperationV2;
 import org.hyperledger.besu.evm.v2.operation.LogOperationV2;
 import org.hyperledger.besu.evm.v2.operation.MCopyOperationV2;
@@ -67,12 +66,13 @@ import org.hyperledger.besu.evm.v2.operation.SStoreOperationV2;
 import org.hyperledger.besu.evm.v2.operation.SelfBalanceOperationV2;
 import org.hyperledger.besu.evm.v2.operation.SelfDestructOperationV2;
 import org.hyperledger.besu.evm.v2.operation.StaticCallOperationV2;
-import org.hyperledger.besu.evm.v2.operation.StopOperationV2;
 import org.hyperledger.besu.evm.v2.operation.SwapNOperationV2;
 import org.hyperledger.besu.evm.v2.operation.TLoadOperationV2;
 import org.hyperledger.besu.evm.v2.operation.TStoreOperationV2;
 
 import java.util.Optional;
+
+import org.apache.tuweni.bytes.Bytes;
 
 /**
  * The EVM v2 interpreter loop that checks stack depth and fixed gas from per-opcode tables ahead of
@@ -338,7 +338,7 @@ public final class TableLoop {
             case 0xf5 -> result = Create2OperationV2.staticOperation(frame, s, gasCalculator, evm);
             case 0xfa ->
                 result = StaticCallOperationV2.staticOperation(frame, s, gasCalculator, evm);
-            case 0x54 -> result = SLoadOperationV2.staticOperation(frame, s, gasCalculator);
+            case 0x54 -> r = SLoadOperationV2.exec(frame, s, top, pc, gas, gasCalculator);
             case 0x55 ->
                 result =
                     SStoreOperationV2.staticOperation(
@@ -347,23 +347,23 @@ public final class TableLoop {
             case 0x5d ->
                 r = enableCancun ? TStoreOperationV2.exec(frame, s, top, pc, gas) : INVALID;
             case 0x20 -> r = Keccak256OperationV2.exec(frame, s, top, pc, gas, gasCalculator);
-            case 0x31 -> result = BalanceOperationV2.staticOperation(frame, s, gasCalculator);
+            case 0x31 -> r = BalanceOperationV2.exec(frame, s, top, pc, gas, gasCalculator);
             case 0x35 -> r = CallDataLoadOperationV2.exec(frame, s, top, pc);
             case 0x37 -> r = CallDataCopyOperationV2.exec(frame, s, top, pc, gas, gasCalculator);
             case 0x39 -> r = CodeCopyOperationV2.exec(frame, s, top, pc, gas, gasCalculator);
-            case 0x3b -> result = ExtCodeSizeOperationV2.staticOperation(frame, s, gasCalculator);
-            case 0x3c -> result = ExtCodeCopyOperationV2.staticOperation(frame, s, gasCalculator);
+            case 0x3b -> r = ExtCodeSizeOperationV2.exec(frame, s, top, pc, gas, gasCalculator);
+            case 0x3c -> r = ExtCodeCopyOperationV2.exec(frame, s, top, pc, gas, gasCalculator);
             case 0x3e ->
                 r =
                     enableByzantium
                         ? ReturnDataCopyOperationV2.exec(frame, s, top, pc, gas, gasCalculator)
                         : INVALID;
             case 0x3f ->
-                result =
+                r =
                     enableConstantinople
-                        ? ExtCodeHashOperationV2.staticOperation(frame, s, gasCalculator)
-                        : InvalidOperation.invalidOperationResult(opcode);
-            case 0x40 -> result = BlockHashOperationV2.staticOperation(frame, s);
+                        ? ExtCodeHashOperationV2.exec(frame, s, top, pc, gas, gasCalculator)
+                        : INVALID;
+            case 0x40 -> r = BlockHashOperationV2.exec(frame, s, top, pc);
             case 0x47 ->
                 r = enableIstanbul ? SelfBalanceOperationV2.exec(frame, s, top, pc) : INVALID;
             case 0x49 -> r = enableCancun ? BlobHashOperationV2.exec(frame, s, top, pc) : INVALID;
@@ -445,24 +445,26 @@ public final class TableLoop {
             case 0x59 ->
                 r = LoopResult.ok(StackArithmetic.pushLong(s, top, frame.memoryByteSize()), pc + 1);
             case 0x5a -> r = LoopResult.ok(StackArithmetic.pushLong(s, top, gas), pc + 1);
-            case 0x00 -> result = StopOperationV2.staticOperation(frame);
+            case 0x00 -> {
+              frame.setState(MessageFrame.State.CODE_SUCCESS);
+              frame.setOutputData(Bytes.EMPTY);
+              r = LoopResult.ok(top, pc + 1);
+            }
             case 0x56 -> r = jump(frame, s, top - 1, top - 1);
             case 0x57 ->
                 r =
                     StackArithmetic.isZeroAt(s, top, 1)
                         ? LoopResult.ok(top - 2, pc + 1)
                         : jump(frame, s, top - 1, top - 2);
-            case 0xf3 -> result = ReturnOperationV2.staticOperation(frame, s, gasCalculator);
-            case 0xfd -> // REVERT (Byzantium+)
-                result =
+            case 0xf3 -> r = ReturnOperationV2.exec(frame, s, top, pc, gas, gasCalculator);
+            case 0xfd ->
+                r =
                     enableByzantium
-                        ? RevertOperationV2.staticOperation(frame, s, gasCalculator)
-                        : InvalidOperation.invalidOperationResult(opcode);
-            case 0xfe -> result = InvalidOperationV2.INVALID_RESULT;
-            case 0xa0, 0xa1, 0xa2, 0xa3, 0xa4 -> {
-              int topicCount = opcode - 0xa0;
-              result = LogOperationV2.staticOperation(frame, s, topicCount, gasCalculator);
-            }
+                        ? RevertOperationV2.exec(frame, s, top, pc, gas, gasCalculator)
+                        : INVALID;
+            case 0xfe -> r = INVALID;
+            case 0xa0, 0xa1, 0xa2, 0xa3, 0xa4 ->
+                r = LogOperationV2.exec(frame, s, top, pc, gas, opcode - 0xa0, gasCalculator);
             case 0xff ->
                 result =
                     SelfDestructOperationV2.staticOperation(
@@ -511,8 +513,9 @@ public final class TableLoop {
         return;
       }
       top = LoopResult.top(r);
-      pc = LoopResult.pc(r);
+      final int nextPc = LoopResult.pc(r);
       if (result != null) {
+        pc = nextPc;
         gas = frame.getRemainingGas();
         if (frame.getState() != MessageFrame.State.CODE_EXECUTING) {
           if (tracing) {
@@ -538,6 +541,22 @@ public final class TableLoop {
           }
           return;
         }
+        if ((flags[opcode] & LoopTables.STATE) != 0
+            && frame.getState() != MessageFrame.State.CODE_EXECUTING) {
+          // the frame is done or suspended; it keeps the pc of this operation, as the other loops
+          // leave it, and takes the gas and stack top the loop holds
+          frame.setGasRemaining(gas);
+          frame.setTopV2(top);
+          if (!tracing) {
+            frame.setPC(pc);
+          }
+          if (tracing) {
+            operationTracer.tracePostExecution(
+                frame, new OperationResult(fixedGas[opcode] + LoopResult.gas(r), null));
+          }
+          return;
+        }
+        pc = nextPc;
         if (tracing) {
           frame.setPC(pc);
           frame.setGasRemaining(gas);

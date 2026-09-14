@@ -1,0 +1,19 @@
+[
+  {
+    "match": ["org.hyperledger.besu.evm.EVM::runToHaltV2"],
+    "c2": {
+      "inline": [
+        "+org.hyperledger.besu.evm.v2.operation.*::staticOperation",
+        "+org.hyperledger.besu.evm.v2.operation.*::executeFixedCostOperation",
+        "+org.hyperledger.besu.evm.v2.StackArithmetic::*",
+        "+org.hyperledger.besu.evm.frame.MessageFrame::*",
+        "+org.hyperledger.besu.evm.operation.Operation$OperationResult::*",
+        "-org.hyperledger.besu.evm.v2.operation.*Call*::*",
+        "-org.hyperledger.besu.evm.v2.operation.*Create*::*",
+        "-org.hyperledger.besu.evm.v2.operation.SelfDestructOperationV2::*",
+        "-org.hyperledger.besu.evm.v2.operation.SStoreOperationV2::*",
+        "-org.hyperledger.besu.evm.v2.operation.LogOperationV2::*"
+      ]
+    }
+  }
+]
