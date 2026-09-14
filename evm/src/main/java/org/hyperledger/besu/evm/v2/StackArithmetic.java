@@ -946,22 +946,14 @@ public class StackArithmetic {
    */
   public static int pushFromBytes(
       final long[] s, final int top, final byte[] code, final int start, final int len) {
-    final int dst = top << 2;
-
-    if (start >= code.length) {
-      s[dst] = 0;
-      s[dst + 1] = 0;
-      s[dst + 2] = 0;
-      s[dst + 3] = 0;
-      return top + 1;
-    }
     final int end = start + len;
-
     if (end <= code.length && start >= 8) {
       // Each limb is one aligned-to-the-end read; the highest limb reads up to seven bytes that
       // precede the immediate and masks them off, so no limb is assembled byte by byte. The
       // opcode byte guarantees at least one byte before the immediate, and start >= 8 keeps the
-      // widest read in bounds.
+      // widest read in bounds. The rare cases live in their own method so this one stays small
+      // enough for the JIT to inline at a hot call site.
+      final int dst = top << 2;
       final int limbs = (len + 7) >> 3;
       final int rem = len - ((limbs - 1) << 3);
       final long mask = rem == 8 ? -1L : (1L << (rem << 3)) - 1L;
@@ -993,14 +985,24 @@ public class StackArithmetic {
       }
       return top + 1;
     }
+    return pushFromBytesSlow(s, top, code, start, len);
+  }
 
-    // Immediate within the first bytes of the code, or truncated by the end of the code: the
-    // missing bytes read as zero.
-    final int copyLen = Math.min(len, code.length - start);
+  /**
+   * An immediate within the first bytes of the code, or truncated by the end of the code: the
+   * missing bytes read as zero.
+   */
+  private static int pushFromBytesSlow(
+      final long[] s, final int top, final byte[] code, final int start, final int len) {
+    final int dst = top << 2;
     s[dst] = 0;
     s[dst + 1] = 0;
     s[dst + 2] = 0;
     s[dst + 3] = 0;
+    if (start >= code.length) {
+      return top + 1;
+    }
+    final int copyLen = Math.min(len, code.length - start);
     int bytePos = len - 1;
     for (int i = 0; i < copyLen; i++) {
       final int limbOffset = 3 - (bytePos >> 3);
