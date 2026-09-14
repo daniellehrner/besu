@@ -234,6 +234,8 @@ public class MessageFrame {
   private final Address recipient;
   private final Address contract;
   private final Bytes inputData;
+  // materialised on first CALLDATALOAD: reading longs through the Bytes interface goes byte by byte
+  private byte[] inputDataArray;
   private final Address sender;
   private final Wei value;
   private final Wei apparentValue;
@@ -1272,6 +1274,20 @@ public class MessageFrame {
    */
   public Bytes getInputData() {
     return inputData;
+  }
+
+  /**
+   * Returns the input data as a byte array that must not be modified.
+   *
+   * @return the input data
+   */
+  public byte[] getInputDataArray() {
+    byte[] array = inputDataArray;
+    if (array == null) {
+      array = inputData.toArrayUnsafe();
+      inputDataArray = array;
+    }
+    return array;
   }
 
   /**
