@@ -21,6 +21,7 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.VersionedHash;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
+import org.hyperledger.besu.evm.internal.WarmAddressSet;
 import org.hyperledger.besu.evm.internal.WarmStorageTable;
 
 import java.util.ArrayDeque;
@@ -43,7 +44,7 @@ public class TxValues {
 
   private final BlockHashLookup blockHashLookup;
   private final int maxStackSize;
-  private final UndoSet<Address> warmedUpAddresses;
+  private final WarmAddressSet warmedUpAddresses;
   private final WarmStorageTable warmedUpStorage;
   private final Address originator;
   private final Wei gasPrice;
@@ -62,7 +63,7 @@ public class TxValues {
   TxValues(
       final BlockHashLookup blockHashLookup,
       final int maxStackSize,
-      final UndoSet<Address> warmedUpAddresses,
+      final WarmAddressSet warmedUpAddresses,
       final WarmStorageTable warmedUpStorage,
       final Address originator,
       final Wei gasPrice,
@@ -116,7 +117,7 @@ public class TxValues {
   public static TxValues forTransaction(
       final BlockHashLookup blockHashLookup,
       final int maxStackSize,
-      final UndoSet<Address> warmedUpAddresses,
+      final WarmAddressSet warmedUpAddresses,
       final Address originator,
       final Wei gasPrice,
       final Wei blobGasPrice,
@@ -127,8 +128,8 @@ public class TxValues {
     // TreeBasedTable/TreeSet (sorted by each key's natural ordering) are used instead of
     // HashBasedTable/HashSet: Address and Bytes32 hash with a grindable base-31 hash and never
     // declare Comparable<Self> directly, so HashMap/HashBasedTable bucket treeification never
-    // engages, letting an attacker force O(n) bucket walks per insert. The warm-slot table hashes
-    // with secret constants instead, which is what lets it be flat.
+    // engages, letting an attacker force O(n) bucket walks per insert. The warm address and slot
+    // tables hash with secret constants instead, which is what lets them be flat.
     return new TxValues(
         blockHashLookup,
         maxStackSize,
@@ -188,7 +189,7 @@ public class TxValues {
    *
    * @return the warmed-up addresses
    */
-  public UndoSet<Address> warmedUpAddresses() {
+  public WarmAddressSet warmedUpAddresses() {
     return warmedUpAddresses;
   }
 

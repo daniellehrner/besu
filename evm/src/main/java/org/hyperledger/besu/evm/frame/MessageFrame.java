@@ -18,7 +18,6 @@ import static com.google.common.base.Preconditions.checkState;
 import static java.util.Collections.emptySet;
 import static org.hyperledger.besu.evm.internal.Words.clampedAdd;
 
-import org.hyperledger.besu.collections.undo.UndoSet;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Log;
 import org.hyperledger.besu.datatypes.VersionedHash;
@@ -29,6 +28,7 @@ import org.hyperledger.besu.evm.internal.MemoryEntry;
 import org.hyperledger.besu.evm.internal.OperandStack;
 import org.hyperledger.besu.evm.internal.StorageEntry;
 import org.hyperledger.besu.evm.internal.UnderflowException;
+import org.hyperledger.besu.evm.internal.WarmAddressSet;
 import org.hyperledger.besu.evm.internal.WarmStorageTable;
 import org.hyperledger.besu.evm.operation.Operation;
 import org.hyperledger.besu.evm.v2.StackPool;
@@ -42,7 +42,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.TreeSet;
 import java.util.function.Consumer;
 
 import com.google.common.collect.HashMultimap;
@@ -1197,7 +1196,7 @@ public class MessageFrame {
    * @return true if the address was already warmed up
    */
   public boolean warmUpAddress(final Address address) {
-    return !txValues.warmedUpAddresses().add(address);
+    return txValues.warmedUpAddresses().warmUp(address);
   }
 
   /**
@@ -1976,17 +1975,13 @@ public class MessageFrame {
       TxValues newTxValues;
 
       if (parentMessageFrame == null) {
-        // A TreeSet (sorted by Address's natural ordering) is used instead of a HashSet:
-        // Address's hashCode() is a grindable base-31 hash with no direct Comparable<Address>
-        // declaration, so HashMap/HashSet bucket treeification never engages, letting an
-        // attacker force O(n) bucket walks per insert.
-        TreeSet<Address> warmedUpAddresses = new TreeSet<>();
-        warmedUpAddresses.add(contract);
+        final WarmAddressSet warmedUpAddresses = new WarmAddressSet();
+        warmedUpAddresses.warmUp(contract);
         newTxValues =
             TxValues.forTransaction(
                 blockHashLookup,
                 maxStackSize,
-                UndoSet.of(warmedUpAddresses),
+                warmedUpAddresses,
                 originator,
                 gasPrice,
                 blobGasPrice,
