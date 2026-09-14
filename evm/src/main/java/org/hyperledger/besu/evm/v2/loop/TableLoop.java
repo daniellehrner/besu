@@ -147,10 +147,7 @@ public final class TableLoop {
   public void run(final MessageFrame frame, final OperationTracer operationTracer) {
     final byte[] code = frame.getCode().getBytes().toArrayUnsafe();
     final long[] s = frame.stackDataV2();
-    final byte[] stackIn = tables.stackIn;
-    final byte[] stackOut = tables.stackOut;
-    final long[] fixedGas = tables.fixedGas;
-    final byte[] flags = tables.flags;
+    final long[] meta = tables.meta;
     final int maxStack = frame.stackMaxSizeV2();
     final boolean tracing = operationTracer != OperationTracer.NO_TRACING;
     frame.setRecordUpdatesForTracer(tracing);
@@ -162,7 +159,11 @@ public final class TableLoop {
     int top = frame.stackTopV2();
     while (true) {
       final int opcode = pc < code.length ? code[pc] & 0xff : 0;
-      final boolean nativeOp = (flags[opcode] & LoopTables.NATIVE) != 0;
+      final long m = meta[opcode];
+      final int stackIn = (int) m & 0xff;
+      final int flags = (int) (m >>> 16) & 0xff;
+      final long fixedGas = m >>> 24;
+      final boolean nativeOp = (flags & LoopTables.NATIVE) != 0;
       long r;
       OperationResult result = null;
       if (tracing) {
@@ -172,11 +173,11 @@ public final class TableLoop {
         frame.setCurrentOperation(pc < code.length ? operationArray[opcode] : endOfScriptStop);
         operationTracer.tracePreExecution(frame);
       }
-      if (top < stackIn[opcode]) {
+      if (top < stackIn) {
         r = LoopResult.halt(DefaultExceptionalHaltReason.INSUFFICIENT_STACK_ITEMS);
-      } else if (top - stackIn[opcode] + stackOut[opcode] > maxStack) {
+      } else if (top - stackIn + ((int) (m >>> 8) & 0xff) > maxStack) {
         r = LoopResult.halt(DefaultExceptionalHaltReason.TOO_MANY_STACK_ITEMS);
-      } else if (nativeOp && (gas -= fixedGas[opcode]) < 0) {
+      } else if (nativeOp && (gas -= fixedGas) < 0) {
         // the frame keeps the overdrawn balance, as it does after any other out-of-gas halt
         r = LoopResult.halt(DefaultExceptionalHaltReason.INSUFFICIENT_GAS);
       } else {
@@ -541,7 +542,7 @@ public final class TableLoop {
           }
           return;
         }
-        if ((flags[opcode] & LoopTables.STATE) != 0
+        if ((flags & LoopTables.STATE) != 0
             && frame.getState() != MessageFrame.State.CODE_EXECUTING) {
           // the frame is done or suspended; it keeps the pc of this operation, as the other loops
           // leave it, and takes the gas and stack top the loop holds
@@ -552,7 +553,7 @@ public final class TableLoop {
           }
           if (tracing) {
             operationTracer.tracePostExecution(
-                frame, new OperationResult(fixedGas[opcode] + LoopResult.gas(r), null));
+                frame, new OperationResult(fixedGas + LoopResult.gas(r), null));
           }
           return;
         }
@@ -562,7 +563,7 @@ public final class TableLoop {
           frame.setGasRemaining(gas);
           frame.setTopV2(top);
           operationTracer.tracePostExecution(
-              frame, new OperationResult(fixedGas[opcode] + LoopResult.gas(r), null));
+              frame, new OperationResult(fixedGas + LoopResult.gas(r), null));
         }
       }
     }

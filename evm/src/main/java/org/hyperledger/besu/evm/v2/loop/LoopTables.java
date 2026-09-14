@@ -42,6 +42,12 @@ public final class LoopTables {
   final byte[] flags = new byte[256];
 
   /**
+   * The four tables packed into one word per opcode, so the loop's prologue is a single load: bits
+   * 0-7 stack in, 8-15 stack out, 16-23 flags, 24-63 fixed gas.
+   */
+  final long[] meta = new long[256];
+
+  /**
    * Builds the tables for one fork.
    *
    * @param operations the operations the fork has
@@ -206,6 +212,14 @@ public final class LoopTables {
         flags[opcode] = 0;
         fixedGas[opcode] = 0L;
       }
+    }
+
+    for (int opcode = 0; opcode < 256; opcode++) {
+      meta[opcode] =
+          (stackIn[opcode] & 0xffL)
+              | ((stackOut[opcode] & 0xffL) << 8)
+              | ((flags[opcode] & 0xffL) << 16)
+              | (fixedGas[opcode] << 24);
     }
   }
 
