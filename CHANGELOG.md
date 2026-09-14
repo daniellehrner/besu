@@ -41,6 +41,7 @@
 - Log and export a per-phase timing breakdown of every block import and fork choice update on the engine API. Each `Import #N` line lists the wall time of header validation, world state lookup, speculative dispatch, reused and re-executed transactions, state root, trie log, commit, body validation and block storage, together with the importing thread's CPU time and the GC time that elapsed, and the same figures are exported as the `besu_block_processing_import_phase_seconds` histogram labelled by phase.
 - Trie node preloads for state root calculation are handed to the pool in batches instead of one task per touched slot, and frames run on the experimental EVM v2 no longer allocate the standard interpreter's operand stack or a fresh v2 stack per transaction.
 - Keccak-256 hashing reuses one digest per thread instead of cloning one per call, EIP-2929 warm addresses are tracked in a flat hashed set instead of a sorted set, and CALLDATALOAD on the experimental EVM v2 reads its word from a byte array kept on the frame.
+- On the experimental EVM v2, MLOAD and MSTORE move words directly between the stack and the memory array, KECCAK256 hashes its memory range in place, PUSH decodes its immediate with aligned reads, and memory and storage updates are recorded for tracers only when a tracer is attached.
 
 ## 26.8.1
 
