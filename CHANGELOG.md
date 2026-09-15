@@ -43,6 +43,7 @@
 - Implement native `4byteTracer` execution tracing, reducing memory use for `debug_trace*`. [#11271](https://github.com/besu-eth/besu/pull/11271)
 - Add `flatCallTracer` for `debug_trace*` methods, matching geth output. [#11273](https://github.com/besu-eth/besu/pull/11273)
 - Upgrade the stable reference tests to `tests@v20.0.2`, now published from the `ethereum/execution-specs` repository. [#11175](https://github.com/besu-eth/besu/pull/11175)
+- `engine_newPayload` stores the trie log of a block in the same database transaction as the block, so an interruption can no longer leave a trie log without its block. [#11302](https://github.com/besu-eth/besu/pull/11302)
 
 ## 26.8.1
 
