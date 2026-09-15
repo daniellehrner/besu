@@ -48,6 +48,7 @@ import java.util.Optional;
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 
 public class MainnetBlockContextProcessorTest {
@@ -62,7 +63,7 @@ public class MainnetBlockContextProcessorTest {
   public void setUp() {
     mockBlockHeader = mock(ProcessableBlockHeader.class);
     mockTransactionProcessor = mock(MainnetTransactionProcessor.class);
-    mockMessageCallProcessor = mock(MessageCallProcessor.class);
+    mockMessageCallProcessor = mock(MessageCallProcessor.class, Answers.RETURNS_DEEP_STUBS);
     mockBlockHashLookup = mock(BlockHashLookup.class);
     when(mockTransactionProcessor.getMessageProcessor(any())).thenReturn(mockMessageCallProcessor);
     when(mockMessageCallProcessor.getOrCreateCachedJumpDest(any(), any()))
