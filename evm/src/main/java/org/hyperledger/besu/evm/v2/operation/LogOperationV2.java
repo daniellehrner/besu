@@ -19,11 +19,9 @@ import org.hyperledger.besu.datatypes.Log;
 import org.hyperledger.besu.datatypes.LogTopic;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
-import org.hyperledger.besu.evm.frame.ExceptionalHaltReason.DefaultExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
-import org.hyperledger.besu.evm.v2.loop.LoopResult;
 
 import com.google.common.collect.ImmutableList;
 import org.apache.tuweni.bytes.Bytes;
@@ -96,47 +94,5 @@ public class LogOperationV2 extends AbstractOperationV2 {
 
     frame.addLog(new Log(address, data, builder.build()));
     return new OperationResult(cost, null);
-  }
-
-  /**
-   * Executes the operation on the table loop's contract: the loop has checked the stack and owns
-   * the program counter, the gas and the stack top.
-   *
-   * @param frame the frame
-   * @param s the stack data
-   * @param top the stack top
-   * @param pc the program counter of this operation
-   * @param gas the gas remaining before this operation
-   * @param numTopics the number of topics
-   * @param gasCalculator the gas calculator
-   * @return the packed result
-   */
-  public static long exec(
-      final MessageFrame frame,
-      final long[] s,
-      final int top,
-      final int pc,
-      final long gas,
-      final int numTopics,
-      final GasCalculator gasCalculator) {
-    final long dataLocation = StackArithmetic.clampedToLong(s, top, 0);
-    final long numBytes = StackArithmetic.clampedToLong(s, top, 1);
-    if (frame.isStatic()) {
-      return LoopResult.halt(DefaultExceptionalHaltReason.ILLEGAL_STATE_CHANGE);
-    }
-    final long cost = gasCalculator.logOperationGasCost(frame, dataLocation, numBytes, numTopics);
-    if (gas < cost) {
-      return LoopResult.halt(DefaultExceptionalHaltReason.INSUFFICIENT_GAS);
-    }
-    final Bytes data = frame.readMemory(dataLocation, numBytes);
-    final ImmutableList.Builder<LogTopic> builder =
-        ImmutableList.builderWithExpectedSize(numTopics);
-    for (int i = 0; i < numTopics; i++) {
-      final byte[] buf = new byte[32];
-      StackArithmetic.toBytesAt(s, top, 2 + i, buf);
-      builder.add(LogTopic.create(Bytes32.wrap(buf)));
-    }
-    frame.addLog(new Log(frame.getRecipientAddress(), data, builder.build()));
-    return LoopResult.ok(top - 2 - numTopics, pc + 1, cost);
   }
 }

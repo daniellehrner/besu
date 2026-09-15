@@ -75,16 +75,13 @@ public class ReferenceTestProtocolSchedules {
 
   public static ReferenceTestProtocolSchedules create() {
     final boolean evmV2 = Boolean.getBoolean("test.evm.v2");
-    final EvmConfiguration.EvmV2Loop loop =
-        EvmConfiguration.EvmV2Loop.valueOf(System.getProperty("test.evm.v2.loop", "SWITCH"));
     final EvmConfiguration evmConfiguration =
         evmV2
             ? new EvmConfiguration(
                 EvmConfiguration.DEFAULT.jumpDestCacheWeightKB(),
                 EvmConfiguration.DEFAULT.worldUpdaterMode(),
                 EvmConfiguration.DEFAULT.enableOptimizedOpcodes(),
-                true,
-                loop)
+                true)
             : EvmConfiguration.DEFAULT;
     return create(new StubGenesisConfigOptions(), evmConfiguration);
   }

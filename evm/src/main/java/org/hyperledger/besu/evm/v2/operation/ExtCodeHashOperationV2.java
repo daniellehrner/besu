@@ -18,11 +18,9 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
-import org.hyperledger.besu.evm.frame.ExceptionalHaltReason.DefaultExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
-import org.hyperledger.besu.evm.v2.loop.LoopResult;
 
 /**
  * EVM v2 EXTCODEHASH operation (0x3F, Constantinople+).
@@ -95,45 +93,5 @@ public class ExtCodeHashOperationV2 extends AbstractOperationV2 {
       StackArithmetic.fromBytesAt(s, top, 0, hashBytes, 0, hashBytes.length);
     }
     return new OperationResult(cost, null);
-  }
-
-  /**
-   * Executes the operation on the table loop's contract: the loop has checked the stack and owns
-   * the program counter, the gas and the stack top.
-   *
-   * @param frame the frame
-   * @param s the stack data
-   * @param top the stack top
-   * @param pc the program counter of this operation
-   * @param gas the gas remaining before this operation
-   * @param gasCalculator the gas calculator
-   * @return the packed result
-   */
-  public static long exec(
-      final MessageFrame frame,
-      final long[] s,
-      final int top,
-      final int pc,
-      final long gas,
-      final GasCalculator gasCalculator) {
-    final Address address = StackArithmetic.toAddressAt(s, top, 0);
-    final boolean accountIsWarm =
-        frame.warmUpAddress(address) || gasCalculator.isPrecompile(address);
-    final long cost =
-        gasCalculator.extCodeHashOperationGasCost()
-            + (accountIsWarm
-                ? gasCalculator.getWarmStorageReadCost()
-                : gasCalculator.getColdAccountAccessCost());
-    if (gas < cost) {
-      return LoopResult.halt(DefaultExceptionalHaltReason.INSUFFICIENT_GAS);
-    }
-    final Account account = getAccount(address, frame);
-    if (account == null || account.isEmpty()) {
-      StackArithmetic.putAt(s, top, 0, 0L, 0L, 0L, 0L);
-    } else {
-      final byte[] hashBytes = account.getCodeHash().getBytes().toArrayUnsafe();
-      StackArithmetic.fromBytesAt(s, top, 0, hashBytes, 0, hashBytes.length);
-    }
-    return LoopResult.ok(top, pc + 1, cost);
   }
 }

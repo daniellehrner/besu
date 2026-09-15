@@ -322,25 +322,33 @@ public class StackArithmetic {
    * @return the new top index
    */
   public static int add(final long[] s, final int top) {
-    // one carry chain over the four limbs, kept small enough for the JIT to inline it
     final int a = (top - 1) << 2;
     final int b = (top - 2) << 2;
-    final long z0 = s[a + 3] + s[b + 3];
-    long c = carry(s[a + 3], s[b + 3], z0);
-    final long z1 = s[a + 2] + s[b + 2] + c;
-    c = carry(s[a + 2], s[b + 2], z1);
-    final long z2 = s[a + 1] + s[b + 1] + c;
-    c = carry(s[a + 1], s[b + 1], z2);
-    s[b] = s[a] + s[b] + c;
+    // Fast path: both values fit in a single limb (common case)
+    if ((s[a] | s[a + 1] | s[a + 2] | s[b] | s[b + 1] | s[b + 2]) == 0) {
+      long z = s[a + 3] + s[b + 3];
+      s[b + 2] = ((s[a + 3] & s[b + 3]) | ((s[a + 3] | s[b + 3]) & ~z)) >>> 63;
+      s[b + 3] = z;
+      return top - 1;
+    }
+    long a0 = s[a + 3], a1 = s[a + 2], a2 = s[a + 1], a3 = s[a];
+    long b0 = s[b + 3], b1 = s[b + 2], b2 = s[b + 1], b3 = s[b];
+    long z0 = a0 + b0;
+    long c = ((a0 & b0) | ((a0 | b0) & ~z0)) >>> 63;
+    long t1 = a1 + b1;
+    long c1 = ((a1 & b1) | ((a1 | b1) & ~t1)) >>> 63;
+    long z1 = t1 + c;
+    c = c1 | (((t1 & c) | ((t1 | c) & ~z1)) >>> 63);
+    long t2 = a2 + b2;
+    long c2 = ((a2 & b2) | ((a2 | b2) & ~t2)) >>> 63;
+    long z2 = t2 + c;
+    c = c2 | (((t2 & c) | ((t2 | c) & ~z2)) >>> 63);
+    long z3 = a3 + b3 + c;
+    s[b] = z3;
     s[b + 1] = z2;
     s[b + 2] = z1;
     s[b + 3] = z0;
     return top - 1;
-  }
-
-  /** The carry out of {@code z = x + y + carryIn}. */
-  private static long carry(final long x, final long y, final long z) {
-    return ((x & y) | ((x | y) & ~z)) >>> 63;
   }
 
   /**
@@ -351,25 +359,38 @@ public class StackArithmetic {
    * @return the new top index
    */
   public static int sub(final long[] s, final int top) {
-    // top minus the item below it, one borrow chain over the four limbs
-    final int a = (top - 1) << 2;
-    final int b = (top - 2) << 2;
-    final long z0 = s[a + 3] - s[b + 3];
-    long w = borrow(s[a + 3], s[b + 3], z0);
-    final long z1 = s[a + 2] - s[b + 2] - w;
-    w = borrow(s[a + 2], s[b + 2], z1);
-    final long z2 = s[a + 1] - s[b + 1] - w;
-    w = borrow(s[a + 1], s[b + 1], z2);
-    s[b] = s[a] - s[b] - w;
+    final int a = (top - 1) << 2; // first operand (top)
+    final int b = (top - 2) << 2; // second operand
+    // Fast path: both values fit in a single limb (common case)
+    if ((s[a] | s[a + 1] | s[a + 2] | s[b] | s[b + 1] | s[b + 2]) == 0) {
+      long z = s[a + 3] - s[b + 3];
+      // borrow is 0 or 1; negate to get 0 or -1L (0xFFFFFFFFFFFFFFFF) for upper limbs
+      long fill = -(((~s[a + 3] & s[b + 3]) | (~(s[a + 3] ^ s[b + 3]) & z)) >>> 63);
+      s[b] = fill;
+      s[b + 1] = fill;
+      s[b + 2] = fill;
+      s[b + 3] = z;
+      return top - 1;
+    }
+    long a0 = s[a + 3], a1 = s[a + 2], a2 = s[a + 1], a3 = s[a];
+    long b0 = s[b + 3], b1 = s[b + 2], b2 = s[b + 1], b3 = s[b];
+    // a - b with branchless borrow chain
+    long z0 = a0 - b0;
+    long w = ((~a0 & b0) | (~(a0 ^ b0) & z0)) >>> 63;
+    long t1 = a1 - b1;
+    long w1 = ((~a1 & b1) | (~(a1 ^ b1) & t1)) >>> 63;
+    long z1 = t1 - w;
+    w = w1 | (((~t1 & w) | (~(t1 ^ w) & z1)) >>> 63);
+    long t2 = a2 - b2;
+    long w2 = ((~a2 & b2) | (~(a2 ^ b2) & t2)) >>> 63;
+    long z2 = t2 - w;
+    w = w2 | (((~t2 & w) | (~(t2 ^ w) & z2)) >>> 63);
+    long z3 = a3 - b3 - w;
+    s[b] = z3;
     s[b + 1] = z2;
     s[b + 2] = z1;
     s[b + 3] = z0;
     return top - 1;
-  }
-
-  /** The borrow out of {@code z = x - y - borrowIn}. */
-  private static long borrow(final long x, final long y, final long z) {
-    return ((~x & y) | (~(x ^ y) & z)) >>> 63;
   }
 
   /**

@@ -18,7 +18,6 @@ import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
-import org.hyperledger.besu.evm.v2.loop.LoopResult;
 
 import org.apache.tuweni.bytes.Bytes32;
 
@@ -76,26 +75,5 @@ public class TLoadOperationV2 extends AbstractFixedCostOperationV2 {
     StackArithmetic.fromBytesAt(s, top, 0, result, 0, result.length);
 
     return TLOAD_SUCCESS;
-  }
-
-  /**
-   * Executes the operation on the table loop's contract: the loop has checked the stack and charged
-   * the fixed gas, and owns the program counter and the stack top.
-   *
-   * @param frame the frame
-   * @param s the stack data
-   * @param top the stack top
-   * @param pc the program counter of this operation
-   * @return the packed result
-   */
-  public static long exec(final MessageFrame frame, final long[] s, final int top, final int pc) {
-    final byte[] keyBytes = new byte[32];
-    StackArithmetic.toBytesAt(s, top, 0, keyBytes);
-    final byte[] result =
-        frame
-            .getTransientStorageValue(frame.getRecipientAddress(), Bytes32.wrap(keyBytes))
-            .toArrayUnsafe();
-    StackArithmetic.fromBytesAt(s, top, 0, result, 0, result.length);
-    return LoopResult.ok(top, pc + 1);
   }
 }

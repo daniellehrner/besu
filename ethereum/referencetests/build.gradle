@@ -377,7 +377,6 @@ tasks.register('referenceTests', Test) {
   useJUnitPlatform()
   for (String name : [
       'test.evm.v2',
-      'test.evm.v2.loop',
       'test.ethereum.state.eips',
       'test.ethereum.blockchain.eips',
       'test.ethereum.include'
@@ -400,7 +399,6 @@ tasks.register('referenceTestsDevnet', Test) {
   useJUnitPlatform()
   for (String name : [
       'test.evm.v2',
-      'test.evm.v2.loop',
       'test.ethereum.state.eips',
       'test.ethereum.blockchain.eips',
       'test.ethereum.include'

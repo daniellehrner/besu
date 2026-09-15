@@ -17,11 +17,9 @@ package org.hyperledger.besu.evm.v2.operation;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
-import org.hyperledger.besu.evm.frame.ExceptionalHaltReason.DefaultExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
-import org.hyperledger.besu.evm.v2.loop.LoopResult;
 
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
@@ -121,48 +119,5 @@ public class SLoadOperationV2 extends AbstractOperationV2 {
     StackArithmetic.fromBytesAt(s, top, 0, valueBytes, 0, valueBytes.length);
 
     return slotIsWarm ? warmSuccess : coldSuccess;
-  }
-
-  /**
-   * Executes the operation on the table loop's contract: the loop has checked the stack and owns
-   * the program counter, the gas and the stack top.
-   *
-   * @param frame the frame
-   * @param s the stack data
-   * @param top the stack top
-   * @param pc the program counter of this operation
-   * @param gas the gas remaining before this operation
-   * @param gasCalculator the gas calculator
-   * @return the packed result
-   */
-  public static long exec(
-      final MessageFrame frame,
-      final long[] s,
-      final int top,
-      final int pc,
-      final long gas,
-      final GasCalculator gasCalculator) {
-    final byte[] keyBytes = new byte[32];
-    StackArithmetic.toBytesAt(s, top, 0, keyBytes);
-    final Bytes32 keyBytes32 = Bytes32.wrap(keyBytes);
-    final boolean slotIsWarm = frame.warmUpStorage(frame.getRecipientAddress(), keyBytes32);
-    final long cost =
-        gasCalculator.getSloadOperationGasCost()
-            + (slotIsWarm
-                ? gasCalculator.getWarmStorageReadCost()
-                : gasCalculator.getColdSloadCost());
-    if (gas < cost) {
-      return LoopResult.halt(DefaultExceptionalHaltReason.INSUFFICIENT_GAS);
-    }
-    final UInt256 key = UInt256.fromBytes(keyBytes32);
-    final Account account = frame.getWorldUpdater().get(frame.getRecipientAddress());
-    frame.getEip7928AccessList().ifPresent(t -> t.addTouchedAccount(frame.getRecipientAddress()));
-    final UInt256 value = account == null ? UInt256.ZERO : account.getStorageValue(key);
-    frame
-        .getEip7928AccessList()
-        .ifPresent(t -> t.addSlotAccessForAccount(frame.getRecipientAddress(), key));
-    final byte[] valueBytes = value.toArrayUnsafe();
-    StackArithmetic.fromBytesAt(s, top, 0, valueBytes, 0, valueBytes.length);
-    return LoopResult.ok(top, pc + 1, cost);
   }
 }

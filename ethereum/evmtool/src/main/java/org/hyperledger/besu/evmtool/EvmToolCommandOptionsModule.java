@@ -151,25 +151,11 @@ public class EvmToolCommandOptionsModule {
       arity = "1")
   private boolean enableEvmV2 = false;
 
-  @CommandLine.Option(
-      names = {"--Xevm-v2-loop"},
-      description =
-          "Which interpreter loop the experimental EVM v2 runs: SWITCH or TABLE (default: SWITCH)",
-      fallbackValue = "SWITCH",
-      defaultValue = "SWITCH",
-      hidden = true,
-      arity = "1")
-  private EvmConfiguration.EvmV2Loop evmV2Loop = EvmConfiguration.EvmV2Loop.SWITCH;
-
   @Provides
   @Singleton
   EvmConfiguration provideEvmConfiguration() {
     return new EvmConfiguration(
-        jumpDestCacheWeightKilobytes,
-        worldstateUpdateMode,
-        enableOptimizedOpcodes,
-        enableEvmV2,
-        evmV2Loop);
+        jumpDestCacheWeightKilobytes, worldstateUpdateMode, enableOptimizedOpcodes, enableEvmV2);
   }
 
   /**

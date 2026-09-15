@@ -67,7 +67,6 @@ public class ConfigurationOverviewBuilder {
   private EvmConfiguration.WorldUpdaterMode worldStateUpdateMode;
   private boolean enabledOpcodeOptimizations;
   private boolean evmV2 = false;
-  private String evmV2Loop = "SWITCH";
   private Map<String, String> environment;
   private BesuPluginContextImpl besuPluginContext;
   private boolean isHistoryExpiryPruneEnabled = false;
@@ -337,17 +336,6 @@ public class ConfigurationOverviewBuilder {
   }
 
   /**
-   * Sets which loop the experimental EVM v2 runs.
-   *
-   * @param evmV2Loop the loop name
-   * @return the builder
-   */
-  public ConfigurationOverviewBuilder setEvmV2Loop(final String evmV2Loop) {
-    this.evmV2Loop = evmV2Loop;
-    return this;
-  }
-
-  /**
    * Sets the engine jwt file path.
    *
    * @param engineJwtFilePath the engine apis
@@ -581,7 +569,7 @@ public class ConfigurationOverviewBuilder {
     lines.add("Using " + worldStateUpdateMode + " worldstate update mode");
 
     if (evmV2) {
-      lines.add("Experimental EVM v2 (long[] stack) enabled, " + evmV2Loop + " loop");
+      lines.add("Experimental EVM v2 (long[] stack) enabled");
     } else {
       lines.add("Opcode optimizations " + (enabledOpcodeOptimizations ? "enabled" : "disabled"));
     }

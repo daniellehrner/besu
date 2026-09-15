@@ -19,7 +19,6 @@ import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
-import org.hyperledger.besu.evm.v2.loop.LoopResult;
 
 /**
  * EVM v2 SELFBALANCE operation (0x47, Istanbul+).
@@ -60,24 +59,5 @@ public class SelfBalanceOperationV2 extends AbstractFixedCostOperationV2 {
       frame.setTopV2(StackArithmetic.pushWei(s, top, account.getBalance()));
     }
     return new Operation.OperationResult(5, null);
-  }
-
-  /**
-   * Executes the operation on the table loop's contract: the loop has checked the stack and charged
-   * the fixed gas, and owns the program counter and the stack top.
-   *
-   * @param frame the frame
-   * @param s the stack data
-   * @param top the stack top
-   * @param pc the program counter of this operation
-   * @return the packed result
-   */
-  public static long exec(final MessageFrame frame, final long[] s, final int top, final int pc) {
-    final Account account = getAccount(frame.getRecipientAddress(), frame);
-    final int newTop =
-        account == null
-            ? StackArithmetic.pushZero(s, top)
-            : StackArithmetic.pushWei(s, top, account.getBalance());
-    return LoopResult.ok(newTop, pc + 1);
   }
 }
