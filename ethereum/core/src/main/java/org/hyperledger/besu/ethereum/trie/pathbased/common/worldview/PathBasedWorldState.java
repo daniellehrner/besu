@@ -30,6 +30,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedLaye
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedSnapshotWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.PathBasedWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.storage.StorageSubscriber;
+import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.PendingTrieLog;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.common.worldview.cache.PathBasedWorldStateCacheManager;
@@ -94,6 +95,9 @@ public abstract class PathBasedWorldState
    * - All modifications are temporary and will be lost once the world state is discarded.
    */
   protected boolean isStorageFrozen;
+
+  private boolean deferTrieLog;
+  private Optional<PendingTrieLog> pendingTrieLog = Optional.empty();
 
   protected PathBasedWorldState(
       final PathBasedWorldStateKeyValueStorage worldStateKeyValueStorage,
@@ -176,6 +180,26 @@ public abstract class PathBasedWorldState
     worldStateRootHash = blockHeader.getStateRoot();
   }
 
+  /**
+   * Keeps the trie log of persisted blocks pending instead of storing it, so the caller can store
+   * it together with the block. Only for world states that do not modify the head, whose state
+   * commit relies on the trie log being stored first.
+   */
+  public void deferTrieLog() {
+    this.deferTrieLog = true;
+  }
+
+  /**
+   * Takes the trie log that the last persisted block left pending.
+   *
+   * @return the pending trie log, empty if there is none
+   */
+  public Optional<PendingTrieLog> takePendingTrieLog() {
+    final Optional<PendingTrieLog> taken = pendingTrieLog;
+    pendingTrieLog = Optional.empty();
+    return taken;
+  }
+
   @Override
   public PathBasedWorldStateKeyValueStorage getWorldStateStorage() {
     return worldStateKeyValueStorage;
@@ -246,7 +270,10 @@ public abstract class PathBasedWorldState
               Bytes.ofUnsignedLong(blockHeader == null ? 0L : blockHeader.getNumber())
                   .toArrayUnsafe());
 
-      if (blockHeader != null) {
+      if (blockHeader != null && deferTrieLog) {
+        pendingTrieLog =
+            trieLogManager.prepareTrieLogForBlock(accumulator, calculatedRootHash, blockHeader);
+      } else if (blockHeader != null) {
         // commit the trielog transaction ahead of the state, in case of an abnormal shutdown:
         trieLogManager.saveTrieLog(accumulator, calculatedRootHash, blockHeader, this);
       }
@@ -284,6 +311,7 @@ public abstract class PathBasedWorldState
         stateUpdater.rollback();
       }
       accumulator.reset();
+      pendingTrieLog = Optional.empty();
       // the commit may have landed before the failure
       if (commitStarted && isPersistedInStorage(blockHeader, calculatedRootHash)) {
         worldStateBlockHash = blockHeader == null ? null : blockHeader.getBlockHash();

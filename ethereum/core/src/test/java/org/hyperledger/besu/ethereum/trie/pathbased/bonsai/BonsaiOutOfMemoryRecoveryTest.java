@@ -25,6 +25,7 @@ import static org.mockito.Mockito.spy;
 import org.hyperledger.besu.config.GenesisAccount;
 import org.hyperledger.besu.config.GenesisConfig;
 import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.BlockProcessingResult;
 import org.hyperledger.besu.ethereum.ProtocolContext;
@@ -53,6 +54,7 @@ import java.util.Optional;
 import java.util.function.BiConsumer;
 import java.util.function.BiPredicate;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
@@ -110,9 +112,9 @@ public class BonsaiOutOfMemoryRecoveryTest extends AbstractIsolationTests {
 
   /** Faults while a block arrives through engine_newPayload and engine_forkchoiceUpdated. */
   enum EngineFault {
-    /** Trie log of the executed block is being written, before it is committed. */
+    /** Block and trie log committed, trie log observers not yet notified. */
     NEW_PAYLOAD_TRIE_LOG_SAVE(Phase.NEW_PAYLOAD, Location.TRIE_LOG_SAVE, 0),
-    /** Trie log committed, block not yet stored. */
+    /** Block executed, neither the block nor its trie log committed. */
     NEW_PAYLOAD_BLOCK_COMMIT(Phase.NEW_PAYLOAD, Location.BLOCKCHAIN_COMMIT, 0),
     /** Head world state partially rolled forward to the new head. */
     FORKCHOICE_ROLL_FORWARD(Phase.FORKCHOICE_UPDATED, Location.ACCOUNT_READ, 1),
@@ -159,7 +161,8 @@ public class BonsaiOutOfMemoryRecoveryTest extends AbstractIsolationTests {
   @EnumSource(ImportFault.class)
   public void restartAfterOutOfMemoryDuringBlockImportRecoversNode(final ImportFault fault) {
     faults.arm(Phase.IMPORT, fault.location, FAULTY_BLOCK, fault.skippedCalls);
-    assertRestartRecoversNode(this::importBlock, this::tryImport);
+    // this path stores the trie log ahead of the block, so it may exist without the block
+    assertRestartRecoversNode(this::importBlock, this::tryImport, node -> {});
   }
 
   @ParameterizedTest
@@ -176,7 +179,8 @@ public class BonsaiOutOfMemoryRecoveryTest extends AbstractIsolationTests {
     assertRestartRecoversNode(
         this::engineImport,
         (node, block) ->
-            tryNewPayload(node, block) && tryForkchoiceUpdated(node, block.getHeader()));
+            tryNewPayload(node, block) && tryForkchoiceUpdated(node, block.getHeader()),
+        this::assertTrieLogStoredWithFaultyBlock);
   }
 
   private void assertNodeSurvivesAndRestarts(final BiConsumer<Node, Block> importer) {
@@ -195,7 +199,9 @@ public class BonsaiOutOfMemoryRecoveryTest extends AbstractIsolationTests {
   }
 
   private void assertRestartRecoversNode(
-      final BiConsumer<Node, Block> importer, final BiPredicate<Node, Block> singleAttempt) {
+      final BiConsumer<Node, Block> importer,
+      final BiPredicate<Node, Block> singleAttempt,
+      final Consumer<Node> checkBeforeResuming) {
     generateChain();
     final StorageProvider victimStorage = createKeyValueStorageProvider(victimData);
 
@@ -205,12 +211,20 @@ public class BonsaiOutOfMemoryRecoveryTest extends AbstractIsolationTests {
     faults.assertFiredIfArmed();
 
     final Node restarted = startNode(victimStorage, false);
+    checkBeforeResuming.accept(restarted);
     chain
         .subList((int) FAULTY_BLOCK - 1, REPLAYED_BLOCKS)
         .forEach(block -> importer.accept(restarted, block));
     assertNodeMatchesChain(restarted);
     importer.accept(restarted, chain.getLast());
     assertHeadIs(restarted, chain.getLast());
+  }
+
+  private void assertTrieLogStoredWithFaultyBlock(final Node node) {
+    final Hash faultyBlockHash = chain.get((int) FAULTY_BLOCK - 1).getHash();
+    assertThat(node.archive.getTrieLogManager().getTrieLogLayer(faultyBlockHash).isPresent())
+        .as("trie log of block %d is stored exactly when the block is", FAULTY_BLOCK)
+        .isEqualTo(node.blockchain.getBlockHeader(faultyBlockHash).isPresent());
   }
 
   /** Builds REPLAYED_BLOCKS + 1 blocks on the fault-free node of the base class. */
@@ -247,7 +261,7 @@ public class BonsaiOutOfMemoryRecoveryTest extends AbstractIsolationTests {
   private boolean tryImport(final Node node, final Block block) {
     faults.enter(Phase.IMPORT, block.getHeader().getNumber());
     try {
-      final BlockProcessingResult result = validateAndProcess(node, block, true);
+      final BlockProcessingResult result = validateAndProcess(node, block, true, false);
       if (result.isSuccessful()) {
         node.blockchain.appendBlock(block, result.getReceipts());
         return true;
@@ -264,9 +278,13 @@ public class BonsaiOutOfMemoryRecoveryTest extends AbstractIsolationTests {
   private boolean tryNewPayload(final Node node, final Block block) {
     faults.enter(Phase.NEW_PAYLOAD, block.getHeader().getNumber());
     try {
-      final BlockProcessingResult result = validateAndProcess(node, block, false);
+      final BlockProcessingResult result = validateAndProcess(node, block, false, true);
       if (result.isSuccessful()) {
-        node.blockchain.storeBlock(block, result.getReceipts(), Optional.empty());
+        node.blockchain.storeBlock(
+            block,
+            result.getReceipts(),
+            Optional.empty(),
+            node.archive.takePendingTrieLog(result.getYield().orElseThrow().getWorldState()));
         return true;
       }
       lastFailure = result.toString();
@@ -299,7 +317,10 @@ public class BonsaiOutOfMemoryRecoveryTest extends AbstractIsolationTests {
   }
 
   private BlockProcessingResult validateAndProcess(
-      final Node node, final Block block, final boolean shouldUpdateHead) {
+      final Node node,
+      final Block block,
+      final boolean shouldUpdateHead,
+      final boolean deferTrieLog) {
     return protocolSchedule
         .getByBlockHeader(block.getHeader())
         .getBlockValidator()
@@ -309,7 +330,9 @@ public class BonsaiOutOfMemoryRecoveryTest extends AbstractIsolationTests {
             HeaderValidationMode.NONE,
             HeaderValidationMode.NONE,
             Optional.empty(),
-            shouldUpdateHead);
+            shouldUpdateHead,
+            true,
+            deferTrieLog);
   }
 
   private void assertHeadIs(final Node node, final Block head) {
