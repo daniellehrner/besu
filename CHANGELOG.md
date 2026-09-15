@@ -71,6 +71,7 @@
 - The Bonsai cross-block flat cache reports its account and storage entry counts and its size evictions as metrics, and `--Xplugin-rocksdb-cache-capacity` raises the RocksDB block cache of the hot segments above the high-spec size when set larger.
 - The `Imported #` log line shows the share of gas next to the share of transactions whose speculative results were kept, and the import timings line summarises the transactions as reused and re-executed counts with the conflict and unfinished reasons.
 - EVM v2 decodes PUSH immediates once per contract, in the same pass as the jump destination analysis, and the interpreter loop copies them from that table. The default `--Xevm-jumpdest-cache-weight-kb` is raised to 96000 so the cache holds as many contracts as before with the tables included.
+- Speculative parallel transaction execution runs the transactions of one sender in order on one worker, so later ones warm the caches instead of failing the nonce check, and workers skip transactions the block import has already reached.
 
 ## 26.8.1
 
