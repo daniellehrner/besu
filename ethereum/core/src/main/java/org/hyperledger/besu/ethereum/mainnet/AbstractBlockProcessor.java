@@ -299,6 +299,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
 
       boolean parallelizedTxFound = false;
       int nbParallelTx = 0;
+      long parallelizedGas = 0L;
 
       for (int i = 0; i < transactions.size(); i++) {
         final WorldUpdater blockUpdater = worldState.updater();
@@ -362,9 +363,10 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
                 .getBlockGasAccountingStrategy()
                 .calculateTransactionExecutionGas(transaction, transactionProcessingResult);
         // Receipt gas always uses standard post-refund calculation
-        cumulativeReceiptGasUsed +=
+        final long receiptGas =
             BlockGasAccountingStrategy.calculateReceiptGas(
                 transaction, transactionProcessingResult);
+        cumulativeReceiptGasUsed += receiptGas;
         cumulativeStateGasUsed += transactionProcessingResult.getStateGasUsed();
 
         // EIP-8037: Post-processing check — verify gas metered doesn't exceed block gas limit.
@@ -390,14 +392,14 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
                 worldState,
                 cumulativeReceiptGasUsed);
         receipts.add(transactionReceipt);
-        if (!parallelizedTxFound
-            && transactionProcessingResult.getIsProcessedInParallel().isPresent()) {
+        if (transactionProcessingResult.getIsProcessedInParallel().isPresent()) {
           parallelizedTxFound = true;
-          nbParallelTx = 1;
-        } else if (transactionProcessingResult.getIsProcessedInParallel().isPresent()) {
           nbParallelTx++;
+          parallelizedGas += receiptGas;
         }
       }
+      BlockImportTimings.transactions(
+          transactions.size(), nbParallelTx, parallelizedGas, cumulativeReceiptGasUsed);
       final long postExecutionStart = System.nanoTime();
       final var optionalHeaderBlobGasUsed = blockHeader.getBlobGasUsed();
       if (optionalHeaderBlobGasUsed.isPresent()) {
@@ -577,7 +579,8 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
                   maybeBlockAccessList,
                   gasMetered,
                   blockHashLookup.getAccessedAncestors())),
-          parallelizedTxFound ? Optional.of(nbParallelTx) : Optional.empty());
+          parallelizedTxFound ? Optional.of(nbParallelTx) : Optional.empty(),
+          parallelizedGas);
     } finally {
       stateRootCommitter.cancel();
       preProcessingContext.ifPresent(

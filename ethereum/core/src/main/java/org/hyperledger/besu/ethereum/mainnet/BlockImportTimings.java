@@ -132,6 +132,10 @@ public final class BlockImportTimings {
   private long totalNanos;
   private long cpuNanos;
   private long gcNanos;
+  private int txTotal = -1;
+  private int txReused;
+  private long txReusedGas;
+  private long txTotalGas;
 
   private BlockImportTimings() {
     startWallNanos = System.nanoTime();
@@ -228,6 +232,25 @@ public final class BlockImportTimings {
     }
   }
 
+  /**
+   * Records what happened to the block's transactions, for the summary in the log line.
+   *
+   * @param total the number of transactions in the block
+   * @param reused how many kept their speculative result
+   * @param reusedGas the gas used by those
+   * @param totalGas the gas used by all transactions
+   */
+  public static void transactions(
+      final int total, final int reused, final long reusedGas, final long totalGas) {
+    final BlockImportTimings timings = CURRENT.get();
+    if (timings != null) {
+      timings.txTotal = total;
+      timings.txReused = reused;
+      timings.txReusedGas = reusedGas;
+      timings.txTotalGas = totalGas;
+    }
+  }
+
   private void add(final Phase phase, final long nanos) {
     phaseNanos[phase.ordinal()] += nanos;
     phaseCounts[phase.ordinal()]++;
@@ -297,17 +320,16 @@ public final class BlockImportTimings {
   public String describe() {
     final StringBuilder out = new StringBuilder();
     for (final Phase phase : Phase.values()) {
-      final int count = phaseCounts[phase.ordinal()];
-      if (count == 0) {
+      if (phase == Phase.TX_REUSE) {
+        // the transaction phases and counts read better as one sentence, in their place
+        describeTransactions(out);
         continue;
       }
-      out.append(phase.label());
-      if (!phase.isCountOnly()) {
-        out.append(' ').append(millis(phaseNanos[phase.ordinal()]));
+      final int count = phaseCounts[phase.ordinal()];
+      if (count == 0 || phase.isCountOnly() || phase == Phase.TX_EXECUTE) {
+        continue;
       }
-      if (count > 1 || phase.isCountOnly()) {
-        out.append(" (").append(count).append(')');
-      }
+      out.append(phase.label()).append(' ').append(millis(phaseNanos[phase.ordinal()]));
       out.append(" | ");
     }
     out.append(TOTAL)
@@ -326,6 +348,40 @@ public final class BlockImportTimings {
         .append(' ')
         .append(millis(remainderNanos()));
     return out.toString();
+  }
+
+  private void describeTransactions(final StringBuilder out) {
+    final int executed = phaseCounts[Phase.TX_EXECUTE.ordinal()];
+    final int total =
+        txTotal >= 0 ? txTotal : Math.max(phaseCounts[Phase.TX_REUSE.ordinal()], executed);
+    if (total == 0 && executed == 0) {
+      return;
+    }
+    final int reused = txTotal >= 0 ? txReused : total - executed;
+    out.append(total).append(" tx: ").append(reused).append(" reused");
+    if (total > 0) {
+      out.append(" (").append(percent(reused, total)).append(" of tx");
+      if (txTotalGas > 0) {
+        out.append(", ").append(percent(txReusedGas, txTotalGas)).append(" of gas");
+      }
+      out.append(')');
+    }
+    out.append(" in ").append(millis(phaseNanos[Phase.TX_REUSE.ordinal()])).append(" ms");
+    out.append(" | ").append(executed).append(" re-executed");
+    final int conflicts = phaseCounts[Phase.TX_CONFLICT.ordinal()];
+    final int unfinished = phaseCounts[Phase.TX_UNFINISHED.ordinal()];
+    if (conflicts > 0 || unfinished > 0) {
+      out.append(" (")
+          .append(conflicts)
+          .append(" conflicts, ")
+          .append(unfinished)
+          .append(" unfinished)");
+    }
+    out.append(" in ").append(millis(phaseNanos[Phase.TX_EXECUTE.ordinal()])).append(" ms | ");
+  }
+
+  private static String percent(final long part, final long whole) {
+    return String.format("%.0f%%", 100.0 * part / whole);
   }
 
   /**

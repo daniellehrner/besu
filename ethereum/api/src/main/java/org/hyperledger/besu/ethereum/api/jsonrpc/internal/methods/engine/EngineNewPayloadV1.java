@@ -288,7 +288,10 @@ public sealed class EngineNewPayloadV1<
     if (executionResult.isSuccessful()) {
       lastExecutionTimeInNs = System.nanoTime() - startTimeNs;
       logImportedBlockInfo(
-          block, lastExecutionTimeInNs, executionResult.getNbParallelizedTransactions());
+          block,
+          lastExecutionTimeInNs,
+          executionResult.getNbParallelizedTransactions(),
+          executionResult.getParallelizedGasUsed());
       timings.log("Import", newBlockHeader.getNumber());
       timings.recordTo(importPhaseHistogram);
       return respondWith(reqId, blockParam, newBlockHeader.getHash(), VALID);
@@ -515,7 +518,10 @@ public sealed class EngineNewPayloadV1<
   }
 
   private void logImportedBlockInfo(
-      final Block block, final long timeInNs, final Optional<Integer> nbParallelizedTransactions) {
+      final Block block,
+      final long timeInNs,
+      final Optional<Integer> nbParallelizedTransactions,
+      final long parallelizedGasUsed) {
     final StringBuilder message = new StringBuilder();
     final int nbTransactions = block.getBody().getTransactions().size();
     message.append("Imported #%,d  (%s)| %4d tx");
@@ -524,10 +530,14 @@ public sealed class EngineNewPayloadV1<
             List.of(
                 block.getHeader().getNumber(), block.getHash().toShortLogString(), nbTransactions));
     if (nbParallelizedTransactions.isPresent()) {
-      double parallelizedTxPercentage =
+      final double parallelizedTxPercentage =
           (double) (nbParallelizedTransactions.get() * 100) / nbTransactions;
-      message.append(" (%5.1f%% parallel)");
+      final long gasUsed = block.getHeader().getGasUsed();
+      final double parallelizedGasPercentage =
+          gasUsed == 0 ? 0.0 : (double) (parallelizedGasUsed * 100) / gasUsed;
+      message.append(" (%5.1f%% txs parallel, %5.1f%% gas parallel)");
       messageArgs.add(parallelizedTxPercentage);
+      messageArgs.add(parallelizedGasPercentage);
     }
     appendVersionSpecificLogInfo(message, messageArgs, block);
     double mgasPerSec =

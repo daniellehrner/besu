@@ -276,7 +276,8 @@ public class MainnetBlockValidator implements BlockValidator {
                     processedBlockAccessList,
                     cumulativeBlockGasUsed,
                     accessedAncestors)),
-            result.getNbParallelizedTransactions());
+            result.getNbParallelizedTransactions(),
+            result.getParallelizedGasUsed());
       }
     } catch (MerkleTrieException ex) {
       LOG.debug(

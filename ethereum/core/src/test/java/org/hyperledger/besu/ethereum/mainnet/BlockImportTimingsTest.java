@@ -91,7 +91,10 @@ class BlockImportTimingsTest {
     }
 
     final String description = timings.describe();
-    assertThat(description).startsWith("reuse ").contains(" (2) | root ");
+    assertThat(description)
+        .startsWith("2 tx: 2 reused (100% of tx) in ")
+        .contains(" ms | 0 re-executed in ")
+        .contains(" ms | root ");
     assertThat(description).doesNotContain("trielog");
     assertThat(description).contains("| total ").contains("| cpu ").contains("| gc ");
     assertThat(description)
@@ -132,8 +135,26 @@ class BlockImportTimingsTest {
     timings.recordTo(histogram);
 
     assertThat(timings.count(Phase.TX_CONFLICT)).isEqualTo(2);
-    assertThat(timings.describe()).startsWith("conflict (2) | unfinished (1) | total ");
+    assertThat(timings.describe()).startsWith("total ");
     assertThat(observed.keySet()).containsExactlyInAnyOrder("total", "cpu", "gc", "remainder");
+  }
+
+  @Test
+  void transactionSummaryShowsReuseSharesAndReexecutionReasons() {
+    final BlockImportTimings timings = BlockImportTimings.begin();
+    try {
+      BlockImportTimings.time(Phase.TX_REUSE, () -> {});
+      BlockImportTimings.time(Phase.TX_EXECUTE, () -> {});
+      BlockImportTimings.mark(Phase.TX_CONFLICT);
+      BlockImportTimings.mark(Phase.TX_UNFINISHED);
+      BlockImportTimings.transactions(4, 3, 600L, 1000L);
+    } finally {
+      timings.finish();
+    }
+    assertThat(timings.describe())
+        .startsWith("4 tx: 3 reused (75% of tx, 60% of gas) in ")
+        .contains(" ms | 1 re-executed (1 conflicts, 1 unfinished) in ")
+        .contains(" ms | total ");
   }
 
   @Test
