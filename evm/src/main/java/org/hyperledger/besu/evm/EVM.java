@@ -338,11 +338,6 @@ public class EVM {
   //
   // Please benchmark before refactoring.
   public void runToHalt(final MessageFrame frame, @NonNull final OperationTracer operationTracer) {
-    // do not remove assert! A single, monomorphic tracer, is allowed in the EVM execution if
-    // tracing is disabled for
-    // optimization purposes
-    assert operationTracer.isEnabled() || operationTracer == OperationTracer.NO_TRACING;
-
     if (evmConfiguration.enableEvmV2()) {
       frame.ensureV2Stack();
       runToHaltV2(frame, operationTracer);
@@ -352,7 +347,7 @@ public class EVM {
 
     byte[] code = frame.getCode().getBytes().toArrayUnsafe();
     Operation[] operationArray = operations.getOperations();
-    frame.setRecordUpdatesForTracer(operationTracer != OperationTracer.NO_TRACING);
+    frame.setRecordUpdatesForTracer(operationTracer.isEnabled());
     while (frame.getState() == MessageFrame.State.CODE_EXECUTING) {
       Operation currentOperation;
       int opcode;
@@ -623,10 +618,11 @@ public class EVM {
     final long[] pushValues = codeObject.pushValues();
     final long[] pushWide = codeObject.pushWide();
     final Operation[] operationArray = operations.getOperations();
-    // Block import runs without a tracer. The two tracer hooks and the current-operation
+    // Block import runs without operation tracing. The two tracer hooks and the current-operation
     // bookkeeping that only tracers read are then skipped on every opcode; the fallback branch
-    // below still records the operation it hands to the standard interpreter.
-    final boolean tracing = operationTracer != OperationTracer.NO_TRACING;
+    // below still records the operation it hands to the standard interpreter. A tracer that only
+    // wants the transaction-level hooks reports itself disabled and gets the same fast path.
+    final boolean tracing = operationTracer.isEnabled();
     frame.setRecordUpdatesForTracer(tracing);
     if (frame.getState() != MessageFrame.State.CODE_EXECUTING) {
       return;

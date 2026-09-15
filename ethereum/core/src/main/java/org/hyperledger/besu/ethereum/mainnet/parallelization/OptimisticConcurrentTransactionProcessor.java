@@ -280,6 +280,13 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
               transaction.detachedCopy(),
               miningBeneficiary,
               new OperationTracer() {
+                // Only the reward hook below is needed; reporting the tracer as disabled keeps
+                // the interpreter on its untraced fast path for the speculative run.
+                @Override
+                public boolean isEnabled() {
+                  return false;
+                }
+
                 @Override
                 public void traceBeforeRewardTransaction(
                     final WorldView worldView,
