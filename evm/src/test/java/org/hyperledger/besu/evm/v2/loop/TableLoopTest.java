@@ -27,13 +27,16 @@ import org.hyperledger.besu.evm.v2.testutils.TestMessageFrameBuilderV2;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 import org.apache.tuweni.bytes.Bytes;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
-/** Runs the same programs through the switch loop and the table loop and compares the frames. */
+/** Runs the same programs through the switch loop and each other loop and compares the frames. */
 class TableLoopTest {
 
   private static EVM evm(final EvmV2Loop loop) {
@@ -56,7 +59,11 @@ class TableLoopTest {
       };
 
   private static final EVM SWITCH = evm(EvmV2Loop.SWITCH);
-  private static final EVM TABLE = evm(EvmV2Loop.TABLE);
+  private static final Map<EvmV2Loop, EVM> EVMS = new EnumMap<>(EvmV2Loop.class);
+
+  private static EVM evmFor(final EvmV2Loop loop) {
+    return EVMS.computeIfAbsent(loop, TableLoopTest::evm);
+  }
 
   /** Everything observable about a frame after the loop returned. */
   private record Outcome(
@@ -125,9 +132,9 @@ class TableLoopTest {
         null);
   }
 
-  private static void assertSameOutcome(final Bytes code, final long gas) {
-    assertThat(run(TABLE, code, gas))
-        .as("code %s gas %d", code, gas)
+  private static void assertSameOutcome(final EvmV2Loop loop, final Bytes code, final long gas) {
+    assertThat(run(evmFor(loop), code, gas))
+        .as("%s code %s gas %d", loop, code, gas)
         .isEqualTo(run(SWITCH, code, gas));
   }
 
@@ -171,47 +178,59 @@ class TableLoopTest {
     "",
   };
 
-  @Test
-  void programsActuallyRun() {
-    final Outcome outcome = run(TABLE, Bytes.fromHexString("0x600160020100"), 1_000_000L);
+  @ParameterizedTest
+  @EnumSource(
+      value = EvmV2Loop.class,
+      names = {"TABLE", "VTABLE"})
+  void programsActuallyRun(final EvmV2Loop loop) {
+    final Outcome outcome = run(evmFor(loop), Bytes.fromHexString("0x600160020100"), 1_000_000L);
     assertThat(outcome.state()).isEqualTo("CODE_SUCCESS");
     assertThat(outcome.stack()).containsExactly(0L, 0L, 0L, 3L);
     assertThat(outcome.gas()).isEqualTo(1_000_000L - 9L);
   }
 
-  @Test
-  void fixedProgramsAgree() {
+  @ParameterizedTest
+  @EnumSource(
+      value = EvmV2Loop.class,
+      names = {"TABLE", "VTABLE"})
+  void fixedProgramsAgree(final EvmV2Loop loop) {
     for (final String program : PROGRAMS) {
       final Bytes code = Bytes.fromHexString("0x" + program);
-      assertSameOutcome(code, 1_000_000L);
-      assertSameOutcome(code, 20L);
-      assertSameOutcome(code, 0L);
+      assertSameOutcome(loop, code, 1_000_000L);
+      assertSameOutcome(loop, code, 20L);
+      assertSameOutcome(loop, code, 0L);
     }
   }
 
-  @Test
-  void memoryFixtureAgreesWithAndWithoutTracer() {
+  @ParameterizedTest
+  @EnumSource(
+      value = EvmV2Loop.class,
+      names = {"TABLE", "VTABLE"})
+  void memoryFixtureAgreesWithAndWithoutTracer(final EvmV2Loop loop) {
     final Bytes code =
         Bytes.fromHexString(
             "0x6000602435146100115760005061001f565b600a61202052610100612040525b6001602435146100315760005061003f565b600061202052610100612040525b60026024351461005157600050610062565b600a60000361202052610100612040525b60036024351461007457600050610083565b61100061202052610100612040525b600a60243514610095576000506100a2565b600a612020526000612040525b600b602435146100b4576000506100c1565b6000612020526000612040525b600c602435146100d3576000506100e3565b600a600003612020526000612040525b600d602435146100f557600050610103565b611000612020526000612040525b60146024351461011557600050610125565b600561202052600a600003612040525b60156024351461013757600050610147565b600561202052637fffffff612040525b60166024351461015957600050610169565b6005612020526380000000612040525b60176024351461017b5760005061018b565b60056120205263ffffffff612040525b60186024351461019d576000506101ae565b600561202052640100000000612040525b6019602435146101c0576000506101d4565b600561202052677fffffffffffffff612040525b601a602435146101e6576000506101fa565b600561202052678000000000000000612040525b601b6024351461020c57600050610220565b60056120205267ffffffffffffffff612040525b601c6024351461023257600050610247565b60056120205268010000000000000000612040525b602060043514610258576000610262565b6120205161204051205b5060376004351461027557600050610281565b61202051600061204051375b6039600435146102935760005061029f565b61202051600061204051395b603c600435146102b1576000506102c0565b6120205160006120405161c0de3c5b603e600435146102d2576000506102de565b612020516000612040513e5b60a0600435146102f0576000506102fa565b6120205161204051a05b60a16004351461030c57600050610318565b60016120205161204051a15b60a26004351461032a57600050610338565b600260016120205161204051a25b60a36004351461034a5760005061035a565b6003600260016120205161204051a35b60a46004351461036c5760005061037e565b60046003600260016120205161204051a45b60f06004351461038f57600061039b565b61202051612040516000f05b5060f1600435146103ad5760006103c3565b600060006120205161204051600061c0de611000f15b506101f1600435146103d65760006103ec565b612020516120405160006000600061c0de611000f15b5060f2600435146103fe576000610414565b600060006120205161204051600061c0de611000f25b506101f26004351461042757600061043d565b612020516120405160006000600061c0de611000f25b5060f46004351461044f576000610464565b60006000612020516120405161c0de62100000f45b506101f46004351461047757600061048c565b61202051612040516000600061c0de62100000f45b5060f56004351461049e5760006104ad565b615a1761202051612040516000f55b5060fa600435146104bf5760006104d4565b60006000612020516120405161c0de62100000fa5b506101fa600435146104e75760006104fc565b61202051612040516000600061c0de62100000fa5b5061013e6004351461051057600050610530565b61010061010060006000600061c0de611000f150612020516000612040513e5b60f360043514610541576000610557565b6000600060406120206000630f30c0de62100000f15b5060ff6004351461056a57600050610585565b6000600060406120206000630ff0c0de62100000f1503d6000555b60006101005500");
     final Bytes input =
         Bytes.fromHexString(
             "0x1a8451e600000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000000");
-    assertThat(run(TABLE, code, input, 80_000_000L, OperationTracer.NO_TRACING))
+    assertThat(run(evmFor(loop), code, input, 80_000_000L, OperationTracer.NO_TRACING))
         .isEqualTo(run(SWITCH, code, input, 80_000_000L, OperationTracer.NO_TRACING));
-    assertThat(run(TABLE, code, input, 80_000_000L, COUNTING_TRACER))
+    assertThat(run(evmFor(loop), code, input, 80_000_000L, COUNTING_TRACER))
         .isEqualTo(run(SWITCH, code, input, 80_000_000L, COUNTING_TRACER));
   }
 
-  @Test
-  void stackOverflowAgrees() {
+  @ParameterizedTest
+  @EnumSource(
+      value = EvmV2Loop.class,
+      names = {"TABLE", "VTABLE"})
+  void stackOverflowAgrees(final EvmV2Loop loop) {
     final byte[] code = new byte[1100];
     Arrays.fill(code, (byte) 0x5f);
-    assertSameOutcome(Bytes.wrap(code), 1_000_000L);
+    assertSameOutcome(loop, Bytes.wrap(code), 1_000_000L);
     final byte[] dups = new byte[1100];
     dups[0] = 0x5f;
     Arrays.fill(dups, 1, dups.length, (byte) 0x80);
-    assertSameOutcome(Bytes.wrap(dups), 1_000_000L);
+    assertSameOutcome(loop, Bytes.wrap(dups), 1_000_000L);
   }
 
   /** Opcodes that need no world state beyond the frame's own account. */
@@ -224,8 +243,11 @@ class TableLoopTest {
     0x90, 0x91, 0x9f, 0xa0, 0xa1, 0xf3, 0xfd, 0xfe
   };
 
-  @Test
-  void randomProgramsAgree() {
+  @ParameterizedTest
+  @EnumSource(
+      value = EvmV2Loop.class,
+      names = {"TABLE", "VTABLE"})
+  void randomProgramsAgree(final EvmV2Loop loop) {
     final Random random = new Random(20260914L);
     for (int i = 0; i < 3000; i++) {
       final byte[] code = new byte[1 + random.nextInt(80)];
@@ -237,8 +259,8 @@ class TableLoopTest {
                 : (byte) random.nextInt(24);
       }
       final Bytes program = Bytes.wrap(code);
-      assertSameOutcome(program, 100_000L);
-      assertSameOutcome(program, 30L);
+      assertSameOutcome(loop, program, 100_000L);
+      assertSameOutcome(loop, program, 30L);
     }
   }
 }

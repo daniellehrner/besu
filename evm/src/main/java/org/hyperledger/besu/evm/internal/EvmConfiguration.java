@@ -48,7 +48,9 @@ public record EvmConfiguration(
     /** The switch loop with per-operation stack and gas checks. */
     SWITCH,
     /** The loop that checks stack and gas from per-opcode tables ahead of the switch. */
-    TABLE
+    TABLE,
+    /** The loop that dispatches through one operation object per opcode. */
+    VTABLE
   }
 
   /** The world updater mode. */

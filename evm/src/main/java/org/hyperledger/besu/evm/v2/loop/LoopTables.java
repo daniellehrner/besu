@@ -27,10 +27,10 @@ import org.hyperledger.besu.evm.operation.OperationRegistry;
 public final class LoopTables {
 
   /** The loop checks stack and gas from the tables and the case returns a packed result. */
-  static final int NATIVE = 1;
+  public static final int NATIVE = 1;
 
   /** The operation may end or suspend the frame; the loop checks the frame state after it. */
-  static final int STATE = 2;
+  public static final int STATE = 2;
 
   /** Items each opcode reads or pops. */
   public final byte[] stackIn = new byte[256];
@@ -38,8 +38,11 @@ public final class LoopTables {
   /** Items each opcode leaves in place of the ones it read. */
   public final byte[] stackOut = new byte[256];
 
-  final long[] fixedGas = new long[256];
-  final byte[] flags = new byte[256];
+  /** Gas the loop charges before an operation on its contract runs. */
+  public final long[] fixedGas = new long[256];
+
+  /** {@link #NATIVE} and {@link #STATE} bits per opcode. */
+  public final byte[] flags = new byte[256];
 
   /**
    * The four tables packed into one word per opcode, so the loop's prologue is a single load: bits

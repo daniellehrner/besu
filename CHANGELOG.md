@@ -69,6 +69,7 @@
 - On the experimental EVM v2, MLOAD and MSTORE move words directly between the stack and the memory array, KECCAK256 hashes its memory range in place, PUSH decodes its immediate with aligned reads, and memory and storage updates are recorded for tracers only when a tracer is attached.
 - `--Xevm-v2-loop=TABLE` selects an experimental interpreter loop for EVM v2 that checks stack depth and fixed gas from per-opcode tables ahead of dispatch and keeps the program counter, gas and stack top in locals; the default `SWITCH` loop is unchanged.
 - On EVM v2, SIGNEXTEND with a byte index of 2^63 or more no longer corrupts the result.
+- `--Xevm-v2-loop=VTABLE` selects an experimental EVM v2 interpreter loop that dispatches through one operation object per opcode, reading each operation's stack and gas needs from its fields, so the loop itself stays small enough for the JIT to keep in registers.
 
 ## 26.8.1
 

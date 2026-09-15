@@ -90,6 +90,7 @@ import org.hyperledger.besu.evm.operation.XorOperation;
 import org.hyperledger.besu.evm.operation.XorOperationOptimized;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
 import org.hyperledger.besu.evm.v2.loop.TableLoop;
+import org.hyperledger.besu.evm.v2.op.VtableLoop;
 import org.hyperledger.besu.evm.v2.operation.AddModOperationV2;
 import org.hyperledger.besu.evm.v2.operation.AddOperationV2;
 import org.hyperledger.besu.evm.v2.operation.AddressOperationV2;
@@ -228,6 +229,9 @@ public class EVM {
   // The v2 loop that checks stack and gas from tables, when configured; null runs the switch loop
   private final TableLoop tableLoop;
 
+  // The v2 loop that dispatches through operation objects, when configured
+  private final VtableLoop vtableLoop;
+
   /**
    * Instantiates a new Evm.
    *
@@ -271,6 +275,11 @@ public class EVM {
         evmConfiguration.enableEvmV2()
                 && evmConfiguration.evmV2Loop() == EvmConfiguration.EvmV2Loop.TABLE
             ? new TableLoop(this, operations)
+            : null;
+    vtableLoop =
+        evmConfiguration.enableEvmV2()
+                && evmConfiguration.evmV2Loop() == EvmConfiguration.EvmV2Loop.VTABLE
+            ? new VtableLoop(this, operations)
             : null;
   }
 
@@ -354,6 +363,8 @@ public class EVM {
       frame.ensureV2Stack();
       if (tableLoop != null) {
         tableLoop.run(frame, operationTracer);
+      } else if (vtableLoop != null) {
+        vtableLoop.run(frame, operationTracer);
       } else {
         runToHaltV2(frame, operationTracer);
       }

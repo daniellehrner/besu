@@ -248,6 +248,26 @@ The same LogCompilation parse is the acceptance test for the new loop: the hot l
 show `inline_success` at depth 1 and its helpers at depth 2, and no `DesiredMethodLimit`
 refusal may appear.
 
+### Inlining into the table loop, measured (2026-09-14, after phase 3)
+
+Same method and profile as step 0, on `TableLoop.run` (3968 bytecodes; the tableswitch alone
+is about 1 KB of it). 86 depth-1 sites inlined, 107 refused: the `LoopResult` accessors, the
+frame accessors, `add` and `pushLong` inline; `sub`, the comparisons (56 bytecodes), the
+bitwise ops (60-74), `mul`/`div`/`mod` (117), the shifts (137), `dup` (55), `swap` (113),
+`pushAddress`/`pushWei` (~60) and every `exec` are refused as "too big", i.e. over the
+35-bytecode limit for a site C2 does not rate hot. `pushFromBytes` at 448 was refused as
+"hot method too big" and is now split so the fast path is 314.
+
+So the loop shape alone does not buy inlining: 256-bit helpers cannot be written in 35
+bytecodes, and C2 rates a site hot by its share of the loop's profile, which no single
+opcode reaches. Two ways forward, to be measured on the node with this build:
+
+- `-XX:MaxInlineSize=<n>` on the node's JVM (a product flag; 120 covers the helpers, 200 the
+  `exec` methods). Global, so watch code cache size and total compile time.
+- accept the call per opcode and take the gains the loop gives without inlining: no result
+  object, no per-op frame sync, no duplicated checks. The A/B `TABLE` vs `SWITCH` on the same
+  build isolates exactly that.
+
 ## Phase 6: a prepared representation per contract
 
 The code cache (256 MB, memory bound, keyed by code hash, 98.8% hit rate, zero evictions at
@@ -267,3 +287,79 @@ estimator. In order of expected gain:
 
 Watch `code_cache_evictions` and `code_cache_eviction_weight` on the node once any of these
 is deployed.
+
+## Table loop on the node, and why the design changed (2026-09-15)
+
+Overnight A/B on e2145a6, same build, same 16 GB heap, mainnet at about 30 M gas per block:
+
+| import phase, ms         | SWITCH (604 blocks) | TABLE (1486 blocks) |
+|--------------------------|--------------------:|--------------------:|
+| execute p50 / mean       | 47.8 / 55.5         | 51.5 / 59.5         |
+| per re-executed tx       | 0.481               | 0.487               |
+| cpu p50                  | 62.6                | 64.8                |
+
+A wash: the per-transaction cost is identical within 1%, the execute mean difference is
+the higher re-execution rate of the TABLE window (67% reuse against 70%).
+
+The wall profile of the TABLE build explains it. Share of the time under the loop, all EVM
+threads:
+
+| under the loop                     | SWITCH b00543a | TABLE e2145a6 |
+|------------------------------------|---------------:|--------------:|
+| loop self time plus PUSH decode    | 30.2%          | 29.8%         |
+| SLOAD                              | 25.8%          | 19.1%         |
+
+Removing the per-op stack and gas checks from every op body moved nothing. The JFR sampler
+attributes a sample in compiled code to the nearest debug-info point, which in a 30 KB
+compiled loop is mostly the scope of the most frequent inlined op, so "PUSH decode 15%"
+has to be read together with the loop's own 11 to 15%. What is left in that 30% is the
+dispatch itself: one code fetch and one indirect jump through a jump table over about 150
+live targets per op, and mainnet bytecode is diverse enough that the branch predictor misses
+a large share of them. A mispredict is 15 to 20 cycles, about the whole per-op budget.
+
+The compilation logs rule out the other suspects: both loops are deoptimised and recompiled
+the same handful of times during warm-up (class_check and unstable_if traps) and then stay
+stable; the VarHandle reads in the PUSH decode inline to plain loads.
+
+Consequences for the design:
+
+- "Dispatch: why the switch stays" above was wrong in its conclusion. A vtable call is one
+  indirect jump, predicted by the same hardware as the jump table's indirect jump, so the
+  megamorphic call site costs what the switch costs. What the switch bought, inlined case
+  bodies, C2 does not deliver at this method size anyway (see "Inlining into the table loop,
+  measured").
+- What a small loop over op objects does buy is codegen: every op is compiled on its own with
+  its own inlining budget, the loop keeps pc, gas and top in registers, and the helpers that
+  are real calls inside the 4 KB `TableLoop.run` get inlined. Expected: a few percent of
+  execute, not a step change.
+- The step change needs fewer dispatches, which is phase 6, and op objects are the natural
+  carrier for it: a prepared `Op[]` per code hash holds PUSH objects with decoded limbs,
+  per-block stack and gas metadata checked once per block, and fused pairs (PUSH+JUMP,
+  PUSH+JUMPI, PUSH+DUP, PUSH+MSTORE) that remove the second dispatch.
+
+### Phase 7 as built: the object loop (2026-09-15)
+
+`--Xevm-v2-loop=VTABLE`, package `org.hyperledger.besu.evm.v2.op`:
+
+- `Op`: abstract class with final `opcode`, `stackIn`, `stackOut`, `fixedGas`, `checksState`,
+  `legacy`, all taken from `LoopTables` so the numbers have one source, and
+  `long exec(frame, code, s, top, pc, gas)` returning the packed `LoopResult`. An abstract
+  class rather than an interface so HotSpot emits a vtable call, not an itable stub.
+- Op families as static nested final classes: `StackOps`, `ArithmeticOps`, `MemoryOps`,
+  `StateOps`, `EnvOps`, `ControlOps`. Each native op wraps the `exec` static that the table
+  loop already called. `LegacyOp` syncs pc, gas and top to the frame, runs the old-contract
+  static, catches the stack exceptions and translates the `OperationResult`; `LegacyOps`
+  holds calls, creates, SSTORE, SELFDESTRUCT, PAY, DUPN/SWAPN/EXCHANGE and a registry
+  wrapper for anything else a fork registers.
+- `OpTable`: the 256 objects for one fork. The registry decides which opcodes exist: an
+  opcode it lacks becomes `Invalid` whatever the stack holds, so fork gating leaves the loop.
+- `VtableLoop.run`: about 40 lines. Reads the op, checks stack in/out and the fixed gas from
+  its fields, one virtual call, then the same epilogue as the table loop (legacy marker,
+  dynamic gas, state check for STOP/RETURN/REVERT). The tracing variant is a separate method
+  so the hot loop carries no tracer branches.
+- Tests: `TableLoopTest` is parametrised over TABLE and VTABLE; `OpTableTest` checks every
+  fork's table against the registry and `LoopTables` and that no mainnet opcode falls
+  through to the registry wrapper.
+
+The switch and table loops stay in the tree and selectable so the three can be compared on
+the node and the history shows what was tried.
