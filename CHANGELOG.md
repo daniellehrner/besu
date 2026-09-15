@@ -70,6 +70,7 @@
 - On EVM v2, SIGNEXTEND with a byte index of 2^63 or more no longer corrupts the result.
 - The Bonsai cross-block flat cache reports its account and storage entry counts and its size evictions as metrics, and `--Xplugin-rocksdb-cache-capacity` raises the RocksDB block cache of the hot segments above the high-spec size when set larger.
 - The `Imported #` log line shows the share of gas next to the share of transactions whose speculative results were kept, and the import timings line summarises the transactions as reused and re-executed counts with the conflict and unfinished reasons.
+- EVM v2 decodes PUSH immediates once per contract, in the same pass as the jump destination analysis, and the interpreter loop copies them from that table. The default `--Xevm-jumpdest-cache-weight-kb` is raised to 96000 so the cache holds as many contracts as before with the tables included.
 
 ## 26.8.1
 

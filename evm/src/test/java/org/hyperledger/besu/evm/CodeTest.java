@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.evm;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.evm.frame.MessageFrame.Type.MESSAGE_CALL;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.mock;
@@ -65,6 +66,75 @@ class CodeTest {
     result = operation.execute(frame, evm);
     assertNull(result.getHaltReason());
     Mockito.verify(getsCached, times(1)).calculateJumpDestBitMask();
+  }
+
+  @Test
+  void pushTablesHoldNarrowImmediatesAsValuesAndWideOnesAsLimbs() {
+    // PUSH1 0xab, PUSH8 max, PUSH9 0x01 + 8 zero bytes, PUSH32 all 0x11
+    final Code code =
+        new Code(
+            Bytes.fromHexString(
+                "0x60ab"
+                    + "67ffffffffffffffff"
+                    + "68010000000000000000"
+                    + "7f1111111111111111111111111111111111111111111111111111111111111111"));
+    assertThat(Long.bitCount(code.pushBits()[0])).isEqualTo(4);
+    assertThat(code.pushValues()).hasSize(4);
+    assertThat(code.pushValues()[0]).isEqualTo(0xabL);
+    assertThat(code.pushValues()[1]).isEqualTo(-1L);
+    assertThat(code.pushValues()[2]).isEqualTo(0L);
+    assertThat(code.pushValues()[3]).isEqualTo(4L);
+    assertThat(code.pushWide()).hasSize(8);
+    assertThat(code.pushWide()[0]).isEqualTo(0L);
+    assertThat(code.pushWide()[1]).isEqualTo(0L);
+    assertThat(code.pushWide()[2]).isEqualTo(0x1L);
+    assertThat(code.pushWide()[3]).isEqualTo(0L);
+    assertThat(code.pushWide()[4]).isEqualTo(0x1111111111111111L);
+    assertThat(code.pushWide()[7]).isEqualTo(0x1111111111111111L);
+  }
+
+  @Test
+  void truncatedImmediateReadsMissingBytesAsZero() {
+    // PUSH3 with a single byte left in the code, and PUSH20 with none
+    assertThat(new Code(Bytes.fromHexString("0x62ab")).pushValues()[0]).isEqualTo(0xab0000L);
+    final Code code = new Code(Bytes.fromHexString("0x73"));
+    assertThat(code.pushValues()[0]).isEqualTo(0L);
+    assertThat(code.pushWide()).containsOnly(0L);
+  }
+
+  @Test
+  void pushInsideAnImmediateIsNotAPush() {
+    // PUSH1 0x60, PUSH1 0x01: the 0x60 byte is data
+    final Code code = new Code(Bytes.fromHexString("0x60606001"));
+    assertThat(Long.bitCount(code.pushBits()[0])).isEqualTo(2);
+    assertThat(code.pushValues()).containsExactly(0x60L, 0x01L);
+  }
+
+  @Test
+  void pushOrdinalsRankAcrossBlocks() {
+    // 40 x (PUSH1 i) spans the 64-byte block boundary
+    final StringBuilder hex = new StringBuilder("0x");
+    for (int i = 0; i < 40; i++) {
+      hex.append(String.format("60%02x", i));
+    }
+    final Code code = new Code(Bytes.fromHexString(hex.toString()));
+    assertThat(code.pushBase()).containsExactly(0, 32);
+    for (int i = 0; i < 40; i++) {
+      final int pc = 2 * i;
+      final int block = pc >>> 6;
+      final int ordinal =
+          code.pushBase()[block] + Long.bitCount(code.pushBits()[block] & ((1L << (pc & 63)) - 1));
+      assertThat(code.pushValues()[ordinal]).isEqualTo(i);
+    }
+  }
+
+  @Test
+  void pushTablesAlsoProvideTheJumpDestMask() {
+    final Code code = spy(new Code(Bytes.fromHexString("0x6003565b00")));
+    code.pushValues();
+    assertThat(code.isJumpDestInvalid(3)).isFalse();
+    assertThat(code.isJumpDestInvalid(4)).isTrue();
+    Mockito.verify(code, times(0)).calculateJumpDestBitMask();
   }
 
   @NotNull

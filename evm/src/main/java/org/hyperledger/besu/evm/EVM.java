@@ -223,6 +223,7 @@ public class EVM {
   private final GasOperationV2 gasOperationV2;
 
   private final JumpDestOnlyCodeCache jumpDestOnlyCodeCache;
+  private final long pushGas;
 
   /**
    * Instantiates a new Evm.
@@ -243,6 +244,7 @@ public class EVM {
     this.evmConfiguration = evmConfiguration;
     this.evmSpecVersion = evmSpecVersion;
     this.jumpDestOnlyCodeCache = new JumpDestOnlyCodeCache(evmConfiguration);
+    this.pushGas = gasCalculator.getVeryLowTierGasCost();
 
     enableByzantium = EvmSpecVersion.BYZANTIUM.ordinal() <= evmSpecVersion.ordinal();
     enableConstantinople = EvmSpecVersion.CONSTANTINOPLE.ordinal() <= evmSpecVersion.ordinal();
@@ -614,7 +616,12 @@ public class EVM {
   private void runToHaltV2(final MessageFrame frame, final OperationTracer operationTracer) {
     evmSpecVersion.maybeWarnVersion();
 
-    final byte[] code = frame.getCode().getBytes().toArrayUnsafe();
+    final Code codeObject = frame.getCode();
+    final byte[] code = codeObject.getBytes().toArrayUnsafe();
+    final long[] pushBits = codeObject.pushBits();
+    final int[] pushBase = codeObject.pushBase();
+    final long[] pushValues = codeObject.pushValues();
+    final long[] pushWide = codeObject.pushWide();
     final Operation[] operationArray = operations.getOperations();
     // Block import runs without a tracer. The two tracer hooks and the current-operation
     // bookkeeping that only tracers read are then skipped on every opcode; the fallback branch
@@ -628,6 +635,49 @@ public class EVM {
     long gas = frame.getRemainingGas();
     while (true) {
       final int opcode = pc < code.length ? code[pc] & 0xff : 0;
+      // PUSH is the most frequent opcode, so it stays in the loop: the immediate was decoded when
+      // the code was analysed and is found by ranking the pc in the PUSH bitmap, which leaves one
+      // load for PUSH1..PUSH8 and four for the wider ones.
+      if (!tracing && (opcode >>> 5) == 3) {
+        final int top = frame.stackTopV2();
+        if (!frame.stackHasSpaceV2(1)) {
+          frame.setPC(pc);
+          frame.setGasRemaining(gas);
+          frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.TOO_MANY_STACK_ITEMS));
+          frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
+          return;
+        }
+        final int n = opcode - PushOperationV2.PUSH_BASE;
+        final long[] s = frame.stackDataV2();
+        final int dst = top << 2;
+        final int block = pc >>> 6;
+        final int ordinal =
+            pushBase[block] + Long.bitCount(pushBits[block] & ((1L << (pc & 63)) - 1));
+        final long value = pushValues[ordinal];
+        if (n <= 8) {
+          s[dst] = 0;
+          s[dst + 1] = 0;
+          s[dst + 2] = 0;
+          s[dst + 3] = value;
+        } else {
+          final int o = (int) value;
+          s[dst] = pushWide[o];
+          s[dst + 1] = pushWide[o + 1];
+          s[dst + 2] = pushWide[o + 2];
+          s[dst + 3] = pushWide[o + 3];
+        }
+        frame.setTopV2(top + 1);
+        gas -= pushGas;
+        pc += 1 + n;
+        if (gas >= 0) {
+          continue;
+        }
+        frame.setPC(pc);
+        frame.setGasRemaining(gas);
+        frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
+        frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
+        return;
+      }
       final boolean loopOwned = !tracing && LOOP_OWNS_STATE[opcode];
       if (!loopOwned) {
         frame.setPC(pc);

@@ -32,7 +32,10 @@ public class JumpDestOnlyCodeCache {
   static class CodeScale implements Weigher<Hash, Code> {
     @Override
     public int weigh(final Hash key, final Code code) {
-      return ((code.getSize() * 9 + 7) / 8) + key.getBytes().size();
+      // The analysed code holds the bytes, the jump destination bitmap and the decoded PUSH
+      // immediates; mainnet contracts have about one PUSH per nine bytes, which puts the tables at
+      // twice the code size.
+      return code.getSize() * 3 + key.getBytes().size();
     }
   }
 
