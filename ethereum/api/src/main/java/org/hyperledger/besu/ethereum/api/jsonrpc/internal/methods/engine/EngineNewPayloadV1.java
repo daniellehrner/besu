@@ -47,12 +47,15 @@ import org.hyperledger.besu.ethereum.core.BlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeers;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.BodyValidation;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 import org.hyperledger.besu.ethereum.mainnet.ValidationResult;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
+import org.hyperledger.besu.plugin.services.metrics.Histogram;
+import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -81,6 +84,7 @@ public sealed class EngineNewPayloadV1<
   private static final Hash OMMERS_HASH_CONSTANT = Hash.EMPTY_LIST_HASH;
   private static final BlockHeaderFunctions HEADER_FUNCTIONS = new MainnetBlockHeaderFunctions();
   private final EthPeers ethPeers;
+  private final LabelledMetric<Histogram> importPhaseHistogram;
   private long lastExecutionTimeInNs = 0L;
   private long lastInvalidWarn = 0L;
   protected final MergeMiningCoordinator mergeCoordinator;
@@ -98,6 +102,8 @@ public sealed class EngineNewPayloadV1<
     this.mergeCoordinator =
         checkNotNull(constructorArguments.mergeCoordinator(), "mergeCoordinator must not be null");
     this.ethPeers = constructorArguments.ethPeers();
+    this.importPhaseHistogram =
+        BlockImportTimings.createHistogram(constructorArguments.metricsSystem());
 
     constructorArguments
         .metricsSystem()
@@ -264,11 +270,19 @@ public sealed class EngineNewPayloadV1<
 
     // execute block and return result response
     final long startTimeNs = System.nanoTime();
-    final BlockProcessingResult executionResult = rememberBlock(block, blockParam);
+    final BlockImportTimings timings = BlockImportTimings.begin();
+    final BlockProcessingResult executionResult;
+    try {
+      executionResult = rememberBlock(block, blockParam);
+    } finally {
+      timings.finish();
+    }
     if (executionResult.isSuccessful()) {
       lastExecutionTimeInNs = System.nanoTime() - startTimeNs;
       logImportedBlockInfo(
           block, lastExecutionTimeInNs, executionResult.getNbParallelizedTransactions());
+      timings.log("Import", newBlockHeader.getNumber());
+      timings.recordTo(importPhaseHistogram);
       return respondWith(reqId, blockParam, newBlockHeader.getHash(), VALID);
     } else {
       logger().debug("New payload is invalid: {}", executionResult);

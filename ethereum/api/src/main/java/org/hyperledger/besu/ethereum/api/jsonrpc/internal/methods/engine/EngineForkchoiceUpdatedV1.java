@@ -40,7 +40,10 @@ import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.JsonRpcSucces
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.response.RpcErrorType;
 import org.hyperledger.besu.ethereum.api.jsonrpc.internal.results.ForkchoiceUpdatedResultV1;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.ValidationResult;
+import org.hyperledger.besu.plugin.services.metrics.Histogram;
+import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -79,6 +82,7 @@ public sealed class EngineForkchoiceUpdatedV1<
   private static final Logger LOG = LoggerFactory.getLogger(EngineForkchoiceUpdatedV1.class);
 
   protected final MergeMiningCoordinator mergeCoordinator;
+  private final LabelledMetric<Histogram> importPhaseHistogram;
 
   @Override
   protected Logger logger() {
@@ -92,6 +96,8 @@ public sealed class EngineForkchoiceUpdatedV1<
     super(constructorArguments, minSupportedFork, firstUnsupportedFork);
     this.mergeCoordinator =
         checkNotNull(constructorArguments.mergeCoordinator(), "mergeCoordinator must not be null");
+    this.importPhaseHistogram =
+        BlockImportTimings.createHistogram(constructorArguments.metricsSystem());
   }
 
   @Override
@@ -221,9 +227,17 @@ public sealed class EngineForkchoiceUpdatedV1<
 
     // 7. Client software MUST update its forkchoice state if payloads referenced by
     // forkchoiceState.headBlockHash and forkchoiceState.finalizedBlockHash are VALID.
-    final MergeMiningCoordinator.ForkchoiceResult forkchoiceResult =
-        mergeCoordinator.updateForkChoice(
-            newHead, forkChoice.getFinalizedBlockHash(), forkChoice.getSafeBlockHash());
+    final BlockImportTimings timings = BlockImportTimings.begin();
+    final MergeMiningCoordinator.ForkchoiceResult forkchoiceResult;
+    try {
+      forkchoiceResult =
+          mergeCoordinator.updateForkChoice(
+              newHead, forkChoice.getFinalizedBlockHash(), forkChoice.getSafeBlockHash());
+    } finally {
+      timings.finish();
+    }
+    timings.log("Fork choice", newHead.getNumber());
+    timings.recordTo(importPhaseHistogram);
 
     // 8. Client software MUST process provided payloadAttributes after successfully applying the
     // forkchoiceState and only if the payload referenced by forkchoiceState.headBlockHash is VALID.

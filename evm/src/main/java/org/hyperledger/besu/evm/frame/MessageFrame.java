@@ -18,7 +18,6 @@ import static com.google.common.base.Preconditions.checkState;
 import static java.util.Collections.emptySet;
 import static org.hyperledger.besu.evm.internal.Words.clampedAdd;
 
-import org.hyperledger.besu.collections.undo.UndoSet;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Log;
 import org.hyperledger.besu.datatypes.VersionedHash;
@@ -29,22 +28,25 @@ import org.hyperledger.besu.evm.internal.MemoryEntry;
 import org.hyperledger.besu.evm.internal.OperandStack;
 import org.hyperledger.besu.evm.internal.StorageEntry;
 import org.hyperledger.besu.evm.internal.UnderflowException;
+import org.hyperledger.besu.evm.internal.WarmAddressSet;
+import org.hyperledger.besu.evm.internal.WarmStorageTable;
 import org.hyperledger.besu.evm.operation.Operation;
+import org.hyperledger.besu.evm.v2.StackArithmetic;
+import org.hyperledger.besu.evm.v2.StackPool;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.TreeSet;
 import java.util.function.Consumer;
 
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Multimap;
-import com.google.common.collect.Table;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.bytes.MutableBytes;
@@ -208,10 +210,11 @@ public class MessageFrame {
   private long gasRemaining;
   private int pc;
   private final Memory memory = new Memory();
-  private final OperandStack stack;
+  // allocated on first use for v2 frames, which run on the long[] stack and never touch it
+  private OperandStack stack;
   // EVM v2 stack: 4 longs per 256-bit word (index 0 = most significant, index 3 = least
   // significant)
-  private final long[] stackDataV2;
+  private long[] stackDataV2;
   private int stackTopV2;
   private final int stackMaxSizeV2;
   private Bytes output = Bytes.EMPTY;
@@ -231,6 +234,8 @@ public class MessageFrame {
   private final Address recipient;
   private final Address contract;
   private final Bytes inputData;
+  // materialised on first CALLDATALOAD: reading longs through the Bytes interface goes byte by byte
+  private byte[] inputDataArray;
   private final Address sender;
   private final Wei value;
   private final Wei apparentValue;
@@ -244,6 +249,9 @@ public class MessageFrame {
   private Operation currentOperation;
   private final Consumer<MessageFrame> completer;
   private Optional<MemoryEntry> maybeUpdatedMemory = Optional.empty();
+  // only tracers read the recorded memory and storage updates, and recording them costs a copy
+  // and two allocations per memory write
+  private boolean recordUpdatesForTracer = true;
   private Optional<StorageEntry> maybeUpdatedStorage = Optional.empty();
 
   private final TxValues txValues;
@@ -285,8 +293,8 @@ public class MessageFrame {
     this.type = type;
     this.worldUpdater = worldUpdater;
     this.gasRemaining = initialGas;
-    this.stack = new OperandStack(txValues.maxStackSize());
-    this.stackDataV2 = enableEvmV2 ? new long[txValues.maxStackSize() * 4] : null;
+    this.stack = enableEvmV2 ? null : new OperandStack(txValues.maxStackSize());
+    this.stackDataV2 = enableEvmV2 ? StackPool.borrow(txValues.maxStackSize()) : null;
     this.stackTopV2 = 0;
     this.stackMaxSizeV2 = txValues.maxStackSize();
     this.pc = 0;
@@ -438,7 +446,7 @@ public class MessageFrame {
    * @throws UnderflowException if the offset is out of range
    */
   public Bytes getStackItem(final int offset) {
-    return stack.get(offset);
+    return stack().get(offset);
   }
 
   /**
@@ -448,7 +456,7 @@ public class MessageFrame {
    * @throws UnderflowException if the stack is empty
    */
   public Bytes popStackItem() {
-    return stack.pop();
+    return stack().pop();
   }
 
   /**
@@ -457,7 +465,7 @@ public class MessageFrame {
    * @param n The number of items to pop off the stack
    */
   public void popStackItems(final int n) {
-    stack.bulkPop(n);
+    stack().bulkPop(n);
   }
 
   /**
@@ -466,7 +474,7 @@ public class MessageFrame {
    * @param value The value to push onto the stack.
    */
   public void pushStackItem(final Bytes value) {
-    stack.push(value);
+    stack().push(value);
   }
 
   /**
@@ -477,7 +485,7 @@ public class MessageFrame {
    * @throws IllegalStateException if the stack is too small
    */
   public void setStackItem(final int offset, final Bytes value) {
-    stack.set(offset, value);
+    stack().set(offset, value);
   }
 
   /**
@@ -486,7 +494,14 @@ public class MessageFrame {
    * @return The current stack size
    */
   public int stackSize() {
-    return stack.size();
+    return stack().size();
+  }
+
+  private OperandStack stack() {
+    if (stack == null) {
+      stack = new OperandStack(txValues.maxStackSize());
+    }
+    return stack;
   }
 
   // region --- EVM v2 long[] stack operations ---
@@ -537,6 +552,33 @@ public class MessageFrame {
    */
   public boolean stackHasSpaceV2(final int n) {
     return stackTopV2 + n <= stackMaxSizeV2;
+  }
+
+  /**
+   * Ensures the V2 stack array is allocated, for frames that were not built with {@code
+   * enableEvmV2(true)} but are run through the V2 dispatch path.
+   */
+  public void ensureV2Stack() {
+    if (stackDataV2 == null) {
+      stackDataV2 = new long[txValues.maxStackSize() * 4];
+    }
+  }
+
+  /**
+   * Returns this frame's operand stack to the thread-local pool for reuse. Frames that never had a
+   * v2 stack have nothing to return, and handing the pool a null would surface as a null stack on a
+   * later frame.
+   */
+  public void returnStackToPool() {
+    if (stackDataV2 == null) {
+      return;
+    }
+    if (stackTopV2 > 0) {
+      Arrays.fill(stackDataV2, 0, stackTopV2 << 2, 0L);
+    }
+    stackTopV2 = 0;
+    StackPool.release(stackDataV2, txValues.maxStackSize());
+    stackDataV2 = null;
   }
 
   // ---------------------------------------------------------------------------
@@ -609,6 +651,61 @@ public class MessageFrame {
   }
 
   /**
+   * Reads the 32-byte word at a memory location straight into a v2 stack slot, expanding memory as
+   * needed.
+   *
+   * @param location the first byte of the word
+   * @param s the stack data
+   * @param top the stack top
+   * @param depth the slot depth from the top
+   */
+  public void readMemoryWord(final long location, final long[] s, final int top, final int depth) {
+    final int start = memory.ensureRange(location, Bytes32.SIZE);
+    StackArithmetic.fromBytesAt(s, top, depth, memory.bytes(), start, Bytes32.SIZE);
+    if (recordUpdatesForTracer) {
+      setUpdatedMemory(location, memory.getBytes(location, Bytes32.SIZE));
+    }
+  }
+
+  /**
+   * Writes a v2 stack slot as a 32-byte word at a memory location, expanding memory as needed.
+   *
+   * @param location the first byte of the word
+   * @param s the stack data
+   * @param top the stack top
+   * @param depth the slot depth from the top
+   */
+  public void writeMemoryWord(final long location, final long[] s, final int top, final int depth) {
+    final int start = memory.ensureRange(location, Bytes32.SIZE);
+    StackArithmetic.toBytesAt(s, top, depth, memory.bytes(), start);
+    if (recordUpdatesForTracer) {
+      setUpdatedMemory(location, memory.getBytes(location, Bytes32.SIZE));
+    }
+  }
+
+  /**
+   * Expands memory to cover a range and returns where it starts in the backing array, for callers
+   * that read memory in place instead of through a copy.
+   *
+   * @param offset the first byte of the range
+   * @param length the length of the range
+   * @return the index of the first byte in the array returned by {@link #memoryBytes()}
+   */
+  public int memoryRange(final long offset, final long length) {
+    return memory.ensureRange(offset, length);
+  }
+
+  /**
+   * The memory's backing array. It is replaced whenever memory grows, so it must be fetched after
+   * {@link #memoryRange} and not held beyond the current operation.
+   *
+   * @return the backing array
+   */
+  public byte[] memoryBytes() {
+    return memory.bytes();
+  }
+
+  /**
    * Read bytes in memory as mutable. Contents should not be considered stable outside the scope of
    * the current operation.
    *
@@ -654,7 +751,7 @@ public class MessageFrame {
   public MutableBytes readMutableMemory(
       final long offset, final long length, final boolean explicitMemoryRead) {
     final MutableBytes memBytes = memory.getMutableBytes(offset, length);
-    if (explicitMemoryRead) {
+    if (explicitMemoryRead && recordUpdatesForTracer) {
       setUpdatedMemory(offset, memBytes);
     }
     return memBytes;
@@ -669,7 +766,7 @@ public class MessageFrame {
    */
   public void writeMemory(final long offset, final byte value, final boolean explicitMemoryUpdate) {
     memory.setByte(offset, value);
-    if (explicitMemoryUpdate) {
+    if (explicitMemoryUpdate && recordUpdatesForTracer) {
       setUpdatedMemory(offset, Bytes.of(value));
     }
   }
@@ -696,7 +793,7 @@ public class MessageFrame {
   public void writeMemory(
       final long offset, final long length, final Bytes value, final boolean explicitMemoryUpdate) {
     memory.setBytes(offset, length, value);
-    if (explicitMemoryUpdate) {
+    if (explicitMemoryUpdate && recordUpdatesForTracer) {
       setUpdatedMemory(offset, 0, length, value);
     }
   }
@@ -714,7 +811,7 @@ public class MessageFrame {
   public void writeMemoryRightAligned(
       final long offset, final long length, final Bytes value, final boolean explicitMemoryUpdate) {
     memory.setBytesRightAligned(offset, length, value);
-    if (explicitMemoryUpdate) {
+    if (explicitMemoryUpdate && recordUpdatesForTracer) {
       setUpdatedMemoryRightAligned(offset, length, value);
     }
   }
@@ -748,7 +845,7 @@ public class MessageFrame {
       final Bytes value,
       final boolean explicitMemoryUpdate) {
     memory.setBytes(offset, sourceOffset, length, value);
-    if (explicitMemoryUpdate && length > 0) {
+    if (explicitMemoryUpdate && recordUpdatesForTracer && length > 0) {
       setUpdatedMemory(offset, sourceOffset, length, value);
     }
   }
@@ -767,7 +864,7 @@ public class MessageFrame {
       final long dst, final long src, final long length, final boolean explicitMemoryUpdate) {
     if (length > 0) {
       memory.copy(dst, src, length);
-      if (explicitMemoryUpdate) {
+      if (explicitMemoryUpdate && recordUpdatesForTracer) {
         setUpdatedMemory(dst, memory.getBytes(dst, length));
       }
     }
@@ -817,7 +914,19 @@ public class MessageFrame {
    * @param value the value
    */
   public void storageWasUpdated(final UInt256 storageAddress, final Bytes value) {
-    maybeUpdatedStorage = Optional.of(new StorageEntry(storageAddress, value));
+    if (recordUpdatesForTracer) {
+      maybeUpdatedStorage = Optional.of(new StorageEntry(storageAddress, value));
+    }
+  }
+
+  /**
+   * Whether memory and storage updates are recorded for tracers. On by default; the interpreter
+   * turns it off when it runs without a tracer.
+   *
+   * @param record true to record updates
+   */
+  public void setRecordUpdatesForTracer(final boolean record) {
+    this.recordUpdatesForTracer = record;
   }
 
   /**
@@ -1158,7 +1267,7 @@ public class MessageFrame {
    * @return true if the address was already warmed up
    */
   public boolean warmUpAddress(final Address address) {
-    return !txValues.warmedUpAddresses().add(address);
+    return txValues.warmedUpAddresses().warmUp(address);
   }
 
   /**
@@ -1180,7 +1289,7 @@ public class MessageFrame {
    * @return true if the storage slot was already warmed up
    */
   public boolean warmUpStorage(final Address address, final Bytes32 slot) {
-    return txValues.warmedUpStorage().put(address, slot, Boolean.TRUE) != null;
+    return txValues.warmedUpStorage().warmUp(address, slot);
   }
 
   /**
@@ -1235,6 +1344,20 @@ public class MessageFrame {
    */
   public Bytes getInputData() {
     return inputData;
+  }
+
+  /**
+   * Returns the input data as a byte array that must not be modified.
+   *
+   * @return the input data
+   */
+  public byte[] getInputDataArray() {
+    byte[] array = inputDataArray;
+    if (array == null) {
+      array = inputData.toArrayUnsafe();
+      inputDataArray = array;
+    }
+    return array;
   }
 
   /**
@@ -1454,7 +1577,7 @@ public class MessageFrame {
    *
    * @return the warmed up storage
    */
-  public Table<Address, Bytes32, Boolean> getWarmedUpStorage() {
+  public WarmStorageTable getWarmedUpStorage() {
     return txValues.warmedUpStorage();
   }
 
@@ -1923,17 +2046,13 @@ public class MessageFrame {
       TxValues newTxValues;
 
       if (parentMessageFrame == null) {
-        // A TreeSet (sorted by Address's natural ordering) is used instead of a HashSet:
-        // Address's hashCode() is a grindable base-31 hash with no direct Comparable<Address>
-        // declaration, so HashMap/HashSet bucket treeification never engages, letting an
-        // attacker force O(n) bucket walks per insert.
-        TreeSet<Address> warmedUpAddresses = new TreeSet<>();
-        warmedUpAddresses.add(contract);
+        final WarmAddressSet warmedUpAddresses = new WarmAddressSet();
+        warmedUpAddresses.warmUp(contract);
         newTxValues =
             TxValues.forTransaction(
                 blockHashLookup,
                 maxStackSize,
-                UndoSet.of(warmedUpAddresses),
+                warmedUpAddresses,
                 originator,
                 gasPrice,
                 blobGasPrice,

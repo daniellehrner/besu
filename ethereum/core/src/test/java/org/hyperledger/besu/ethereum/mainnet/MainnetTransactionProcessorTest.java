@@ -70,7 +70,9 @@ class MainnetTransactionProcessorTest {
   private TransactionValidatorFactory transactionValidatorFactory;
 
   @Mock private ContractCreationProcessor contractCreationProcessor;
-  @Mock private MessageCallProcessor messageCallProcessor;
+
+  @Mock(answer = Answers.RETURNS_DEEP_STUBS)
+  private MessageCallProcessor messageCallProcessor;
 
   @Mock private WorldUpdater worldState;
   @Mock private ProcessableBlockHeader blockHeader;

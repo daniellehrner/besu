@@ -44,6 +44,7 @@ import org.hyperledger.besu.ethereum.eth.sync.backwardsync.BackwardSyncContext;
 import org.hyperledger.besu.ethereum.eth.sync.backwardsync.BadChainListener;
 import org.hyperledger.besu.ethereum.eth.transactions.TransactionPool;
 import org.hyperledger.besu.ethereum.mainnet.AbstractGasLimitSpecification;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
@@ -688,10 +689,13 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
         .getYield()
         .ifPresentOrElse(
             result ->
-                chain.storeBlock(
-                    block,
-                    result.getReceipts(),
-                    validationResult.getYield().flatMap(y -> y.getBlockAccessList())),
+                BlockImportTimings.time(
+                    BlockImportTimings.Phase.STORE_BLOCK,
+                    () ->
+                        chain.storeBlock(
+                            block,
+                            result.getReceipts(),
+                            validationResult.getYield().flatMap(y -> y.getBlockAccessList()))),
             () -> LOG.debug("empty yield in blockProcessingResult"));
     return validationResult;
   }
@@ -723,6 +727,7 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
       return ForkchoiceResult.withFailure(INVALID, "Failed to set new head", latestValid);
     }
 
+    final long finalityStart = System.nanoTime();
     // set and persist the new finalized block if it is present
     newFinalized.ifPresent(
         blockHeader -> {
@@ -737,6 +742,7 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
               blockchain.setSafeBlock(safeBlockHash);
               mergeContext.setSafeBlock(newSafeBlock);
             });
+    BlockImportTimings.addSince(BlockImportTimings.Phase.FORK_CHOICE_FINALITY, finalityStart);
 
     return ForkchoiceResult.withResult(newFinalized, Optional.of(newHead));
   }
@@ -751,20 +757,25 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
       return true;
     }
 
-    if (moveWorldStateTo(newHead)) {
+    if (BlockImportTimings.time(
+        BlockImportTimings.Phase.FORK_CHOICE_WORLD_STATE, () -> moveWorldStateTo(newHead))) {
       if (newHead.getParentHash().equals(blockchain.getChainHeadHash())) {
         LOG.atDebug()
             .setMessage(
                 "Forwarding chain head to the block {} saved from a previous newPayload invocation")
             .addArgument(newHead::toLogString)
             .log();
-        return blockchain.forwardToBlock(newHead);
+        return BlockImportTimings.time(
+            BlockImportTimings.Phase.FORK_CHOICE_CHAIN_HEAD,
+            () -> blockchain.forwardToBlock(newHead));
       } else {
         LOG.atDebug()
             .setMessage("New head {} is a chain reorg, rewind chain head to it")
             .addArgument(newHead::toLogString)
             .log();
-        return blockchain.rewindToBlock(newHead.getHash());
+        return BlockImportTimings.time(
+            BlockImportTimings.Phase.FORK_CHOICE_CHAIN_HEAD,
+            () -> blockchain.rewindToBlock(newHead.getHash()));
       }
     }
     LOG.atDebug()

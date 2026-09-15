@@ -14,18 +14,21 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.pushWei;
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.pushZero;
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.readAddressAt;
-
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.evm.EVM;
+import org.hyperledger.besu.evm.UInt256;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.v2.StackArithmetic;
 
-/** The Balance operation. */
+/**
+ * EVM v2 BALANCE operation (0x31).
+ *
+ * <p>Pops an address from the stack and replaces it with the account's balance in Wei. Applies
+ * warm/cold account access cost.
+ */
 public class BalanceOperationV2 extends AbstractOperationV2 {
 
   /**
@@ -38,10 +41,10 @@ public class BalanceOperationV2 extends AbstractOperationV2 {
   }
 
   /**
-   * Gets Balance operation Gas Cost plus warm storage read cost or cold account access cost.
+   * Gas cost including warm/cold access.
    *
-   * @param accountIsWarm true to add warm storage read cost, false to add cold account access cost
-   * @return the long
+   * @param accountIsWarm whether the account was already warm
+   * @return the total gas cost
    */
   protected long cost(final boolean accountIsWarm) {
     return gasCalculator().getBalanceOperationGasCost()
@@ -52,23 +55,41 @@ public class BalanceOperationV2 extends AbstractOperationV2 {
 
   @Override
   public OperationResult execute(final MessageFrame frame, final EVM evm) {
-    if (!frame.stackHasItemsV2(1)) return UNDERFLOW_RESPONSE;
-    final long[] stack = frame.stackDataV2();
+    return staticOperation(frame, frame.stackDataV2(), gasCalculator());
+  }
+
+  /**
+   * Execute BALANCE on the v2 long[] stack.
+   *
+   * @param frame the message frame
+   * @param s the stack data
+   * @param gasCalculator the gas calculator
+   * @return the operation result
+   */
+  public static OperationResult staticOperation(
+      final MessageFrame frame, final long[] s, final GasCalculator gasCalculator) {
+    final long warmCost =
+        gasCalculator.getBalanceOperationGasCost() + gasCalculator.getWarmStorageReadCost();
+    final long coldCost =
+        gasCalculator.getBalanceOperationGasCost() + gasCalculator.getColdAccountAccessCost();
+    if (!frame.stackHasItemsV2(1)) {
+      return new OperationResult(warmCost, ExceptionalHaltReason.INSUFFICIENT_STACK_ITEMS);
+    }
     final int top = frame.stackTopV2();
-    final Address address = readAddressAt(stack, top, 0);
+    final Address address = StackArithmetic.toAddressAt(s, top, 0);
     final boolean accountIsWarm =
-        frame.warmUpAddress(address) || gasCalculator().isPrecompile(address);
-    final long cost = cost(accountIsWarm);
+        frame.warmUpAddress(address) || gasCalculator.isPrecompile(address);
+    final long cost = accountIsWarm ? warmCost : coldCost;
     if (frame.getRemainingGas() < cost) {
       return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
     }
     final Account account = getAccount(address, frame);
+    // Overwrite in place (pop 1, push 1)
     if (account == null) {
-      pushZero(stack, top - 1);
+      StackArithmetic.putAt(s, top, 0, UInt256.ZERO);
     } else {
-      pushWei(account.getBalance(), stack, top - 1);
+      StackArithmetic.putAt(s, top, 0, UInt256.fromBytesBE(account.getBalance().toArrayUnsafe()));
     }
-    // no setTopV2 needed -- pop 1 + push 1 = net 0
     return new OperationResult(cost, null);
   }
 }
