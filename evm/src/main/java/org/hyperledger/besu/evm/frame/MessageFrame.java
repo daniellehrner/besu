@@ -555,6 +555,16 @@ public class MessageFrame {
   }
 
   /**
+   * Returns the maximum number of items the v2 stack can hold. Fixed for the life of the frame, so
+   * the interpreter loop can hoist it and bounds check against a local instead of the frame.
+   *
+   * @return the maximum v2 stack size
+   */
+  public int stackMaxSizeV2() {
+    return stackMaxSizeV2;
+  }
+
+  /**
    * Ensures the V2 stack array is allocated, for frames that were not built with {@code
    * enableEvmV2(true)} but are run through the V2 dispatch path.
    */

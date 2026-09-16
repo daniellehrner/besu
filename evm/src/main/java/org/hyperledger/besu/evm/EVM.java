@@ -89,6 +89,7 @@ import org.hyperledger.besu.evm.operation.VirtualOperation;
 import org.hyperledger.besu.evm.operation.XorOperation;
 import org.hyperledger.besu.evm.operation.XorOperationOptimized;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
+import org.hyperledger.besu.evm.v2.StackArithmetic;
 import org.hyperledger.besu.evm.v2.operation.AddModOperationV2;
 import org.hyperledger.besu.evm.v2.operation.AddOperationV2;
 import org.hyperledger.besu.evm.v2.operation.AddressOperationV2;
@@ -236,6 +237,13 @@ public class EVM {
   private final JumpDestOnlyCodeCache jumpDestOnlyCodeCache;
   private final long pushGas;
 
+  // Costs of the arms the loop carries inline. Taken from the gas calculator rather than written
+  // as literals: the shared per-operation result objects already hardcode these numbers, and one
+  // source of truth for them is enough.
+  private final long veryLowTierGas;
+  private final long baseTierGas;
+  private final long jumpDestGas;
+
   /**
    * Instantiates a new Evm.
    *
@@ -256,6 +264,9 @@ public class EVM {
     this.evmSpecVersion = evmSpecVersion;
     this.jumpDestOnlyCodeCache = new JumpDestOnlyCodeCache(evmConfiguration);
     this.pushGas = gasCalculator.getVeryLowTierGasCost();
+    this.veryLowTierGas = gasCalculator.getVeryLowTierGasCost();
+    this.baseTierGas = gasCalculator.getBaseTierGasCost();
+    this.jumpDestGas = gasCalculator.getJumpDestOperationGasCost();
 
     enableByzantium = EvmSpecVersion.BYZANTIUM.ordinal() <= evmSpecVersion.ordinal();
     enableConstantinople = EvmSpecVersion.CONSTANTINOPLE.ordinal() <= evmSpecVersion.ordinal();
@@ -647,51 +658,187 @@ public class EVM {
     }
     int pc = frame.getPC();
     long gas = frame.getRemainingGas();
+    // The stack pointer, the stack and its bound are loop state. Every operation used to reach
+    // them back through the frame, two or three accessor round trips per opcode. The arms carried
+    // inline below work on these locals and the frame is only handed the pointer again before a
+    // call that needs it. The array reference is stable for one runToHaltV2 call: a frame returns
+    // its stack to the pool only once execution has left it for good.
+    int sp = frame.stackTopV2();
+    final long[] s = frame.stackDataV2();
+    final int maxSp = frame.stackMaxSizeV2();
     while (true) {
       final int opcode = pc < code.length ? code[pc] & 0xff : 0;
-      // PUSH is the most frequent opcode, so it stays in the loop: the immediate was decoded when
-      // the code was analysed and is found by ranking the pc in the PUSH bitmap, which leaves one
-      // load for PUSH1..PUSH8 and four for the wider ones.
-      if (!tracing && (opcode >>> 5) == 3) {
-        final int top = frame.stackTopV2();
-        if (!frame.stackHasSpaceV2(1)) {
+      if (!tracing) {
+        // PUSH is the most frequent opcode, so it stays in the loop: the immediate was decoded when
+        // the code was analysed and is found by ranking the pc in the PUSH bitmap, which leaves one
+        // load for PUSH1..PUSH8 and four for the wider ones.
+        if ((opcode >>> 5) == 3) {
+          if (sp + 1 > maxSp) {
+            frame.setTopV2(sp);
+            frame.setPC(pc);
+            frame.setGasRemaining(gas);
+            frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.TOO_MANY_STACK_ITEMS));
+            frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
+            return;
+          }
+          final int n = opcode - PushOperationV2.PUSH_BASE;
+          final int dst = sp << 2;
+          final int block = pc >>> 6;
+          final int ordinal =
+              pushBase[block] + Long.bitCount(pushBits[block] & ((1L << (pc & 63)) - 1));
+          final long value = pushValues[ordinal];
+          if (n <= 8) {
+            s[dst] = 0;
+            s[dst + 1] = 0;
+            s[dst + 2] = 0;
+            s[dst + 3] = value;
+          } else {
+            final int o = (int) value;
+            s[dst] = pushWide[o];
+            s[dst + 1] = pushWide[o + 1];
+            s[dst + 2] = pushWide[o + 2];
+            s[dst + 3] = pushWide[o + 3];
+          }
+          sp++;
+          gas -= pushGas;
+          pc += 1 + n;
+          if (gas >= 0) {
+            continue;
+          }
+          frame.setTopV2(sp);
           frame.setPC(pc);
           frame.setGasRemaining(gas);
-          frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.TOO_MANY_STACK_ITEMS));
+          frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
           frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
           return;
         }
-        final int n = opcode - PushOperationV2.PUSH_BASE;
-        final long[] s = frame.stackDataV2();
-        final int dst = top << 2;
-        final int block = pc >>> 6;
-        final int ordinal =
-            pushBase[block] + Long.bitCount(pushBits[block] & ((1L << (pc & 63)) - 1));
-        final long value = pushValues[ordinal];
-        if (n <= 8) {
-          s[dst] = 0;
-          s[dst + 1] = 0;
-          s[dst + 2] = 0;
-          s[dst + 3] = value;
-        } else {
-          final int o = (int) value;
-          s[dst] = pushWide[o];
-          s[dst + 1] = pushWide[o + 1];
-          s[dst + 2] = pushWide[o + 2];
-          s[dst + 3] = pushWide[o + 3];
+        // These arms are two thirds of all dispatches and every one of them is fixed cost and
+        // touches nothing but the stack, so they need neither the frame nor a result object. They
+        // handle only the case where the operation succeeds: anything short of stack depth, stack
+        // space or gas leaves the switch without continuing and the general path below
+        // re-dispatches
+        // it through the operation, which owns the halt. The stack helpers are the ones
+        // StackArithmeticTest checks against BigInteger arithmetic modulo 2^256.
+        switch (opcode) {
+          case 0x80,
+              0x81,
+              0x82,
+              0x83,
+              0x84,
+              0x85,
+              0x86,
+              0x87,
+              0x88,
+              0x89,
+              0x8a,
+              0x8b,
+              0x8c,
+              0x8d,
+              0x8e,
+              0x8f -> { // DUP1-16
+            final int depth = opcode - DupOperationV2.DUP_BASE;
+            if (sp >= depth && sp + 1 <= maxSp && gas >= veryLowTierGas) {
+              sp = StackArithmetic.dup(s, sp, depth);
+              gas -= veryLowTierGas;
+              pc++;
+              continue;
+            }
+          }
+          case 0x90,
+              0x91,
+              0x92,
+              0x93,
+              0x94,
+              0x95,
+              0x96,
+              0x97,
+              0x98,
+              0x99,
+              0x9a,
+              0x9b,
+              0x9c,
+              0x9d,
+              0x9e,
+              0x9f -> { // SWAP1-16
+            final int depth = opcode - SwapOperationV2.SWAP_BASE;
+            if (sp >= depth + 1 && gas >= veryLowTierGas) {
+              sp = StackArithmetic.swap(s, sp, depth);
+              gas -= veryLowTierGas;
+              pc++;
+              continue;
+            }
+          }
+          case 0x5b -> { // JUMPDEST
+            if (gas >= jumpDestGas) {
+              gas -= jumpDestGas;
+              pc++;
+              continue;
+            }
+          }
+          case 0x50 -> { // POP
+            if (sp >= 1 && gas >= baseTierGas) {
+              sp--;
+              gas -= baseTierGas;
+              pc++;
+              continue;
+            }
+          }
+          case 0x15 -> { // ISZERO
+            if (sp >= 1 && gas >= veryLowTierGas) {
+              sp = StackArithmetic.isZero(s, sp);
+              gas -= veryLowTierGas;
+              pc++;
+              continue;
+            }
+          }
+          case 0x16 -> { // AND
+            if (sp >= 2 && gas >= veryLowTierGas) {
+              sp = StackArithmetic.and(s, sp);
+              gas -= veryLowTierGas;
+              pc++;
+              continue;
+            }
+          }
+          case 0x14 -> { // EQ
+            if (sp >= 2 && gas >= veryLowTierGas) {
+              sp = StackArithmetic.eq(s, sp);
+              gas -= veryLowTierGas;
+              pc++;
+              continue;
+            }
+          }
+          case 0x10 -> { // LT
+            if (sp >= 2 && gas >= veryLowTierGas) {
+              sp = StackArithmetic.lt(s, sp);
+              gas -= veryLowTierGas;
+              pc++;
+              continue;
+            }
+          }
+          case 0x11 -> { // GT
+            if (sp >= 2 && gas >= veryLowTierGas) {
+              sp = StackArithmetic.gt(s, sp);
+              gas -= veryLowTierGas;
+              pc++;
+              continue;
+            }
+          }
+          case 0x5f -> { // PUSH0, Shanghai onwards
+            if (enableShanghai && sp + 1 <= maxSp && gas >= baseTierGas) {
+              sp = StackArithmetic.pushZero(s, sp);
+              gas -= baseTierGas;
+              pc++;
+              continue;
+            }
+          }
+          default -> {
+            // everything else goes the general way
+          }
         }
-        frame.setTopV2(top + 1);
-        gas -= pushGas;
-        pc += 1 + n;
-        if (gas >= 0) {
-          continue;
-        }
-        frame.setPC(pc);
-        frame.setGasRemaining(gas);
-        frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
-        frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
-        return;
       }
+      // The frame takes the stack pointer back before anything that reads it: the operations, the
+      // tracer hooks and the cold arms all go through the frame.
+      frame.setTopV2(sp);
       final boolean loopOwned = !tracing && LOOP_OWNS_STATE[opcode];
       if (!loopOwned) {
         frame.setPC(pc);
@@ -844,6 +991,9 @@ public class EVM {
       } catch (final UnderflowException ue) {
         result = UNDERFLOW_RESPONSE;
       }
+      // The operation owned the stack for the duration of the call, so the loop picks the pointer
+      // back up before the arms carried inline above use it again.
+      sp = frame.stackTopV2();
       final ExceptionalHaltReason haltReason = result.getHaltReason();
       if (loopOwned) {
         if (haltReason == null) {
