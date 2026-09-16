@@ -63,12 +63,17 @@ public class BlocksSubCommandTest extends CommandTestAbstract {
 
   private static final String EXPECTED_BLOCK_IMPORT_USAGE =
       """
-      Usage: besu blocks import [-hV] [--run] [--skip-pow-validation-enabled]
-                                [--end-block=<LONG>] [--format=<format>]
-                                [--start-block=<LONG>] [--start-time=<startTime>]
-                                [--from[=<FILE>...]]... [<FILE>...]
+      Usage: besu blocks import [-hV] [--block-timings] [--run]
+                                [--skip-pow-validation-enabled] [--end-block=<LONG>]
+                                [--format=<format>] [--start-block=<LONG>]
+                                [--start-time=<startTime>] [--from[=<FILE>...]]...
+                                [<FILE>...]
       This command imports blocks from a file into the database.
             [<FILE>...]            Files containing blocks to import.
+            --block-timings        Log the phase breakdown of every imported block,
+                                     as the engine API does, rather than throughput
+                                     every 1000 blocks. For benchmarking a block
+                                     range. (default: false)
             --end-block=<LONG>     The ending index of the block list to import
                                      (exclusive).  If not specified all blocks after
                                      the start block will be imported.
@@ -205,7 +210,8 @@ public class BlocksSubCommandTest extends CommandTestAbstract {
         fileToImport.getAbsolutePath().toString());
 
     verify(rlpBlockImporter)
-        .importBlockchain(pathArgumentCaptor.capture(), any(), anyBoolean(), anyLong(), anyLong());
+        .importBlockchain(
+            pathArgumentCaptor.capture(), any(), anyBoolean(), anyLong(), anyLong(), anyBoolean());
 
     assertThat(pathArgumentCaptor.getValue()).isEqualByComparingTo(fileToImport.toPath());
 
@@ -224,7 +230,8 @@ public class BlocksSubCommandTest extends CommandTestAbstract {
         fileToImport.getPath());
 
     verify(rlpBlockImporter)
-        .importBlockchain(pathArgumentCaptor.capture(), any(), anyBoolean(), anyLong(), anyLong());
+        .importBlockchain(
+            pathArgumentCaptor.capture(), any(), anyBoolean(), anyLong(), anyLong(), anyBoolean());
 
     assertThat(pathArgumentCaptor.getValue()).isEqualByComparingTo(fileToImport.toPath());
 
@@ -248,7 +255,8 @@ public class BlocksSubCommandTest extends CommandTestAbstract {
         file3ToImport.getPath());
 
     verify(rlpBlockImporter, times(3))
-        .importBlockchain(pathArgumentCaptor.capture(), any(), anyBoolean(), anyLong(), anyLong());
+        .importBlockchain(
+            pathArgumentCaptor.capture(), any(), anyBoolean(), anyLong(), anyLong(), anyBoolean());
 
     assertThat(pathArgumentCaptor.getAllValues())
         .containsExactlyInAnyOrder(

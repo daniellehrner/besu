@@ -27,6 +27,7 @@ import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.mainnet.BlockHeaderValidator;
 import org.hyperledger.besu.ethereum.mainnet.BlockImportResult;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
@@ -102,6 +103,29 @@ public class RlpBlockImporter implements Closeable {
       final long startBlock,
       final long endBlock)
       throws IOException {
+    return importBlockchain(blocks, besuController, skipPowValidation, startBlock, endBlock, false);
+  }
+
+  /**
+   * Import blockchain.
+   *
+   * @param blocks the blocks
+   * @param besuController the besu controller
+   * @param skipPowValidation the skip pow validation
+   * @param startBlock the start block
+   * @param endBlock the end block
+   * @param perBlockTimings log the phase breakdown of every block, as the engine API does
+   * @return the rlp block importer - import result
+   * @throws IOException the io exception
+   */
+  public RlpBlockImporter.ImportResult importBlockchain(
+      final Path blocks,
+      final BesuController besuController,
+      final boolean skipPowValidation,
+      final long startBlock,
+      final long endBlock,
+      final boolean perBlockTimings)
+      throws IOException {
     final ProtocolSchedule protocolSchedule = besuController.getProtocolSchedule();
     final ProtocolContext context = besuController.getProtocolContext();
     final MutableBlockchain blockchain = context.getBlockchain();
@@ -165,7 +189,8 @@ public class RlpBlockImporter implements Closeable {
                         block,
                         header,
                         protocolSchedule.getByBlockHeader(header),
-                        skipPowValidation),
+                        skipPowValidation,
+                        perBlockTimings),
                 importExecutor);
         previousBlockFuture.exceptionally(
             exception -> {
@@ -221,7 +246,11 @@ public class RlpBlockImporter implements Closeable {
       final Block block,
       final BlockHeader header,
       final ProtocolSpec protocolSpec,
-      final boolean skipPowValidation) {
+      final boolean skipPowValidation,
+      final boolean perBlockTimings) {
+    // The phase hooks record into a thread local, and this runs on the single import thread that
+    // the block processor itself runs on, so the phases of this block are the ones attributed.
+    final BlockImportTimings timings = perBlockTimings ? BlockImportTimings.begin() : null;
     try {
       cumulativeTimer.start();
       segmentTimer.start();
@@ -242,6 +271,10 @@ public class RlpBlockImporter implements Closeable {
       blockBacklog.release();
       cumulativeTimer.stop();
       segmentTimer.stop();
+      if (timings != null) {
+        timings.finish();
+        timings.log("Import", header.getNumber());
+      }
       final long thisGas = block.getHeader().getGasUsed();
       cumulativeGas += thisGas;
       segmentGas += thisGas;
