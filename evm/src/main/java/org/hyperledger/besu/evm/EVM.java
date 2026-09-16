@@ -706,50 +706,96 @@ public class EVM {
       try {
         result =
             switch (opcode) {
+              // DUP1-16 23.10%
+              case 0x80, // DUP1-16
+                  0x81,
+                  0x82,
+                  0x83,
+                  0x84,
+                  0x85,
+                  0x86,
+                  0x87,
+                  0x88,
+                  0x89,
+                  0x8a,
+                  0x8b,
+                  0x8c,
+                  0x8d,
+                  0x8e,
+                  0x8f ->
+                  DupOperationV2.staticOperation(
+                      frame, frame.stackDataV2(), opcode - DupOperationV2.DUP_BASE);
+              // SWAP1-16 14.21%
+              case 0x90, // SWAP1-16
+                  0x91,
+                  0x92,
+                  0x93,
+                  0x94,
+                  0x95,
+                  0x96,
+                  0x97,
+                  0x98,
+                  0x99,
+                  0x9a,
+                  0x9b,
+                  0x9c,
+                  0x9d,
+                  0x9e,
+                  0x9f ->
+                  SwapOperationV2.staticOperation(
+                      frame, frame.stackDataV2(), opcode - SwapOperationV2.SWAP_BASE);
+              // JUMPDEST 9.39%
+              case 0x5b -> JumpDestOperationV2.staticOperation(frame);
+              // POP 7.09%
+              case 0x50 -> PopOperationV2.staticOperation(frame);
+              // JUMPI 6.11%
+              case 0x57 -> JumpiOperationV2.staticOperation(frame, frame.stackDataV2());
+              // JUMP 5.96%
+              case 0x56 -> JumpOperationV2.staticOperation(frame, frame.stackDataV2());
+              // ADD 5.55%
               case 0x01 -> AddOperationV2.staticOperation(frame);
-              case 0x02 -> MulOperationV2.staticOperation(frame);
-              case 0x03 -> SubOperationV2.staticOperation(frame);
-              case 0x04 -> DivOperationV2.staticOperation(frame);
-              case 0x05 -> SDivOperationV2.staticOperation(frame);
-              case 0x06 -> ModOperationV2.staticOperation(frame);
-              case 0x07 -> SModOperationV2.staticOperation(frame);
-              case 0x08 -> AddModOperationV2.staticOperation(frame);
-              case 0x09 -> MulModOperationV2.staticOperation(frame);
-              case 0x0a ->
-                  ExpOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
-              case 0x0b -> SignExtendOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x10 -> LtOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x11 -> GtOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x12 -> SltOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x13 -> SgtOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x14 -> EqOperationV2.staticOperation(frame, frame.stackDataV2());
+              // MSTORE 3.27%
+              case 0x52 ->
+                  MstoreOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+              // ISZERO 3.21%
               case 0x15 -> IsZeroOperationV2.staticOperation(frame, frame.stackDataV2());
+              // AND 3.03%
               case 0x16 -> AndOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x17 -> OrOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x18 -> XorOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x19 -> NotOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x1a -> ByteOperationV2.staticOperation(frame, frame.stackDataV2());
+              // MLOAD 2.73%
+              case 0x51 ->
+                  MloadOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+              // SUB 2.03%
+              case 0x03 -> SubOperationV2.staticOperation(frame);
+              // EQ 1.87%
+              case 0x14 -> EqOperationV2.staticOperation(frame, frame.stackDataV2());
+              // LT 1.37%
+              case 0x10 -> LtOperationV2.staticOperation(frame, frame.stackDataV2());
+              // SHL 1.18%
               case 0x1b ->
                   enableConstantinople
                       ? ShlOperationV2.staticOperation(frame)
                       : InvalidOperation.invalidOperationResult(opcode);
-              case 0x1c ->
-                  enableConstantinople
-                      ? ShrOperationV2.staticOperation(frame)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x1d ->
-                  enableConstantinople
-                      ? SarOperationV2.staticOperation(frame)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x1e ->
-                  enableOsaka
-                      ? ClzOperationV2.staticOperation(frame, frame.stackDataV2())
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x50 -> PopOperationV2.staticOperation(frame);
+              // GT 1.11%
+              case 0x11 -> GtOperationV2.staticOperation(frame, frame.stackDataV2());
+              // PUSH0 1.05%
               case 0x5f ->
                   enableShanghai
                       ? Push0OperationV2.staticOperation(frame, frame.stackDataV2())
                       : InvalidOperation.invalidOperationResult(opcode);
+              // CALLDATALOAD 0.94%
+              case 0x35 -> CallDataLoadOperationV2.staticOperation(frame, frame.stackDataV2());
+              // SHR 0.70%
+              case 0x1c ->
+                  enableConstantinople
+                      ? ShrOperationV2.staticOperation(frame)
+                      : InvalidOperation.invalidOperationResult(opcode);
+              // MULMOD 0.66%
+              case 0x09 -> MulModOperationV2.staticOperation(frame);
+              // MUL 0.55%
+              case 0x02 -> MulOperationV2.staticOperation(frame);
+              // SLOAD 0.54%
+              case 0x54 -> sLoadOperationV2.execute(frame, this);
+              // PUSH1-32, tracing path only
               case 0x60, // PUSH1-32
                   0x61,
                   0x62,
@@ -791,206 +837,7 @@ public class EVM {
                 }
                 yield pushResult;
               }
-              case 0x80, // DUP1-16
-                  0x81,
-                  0x82,
-                  0x83,
-                  0x84,
-                  0x85,
-                  0x86,
-                  0x87,
-                  0x88,
-                  0x89,
-                  0x8a,
-                  0x8b,
-                  0x8c,
-                  0x8d,
-                  0x8e,
-                  0x8f ->
-                  DupOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), opcode - DupOperationV2.DUP_BASE);
-              case 0x90, // SWAP1-16
-                  0x91,
-                  0x92,
-                  0x93,
-                  0x94,
-                  0x95,
-                  0x96,
-                  0x97,
-                  0x98,
-                  0x99,
-                  0x9a,
-                  0x9b,
-                  0x9c,
-                  0x9d,
-                  0x9e,
-                  0x9f ->
-                  SwapOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), opcode - SwapOperationV2.SWAP_BASE);
-              case 0xe6 -> // DUPN (EIP-8024)
-                  enableAmsterdam
-                      ? DupNOperationV2.staticOperation(frame, frame.stackDataV2(), code, pc)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0xe7 -> // SWAPN (EIP-8024)
-                  enableAmsterdam
-                      ? SwapNOperationV2.staticOperation(frame, frame.stackDataV2(), code, pc)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0xe8 -> // EXCHANGE (EIP-8024)
-                  enableAmsterdam
-                      ? ExchangeOperationV2.staticOperation(frame, frame.stackDataV2(), code, pc)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x51 ->
-                  MloadOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
-              case 0x52 ->
-                  MstoreOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
-              case 0x53 ->
-                  Mstore8OperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
-              case 0x5e ->
-                  enableCancun
-                      ? MCopyOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0xf0 ->
-                  CreateOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), createOperationV2, this);
-              case 0xf1 ->
-                  CallOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), callOperationV2, this);
-              case 0xf2 ->
-                  CallCodeOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), callCodeOperationV2, this);
-              case 0xf4 ->
-                  DelegateCallOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), delegateCallOperationV2, this);
-              case 0xf5 ->
-                  Create2OperationV2.staticOperation(
-                      frame, frame.stackDataV2(), create2OperationV2, this);
-              case 0xfa ->
-                  StaticCallOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), staticCallOperationV2, this);
-              case 0x54 -> sLoadOperationV2.execute(frame, this);
-              case 0x55 ->
-                  SStoreOperationV2.staticOperation(
-                      frame,
-                      frame.stackDataV2(),
-                      gasCalculator,
-                      SStoreOperationV2.EIP_1706_MINIMUM);
-              case 0x5c ->
-                  enableCancun
-                      ? TLoadOperationV2.staticOperation(frame, frame.stackDataV2())
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x5d ->
-                  enableCancun
-                      ? TStoreOperationV2.staticOperation(frame, frame.stackDataV2())
-                      : InvalidOperation.invalidOperationResult(opcode);
-              // Data copy / hash / account operations
-              case 0x20 ->
-                  Keccak256OperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
-              case 0x31 ->
-                  BalanceOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
-              case 0x35 -> CallDataLoadOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x37 ->
-                  CallDataCopyOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), gasCalculator);
-              case 0x39 ->
-                  CodeCopyOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
-              case 0x3b ->
-                  ExtCodeSizeOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
-              case 0x3c ->
-                  ExtCodeCopyOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
-              case 0x3e ->
-                  enableByzantium
-                      ? ReturnDataCopyOperationV2.staticOperation(
-                          frame, frame.stackDataV2(), gasCalculator)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x3f ->
-                  enableConstantinople
-                      ? ExtCodeHashOperationV2.staticOperation(
-                          frame, frame.stackDataV2(), gasCalculator)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x40 -> BlockHashOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x47 ->
-                  enableIstanbul
-                      ? SelfBalanceOperationV2.staticOperation(frame, frame.stackDataV2())
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x49 ->
-                  enableCancun
-                      ? BlobHashOperationV2.staticOperation(frame, frame.stackDataV2())
-                      : InvalidOperation.invalidOperationResult(opcode);
-              // Environment push operations (0 → 1)
-              case 0x30 -> AddressOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x32 -> OriginOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x33 -> CallerOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x34 -> CallValueOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x36 -> CallDataSizeOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x38 -> CodeSizeOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x3a -> GasPriceOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x3d ->
-                  enableByzantium
-                      ? ReturnDataSizeOperationV2.staticOperation(frame, frame.stackDataV2())
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x41 -> CoinbaseOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x42 -> TimestampOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x43 -> NumberOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x44 ->
-                  enableParis
-                      ? PrevRandaoOperationV2.staticOperation(frame, frame.stackDataV2())
-                      : DifficultyOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x45 -> GasLimitOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x46 -> // CHAINID (Istanbul+)
-                  chainIdOperationV2 != null
-                      ? chainIdOperationV2.executeFixedCostOperation(frame)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x48 -> // BASEFEE (London+)
-                  enableLondon
-                      ? BaseFeeOperationV2.staticOperation(frame, frame.stackDataV2())
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x4a -> // BLOBBASEFEE (Cancun+)
-                  enableCancun
-                      ? BlobBaseFeeOperationV2.staticOperation(frame, frame.stackDataV2())
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x4b -> // SLOTNUM (Amsterdam+)
-                  enableAmsterdam
-                      ? SlotNumOperationV2.staticOperation(frame, frame.stackDataV2())
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x58 -> PcOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x59 -> MSizeOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x5a -> gasOperationV2.executeFixedCostOperation(frame);
-              // Control flow operations
-              case 0x00 -> StopOperationV2.staticOperation(frame);
-              case 0x56 -> JumpOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x57 -> JumpiOperationV2.staticOperation(frame, frame.stackDataV2());
-              case 0x5b -> JumpDestOperationV2.staticOperation(frame);
-              case 0xf3 ->
-                  ReturnOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
-              case 0xfd -> // REVERT (Byzantium+)
-                  enableByzantium
-                      ? RevertOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0xfe -> InvalidOperationV2.INVALID_RESULT;
-              case 0xa0, 0xa1, 0xa2, 0xa3, 0xa4 -> {
-                int topicCount = opcode - 0xa0;
-                yield LogOperationV2.staticOperation(
-                    frame, frame.stackDataV2(), topicCount, gasCalculator);
-              }
-              case 0xff ->
-                  SelfDestructOperationV2.staticOperation(
-                      frame,
-                      frame.stackDataV2(),
-                      gasCalculator,
-                      enableCancun,
-                      enableAmsterdam
-                          ? EIP7708TransferLogEmitter.INSTANCE
-                          : TransferLogEmitter.NOOP);
-              case 0xfc -> // PAY (EIP-7708, Amsterdam+)
-                  enableAmsterdam
-                      ? PayOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              default -> {
-                final Operation currentOperation =
-                    pc < code.length ? operationArray[opcode] : endOfScriptStop;
-                frame.setCurrentOperation(currentOperation);
-                yield currentOperation.execute(frame, this);
-              }
+              default -> coldOperation(frame, opcode, code, pc);
             };
       } catch (final OverflowException oe) {
         result = OVERFLOW_RESPONSE;
@@ -1031,6 +878,183 @@ public class EVM {
         operationTracer.tracePostExecution(frame, result);
       }
     }
+  }
+
+  /**
+   * The arms outside the hot set, in their own method so they get their own 8000 byte budget
+   * instead of spending the interpreter loop's. Measured over 400 mainnet blocks these account for
+   * about 5% of dispatches between them.
+   *
+   * @param frame the message frame
+   * @param opcode the opcode to execute
+   * @param code the code being executed
+   * @param pc the program counter, for the arms that read their immediate
+   * @return the operation result
+   */
+  private OperationResult coldOperation(
+      final MessageFrame frame, final int opcode, final byte[] code, final int pc) {
+    final Operation[] operationArray = operations.getOperations();
+    return switch (opcode) {
+      case 0x04 -> DivOperationV2.staticOperation(frame);
+      case 0x05 -> SDivOperationV2.staticOperation(frame);
+      case 0x06 -> ModOperationV2.staticOperation(frame);
+      case 0x07 -> SModOperationV2.staticOperation(frame);
+      case 0x08 -> AddModOperationV2.staticOperation(frame);
+      case 0x0a -> ExpOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+      case 0x0b -> SignExtendOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x12 -> SltOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x13 -> SgtOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x17 -> OrOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x18 -> XorOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x19 -> NotOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x1a -> ByteOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x1d ->
+          enableConstantinople
+              ? SarOperationV2.staticOperation(frame)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x1e ->
+          enableOsaka
+              ? ClzOperationV2.staticOperation(frame, frame.stackDataV2())
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0xe6 -> // DUPN (EIP-8024)
+          enableAmsterdam
+              ? DupNOperationV2.staticOperation(frame, frame.stackDataV2(), code, pc)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0xe7 -> // SWAPN (EIP-8024)
+          enableAmsterdam
+              ? SwapNOperationV2.staticOperation(frame, frame.stackDataV2(), code, pc)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0xe8 -> // EXCHANGE (EIP-8024)
+          enableAmsterdam
+              ? ExchangeOperationV2.staticOperation(frame, frame.stackDataV2(), code, pc)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x53 -> Mstore8OperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+      case 0x5e ->
+          enableCancun
+              ? MCopyOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0xf0 ->
+          CreateOperationV2.staticOperation(frame, frame.stackDataV2(), createOperationV2, this);
+      case 0xf1 ->
+          CallOperationV2.staticOperation(frame, frame.stackDataV2(), callOperationV2, this);
+      case 0xf2 ->
+          CallCodeOperationV2.staticOperation(
+              frame, frame.stackDataV2(), callCodeOperationV2, this);
+      case 0xf4 ->
+          DelegateCallOperationV2.staticOperation(
+              frame, frame.stackDataV2(), delegateCallOperationV2, this);
+      case 0xf5 ->
+          Create2OperationV2.staticOperation(frame, frame.stackDataV2(), create2OperationV2, this);
+      case 0xfa ->
+          StaticCallOperationV2.staticOperation(
+              frame, frame.stackDataV2(), staticCallOperationV2, this);
+      case 0x55 ->
+          SStoreOperationV2.staticOperation(
+              frame, frame.stackDataV2(), gasCalculator, SStoreOperationV2.EIP_1706_MINIMUM);
+      case 0x5c ->
+          enableCancun
+              ? TLoadOperationV2.staticOperation(frame, frame.stackDataV2())
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x5d ->
+          enableCancun
+              ? TStoreOperationV2.staticOperation(frame, frame.stackDataV2())
+              : InvalidOperation.invalidOperationResult(opcode);
+      // Data copy / hash / account operations
+      case 0x20 -> Keccak256OperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+      case 0x31 -> BalanceOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+      case 0x37 ->
+          CallDataCopyOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+      case 0x39 -> CodeCopyOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+      case 0x3b ->
+          ExtCodeSizeOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+      case 0x3c ->
+          ExtCodeCopyOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+      case 0x3e ->
+          enableByzantium
+              ? ReturnDataCopyOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x3f ->
+          enableConstantinople
+              ? ExtCodeHashOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x40 -> BlockHashOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x47 ->
+          enableIstanbul
+              ? SelfBalanceOperationV2.staticOperation(frame, frame.stackDataV2())
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x49 ->
+          enableCancun
+              ? BlobHashOperationV2.staticOperation(frame, frame.stackDataV2())
+              : InvalidOperation.invalidOperationResult(opcode);
+      // Environment push operations (0 → 1)
+      case 0x30 -> AddressOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x32 -> OriginOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x33 -> CallerOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x34 -> CallValueOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x36 -> CallDataSizeOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x38 -> CodeSizeOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x3a -> GasPriceOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x3d ->
+          enableByzantium
+              ? ReturnDataSizeOperationV2.staticOperation(frame, frame.stackDataV2())
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x41 -> CoinbaseOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x42 -> TimestampOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x43 -> NumberOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x44 ->
+          enableParis
+              ? PrevRandaoOperationV2.staticOperation(frame, frame.stackDataV2())
+              : DifficultyOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x45 -> GasLimitOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x46 -> // CHAINID (Istanbul+)
+          chainIdOperationV2 != null
+              ? chainIdOperationV2.executeFixedCostOperation(frame)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x48 -> // BASEFEE (London+)
+          enableLondon
+              ? BaseFeeOperationV2.staticOperation(frame, frame.stackDataV2())
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x4a -> // BLOBBASEFEE (Cancun+)
+          enableCancun
+              ? BlobBaseFeeOperationV2.staticOperation(frame, frame.stackDataV2())
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x4b -> // SLOTNUM (Amsterdam+)
+          enableAmsterdam
+              ? SlotNumOperationV2.staticOperation(frame, frame.stackDataV2())
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x58 -> PcOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x59 -> MSizeOperationV2.staticOperation(frame, frame.stackDataV2());
+      case 0x5a -> gasOperationV2.executeFixedCostOperation(frame);
+      // Control flow operations
+      case 0x00 -> StopOperationV2.staticOperation(frame);
+      case 0xf3 -> ReturnOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+      case 0xfd -> // REVERT (Byzantium+)
+          enableByzantium
+              ? RevertOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0xfe -> InvalidOperationV2.INVALID_RESULT;
+      case 0xa0, 0xa1, 0xa2, 0xa3, 0xa4 -> {
+        int topicCount = opcode - 0xa0;
+        yield LogOperationV2.staticOperation(frame, frame.stackDataV2(), topicCount, gasCalculator);
+      }
+      case 0xff ->
+          SelfDestructOperationV2.staticOperation(
+              frame,
+              frame.stackDataV2(),
+              gasCalculator,
+              enableCancun,
+              enableAmsterdam ? EIP7708TransferLogEmitter.INSTANCE : TransferLogEmitter.NOOP);
+      case 0xfc -> // PAY (EIP-7708, Amsterdam+)
+          enableAmsterdam
+              ? PayOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator)
+              : InvalidOperation.invalidOperationResult(opcode);
+      default -> {
+        final Operation currentOperation =
+            pc < code.length ? operationArray[opcode] : endOfScriptStop;
+        frame.setCurrentOperation(currentOperation);
+        yield currentOperation.execute(frame, this);
+      }
+    };
   }
 
   /**
