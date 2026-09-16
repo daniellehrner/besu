@@ -74,6 +74,7 @@
 - Speculative parallel transaction execution runs the transactions of one sender in order on one worker, so later ones warm the caches instead of failing the nonce check, and workers skip transactions the block import has already reached.
 - The interpreter loops skip operation tracing for a tracer that reports itself disabled, and the speculative parallel pass uses such a tracer, so its workers run the same untraced loop as the block import.
 - `blocks import` accepts `--block-timings`, logging the same per-block phase breakdown the engine API does instead of throughput every 1000 blocks, so a replayed block range can be measured per block.
+- On the experimental EVM v2, CALL, CALLCODE, DELEGATECALL, STATICCALL, CREATE and CREATE2 reuse one operation instance held by the EVM instead of allocating a fresh one on every execution, SLOAD returns its precomputed warm and cold results instead of re-deriving both costs from the gas calculator on every load, and a message frame no longer allocates an EIP-2930 warm storage multimap that nothing populates.
 
 ## 26.8.1
 

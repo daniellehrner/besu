@@ -46,7 +46,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 
-import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Multimap;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -1687,7 +1686,9 @@ public class MessageFrame {
     private Map<String, Object> contextVariables;
     private Optional<Bytes> reason = Optional.empty();
     private Set<Address> eip2930AccessListWarmAddresses = emptySet();
-    private Multimap<Address, Bytes32> eip2930AccessListWarmStorage = HashMultimap.create();
+    // Left null until a caller supplies one. Every child frame built during execution allocated a
+    // multimap here that nothing ever populated.
+    private Multimap<Address, Bytes32> eip2930AccessListWarmStorage;
     private Optional<Eip7928AccessList> eip7928AccessList = Optional.empty();
 
     private Optional<List<VersionedHash>> versionedHashes = Optional.empty();
@@ -2094,8 +2095,10 @@ public class MessageFrame {
       for (Address a : eip2930AccessListWarmAddresses) {
         messageFrame.warmUpAddress(a);
       }
-      for (var e : eip2930AccessListWarmStorage.entries()) {
-        messageFrame.warmUpStorage(e.getKey(), e.getValue());
+      if (eip2930AccessListWarmStorage != null) {
+        for (var e : eip2930AccessListWarmStorage.entries()) {
+          messageFrame.warmUpStorage(e.getKey(), e.getValue());
+        }
       }
       return messageFrame;
     }

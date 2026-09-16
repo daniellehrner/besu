@@ -93,12 +93,15 @@ public class CallCodeOperationV2 extends AbstractCallOperationV2 {
    *
    * @param frame the current message frame
    * @param s the v2 stack array
-   * @param gasCalculator the gas calculator
+   * @param operation the cached CALLCODE operation
    * @param evm the EVM
    * @return the operation result
    */
   public static OperationResult staticOperation(
-      final MessageFrame frame, final long[] s, final GasCalculator gasCalculator, final EVM evm) {
-    return new CallCodeOperationV2(gasCalculator).execute(frame, evm);
+      final MessageFrame frame,
+      final long[] s,
+      final CallCodeOperationV2 operation,
+      final EVM evm) {
+    return operation.execute(frame, evm);
   }
 }

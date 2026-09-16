@@ -222,6 +222,17 @@ public class EVM {
   private final ChainIdOperationV2 chainIdOperationV2;
   private final GasOperationV2 gasOperationV2;
 
+  // Call, create and SLOAD instances are held rather than built per execution: the dispatch path
+  // allocated a fresh operation object on every call and create, and re-derived SLOAD's warm and
+  // cold costs from the gas calculator on every load.
+  private final CallOperationV2 callOperationV2;
+  private final CallCodeOperationV2 callCodeOperationV2;
+  private final DelegateCallOperationV2 delegateCallOperationV2;
+  private final StaticCallOperationV2 staticCallOperationV2;
+  private final CreateOperationV2 createOperationV2;
+  private final Create2OperationV2 create2OperationV2;
+  private final SLoadOperationV2 sLoadOperationV2;
+
   private final JumpDestOnlyCodeCache jumpDestOnlyCodeCache;
   private final long pushGas;
 
@@ -265,6 +276,13 @@ public class EVM {
       chainIdOperationV2 = null;
     }
     gasOperationV2 = new GasOperationV2(gasCalculator);
+    callOperationV2 = new CallOperationV2(gasCalculator);
+    callCodeOperationV2 = new CallCodeOperationV2(gasCalculator);
+    delegateCallOperationV2 = new DelegateCallOperationV2(gasCalculator);
+    staticCallOperationV2 = new StaticCallOperationV2(gasCalculator);
+    createOperationV2 = new CreateOperationV2(gasCalculator);
+    create2OperationV2 = new Create2OperationV2(gasCalculator);
+    sLoadOperationV2 = new SLoadOperationV2(gasCalculator);
   }
 
   /**
@@ -833,23 +851,23 @@ public class EVM {
                       : InvalidOperation.invalidOperationResult(opcode);
               case 0xf0 ->
                   CreateOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), gasCalculator, this);
+                      frame, frame.stackDataV2(), createOperationV2, this);
               case 0xf1 ->
-                  CallOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator, this);
+                  CallOperationV2.staticOperation(
+                      frame, frame.stackDataV2(), callOperationV2, this);
               case 0xf2 ->
                   CallCodeOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), gasCalculator, this);
+                      frame, frame.stackDataV2(), callCodeOperationV2, this);
               case 0xf4 ->
                   DelegateCallOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), gasCalculator, this);
+                      frame, frame.stackDataV2(), delegateCallOperationV2, this);
               case 0xf5 ->
                   Create2OperationV2.staticOperation(
-                      frame, frame.stackDataV2(), gasCalculator, this);
+                      frame, frame.stackDataV2(), create2OperationV2, this);
               case 0xfa ->
                   StaticCallOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), gasCalculator, this);
-              case 0x54 ->
-                  SLoadOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+                      frame, frame.stackDataV2(), staticCallOperationV2, this);
+              case 0x54 -> sLoadOperationV2.execute(frame, this);
               case 0x55 ->
                   SStoreOperationV2.staticOperation(
                       frame,

@@ -89,15 +89,15 @@ public class Create2OperationV2 extends AbstractCreateOperationV2 {
    *
    * @param frame the current message frame
    * @param s the v2 stack array
-   * @param gasCalculator the gas calculator
+   * @param operation the cached CREATE2 operation
    * @param evm the EVM
    * @return the operation result
    */
   public static OperationResult staticOperation(
-      final MessageFrame frame, final long[] s, final GasCalculator gasCalculator, final EVM evm) {
+      final MessageFrame frame, final long[] s, final Create2OperationV2 operation, final EVM evm) {
     if (EvmSpecVersion.CONSTANTINOPLE.ordinal() > evm.getEvmVersion().ordinal()) {
       return InvalidOperation.invalidOperationResult(0xF5);
     }
-    return new Create2OperationV2(gasCalculator).execute(frame, evm);
+    return operation.execute(frame, evm);
   }
 }

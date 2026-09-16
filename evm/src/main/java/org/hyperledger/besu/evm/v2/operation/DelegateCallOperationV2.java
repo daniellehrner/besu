@@ -98,15 +98,18 @@ public class DelegateCallOperationV2 extends AbstractCallOperationV2 {
    *
    * @param frame the current message frame
    * @param s the v2 stack array
-   * @param gasCalculator the gas calculator
+   * @param operation the cached DELEGATECALL operation
    * @param evm the EVM
    * @return the operation result
    */
   public static OperationResult staticOperation(
-      final MessageFrame frame, final long[] s, final GasCalculator gasCalculator, final EVM evm) {
+      final MessageFrame frame,
+      final long[] s,
+      final DelegateCallOperationV2 operation,
+      final EVM evm) {
     if (EvmSpecVersion.HOMESTEAD.ordinal() > evm.getEvmVersion().ordinal()) {
       return InvalidOperation.invalidOperationResult(0xF4);
     }
-    return new DelegateCallOperationV2(gasCalculator).execute(frame, evm);
+    return operation.execute(frame, evm);
   }
 }
