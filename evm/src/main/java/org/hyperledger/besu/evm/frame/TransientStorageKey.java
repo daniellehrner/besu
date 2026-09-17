@@ -1,5 +1,5 @@
 /*
- * Copyright contributors to Hyperledger Besu.
+ * Copyright contributors to Besu.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -62,6 +62,7 @@ public record TransientStorageKey(Address address, Bytes32 slot)
     return c != 0 ? c : slot.compareTo(other.slot);
   }
 
+  // MurmurHash3 fmix64 finalizer: spreads every input bit across the whole output.
   private static long mix(final long value) {
     long h = value;
     h ^= h >>> 33;
