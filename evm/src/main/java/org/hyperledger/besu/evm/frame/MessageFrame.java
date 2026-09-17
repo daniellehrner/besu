@@ -1484,7 +1484,7 @@ public class MessageFrame {
    * @return the data value read
    */
   public Bytes32 getTransientStorageValue(final Address accountAddress, final Bytes32 slot) {
-    Bytes32 v = txValues.transientStorage().get(accountAddress, slot);
+    Bytes32 v = txValues.transientStorage().get(new TransientStorageKey(accountAddress, slot));
     return v == null ? Bytes32.ZERO : v;
   }
 
@@ -1497,7 +1497,7 @@ public class MessageFrame {
    */
   public void setTransientStorageValue(
       final Address accountAddress, final Bytes32 slot, final Bytes32 value) {
-    txValues.transientStorage().put(accountAddress, slot, value);
+    txValues.transientStorage().put(new TransientStorageKey(accountAddress, slot), value);
   }
 
   /** Undo all the changes done by this message frame, such as when a revert is called for. */

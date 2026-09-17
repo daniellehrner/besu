@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.evm.frame;
 
+import org.hyperledger.besu.collections.undo.UndoMap;
 import org.hyperledger.besu.collections.undo.UndoScalar;
 import org.hyperledger.besu.collections.undo.UndoSet;
 import org.hyperledger.besu.collections.undo.UndoTable;
@@ -24,6 +25,7 @@ import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Optional;
 import java.util.TreeSet;
@@ -51,7 +53,7 @@ public class TxValues {
   private final Deque<MessageFrame> messageFrameStack;
   private final Address miningBeneficiary;
   private final Optional<List<VersionedHash>> versionedHashes;
-  private final UndoTable<Address, Bytes32, Bytes32> transientStorage;
+  private final UndoMap<TransientStorageKey, Bytes32> transientStorage;
   private final UndoSet<Address> creates;
   private final UndoSet<Address> selfDestructs;
   private final UndoScalar<Long> gasRefunds;
@@ -70,7 +72,7 @@ public class TxValues {
       final Deque<MessageFrame> messageFrameStack,
       final Address miningBeneficiary,
       final Optional<List<VersionedHash>> versionedHashes,
-      final UndoTable<Address, Bytes32, Bytes32> transientStorage,
+      final UndoMap<TransientStorageKey, Bytes32> transientStorage,
       final UndoSet<Address> creates,
       final UndoSet<Address> selfDestructs,
       final UndoScalar<Long> gasRefunds,
@@ -126,7 +128,9 @@ public class TxValues {
     // TreeBasedTable/TreeSet (sorted by each key's natural ordering) are used instead of
     // HashBasedTable/HashSet: Address and Bytes32 hash with a grindable base-31 hash and never
     // declare Comparable<Self> directly, so HashMap/HashBasedTable bucket treeification never
-    // engages, letting an attacker force O(n) bucket walks per insert.
+    // engages, letting an attacker force O(n) bucket walks per insert. Transient storage is the
+    // exception: TSTORE is cheap enough to fill a tree whose cache misses dominate block
+    // execution, so it uses a HashMap with a seeded, treeifiable key instead.
     return new TxValues(
         blockHashLookup,
         maxStackSize,
@@ -139,7 +143,7 @@ public class TxValues {
         new ArrayDeque<>(),
         miningBeneficiary,
         versionedHashes,
-        UndoTable.of(TreeBasedTable.create()),
+        new UndoMap<>(new HashMap<>()),
         UndoSet.of(new TreeSet<>()),
         UndoSet.of(new TreeSet<>()),
         new UndoScalar<>(0L),
@@ -267,7 +271,7 @@ public class TxValues {
    *
    * @return the transient storage
    */
-  public UndoTable<Address, Bytes32, Bytes32> transientStorage() {
+  public UndoMap<TransientStorageKey, Bytes32> transientStorage() {
     return transientStorage;
   }
 
