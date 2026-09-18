@@ -360,8 +360,8 @@ public class BonsaiAccount implements MutableAccount, AccountValue {
   }
 
   /**
-   * Two accounts are equal when they would serialize to the same state trie value. Pending storage
-   * writes are not part of this comparison; the storage root only reflects them once committed.
+   * Equal when they serialize to the same state trie value; pending storage writes are not part of
+   * it.
    */
   @Override
   public boolean equals(final Object o) {

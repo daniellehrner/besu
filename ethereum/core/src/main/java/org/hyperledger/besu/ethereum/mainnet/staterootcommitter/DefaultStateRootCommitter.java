@@ -171,11 +171,7 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
       return Hash.wrap(accountTrie.getRootHash());
     }
 
-    /**
-     * Accounts the block only read. Putting one back would rehash and rewrite its whole trie path
-     * for nothing, and a block that calls tens of thousands of contracts spends most of its persist
-     * time on exactly that.
-     */
+    /** Accounts the block only read; putting one back would rewrite its whole trie path. */
     private Set<Address> untouchedAccounts() {
       final Set<Address> untouched = new HashSet<>();
       for (final Map.Entry<Address, BonsaiValue<BonsaiAccount>> accountUpdate :
