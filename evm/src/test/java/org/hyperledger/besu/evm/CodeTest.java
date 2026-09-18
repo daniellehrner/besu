@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.evm;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.evm.frame.MessageFrame.Type.MESSAGE_CALL;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.mock;
@@ -29,6 +30,8 @@ import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.evm.operation.JumpOperation;
 import org.hyperledger.besu.evm.operation.Operation.OperationResult;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
+
+import java.util.Random;
 
 import jakarta.validation.constraints.NotNull;
 import org.apache.tuweni.bytes.Bytes;
@@ -48,7 +51,7 @@ class CodeTest {
   }
 
   @Test
-  void shouldReuseJumpDestMap() {
+  void shouldReusePushDataMap() {
     final JumpOperation operation = new JumpOperation(evm.getGasCalculator());
     final Bytes jumpBytes = Bytes.fromHexString("0x6003565b00");
     final Code getsCached = spy(new Code(jumpBytes));
@@ -56,7 +59,7 @@ class CodeTest {
 
     OperationResult result = operation.execute(frame, evm);
     assertNull(result.getHaltReason());
-    Mockito.verify(getsCached, times(1)).calculateJumpDestBitMask();
+    Mockito.verify(getsCached, times(1)).calculatePushDataBitMask();
 
     // do it again to prove we don't recalculate, and we hit the cache
 
@@ -64,7 +67,103 @@ class CodeTest {
 
     result = operation.execute(frame, evm);
     assertNull(result.getHaltReason());
-    Mockito.verify(getsCached, times(1)).calculateJumpDestBitMask();
+    Mockito.verify(getsCached, times(1)).calculatePushDataBitMask();
+  }
+
+  @Test
+  void jumpDestInPushDataIsInvalid() {
+    // PUSH1 0x5b: the 0x5b byte is immediate data at offset 1, not a jump destination
+    final Code code = new Code(Bytes.fromHexString("0x605b5b"));
+
+    assertThat(code.isJumpDestInvalid(1)).isTrue();
+    assertThat(code.isJumpDestInvalid(2)).isFalse();
+  }
+
+  @Test
+  void jumpDestInWidePushDataIsInvalid() {
+    // PUSH32 of 32 JUMPDEST bytes, then a real JUMPDEST
+    final Code code = new Code(Bytes.fromHexString("0x7f" + "5b".repeat(32) + "5b"));
+
+    for (int offset = 1; offset <= 32; offset++) {
+      assertThat(code.isJumpDestInvalid(offset)).isTrue();
+    }
+    assertThat(code.isJumpDestInvalid(33)).isFalse();
+  }
+
+  @Test
+  void nonJumpDestOpcodeIsInvalid() {
+    final Code code = new Code(Bytes.fromHexString("0x6003565b00"));
+
+    assertThat(code.isJumpDestInvalid(0)).isTrue();
+    assertThat(code.isJumpDestInvalid(3)).isFalse();
+    assertThat(code.isJumpDestInvalid(4)).isTrue();
+  }
+
+  @Test
+  void outOfRangeJumpDestIsInvalid() {
+    final Code code = new Code(Bytes.fromHexString("0x5b"));
+
+    assertThat(code.isJumpDestInvalid(-1)).isTrue();
+    assertThat(code.isJumpDestInvalid(1)).isTrue();
+    assertThat(code.isJumpDestInvalid(0)).isFalse();
+  }
+
+  @Test
+  void truncatedPushAtEndOfCodeDoesNotOverflow() {
+    // PUSH32 with no immediate data following it
+    final Code code = new Code(Bytes.fromHexString("0x5b7f"));
+
+    assertThat(code.isJumpDestInvalid(0)).isFalse();
+    assertThat(code.isJumpDestInvalid(1)).isTrue();
+  }
+
+  @Test
+  void emptyCodeHasNoJumpDestinations() {
+    assertThat(Code.EMPTY_CODE.isJumpDestInvalid(0)).isTrue();
+  }
+
+  @Test
+  void matchesNaiveAnalysisOnRandomCode() {
+    final Random random = new Random(0xC0DE);
+
+    for (int trial = 0; trial < 200; trial++) {
+      final byte[] raw = new byte[1 + random.nextInt(600)];
+      for (int i = 0; i < raw.length; i++) {
+        // Bias towards JUMPDEST and PUSH so boundaries between them are exercised often
+        raw[i] =
+            switch (random.nextInt(3)) {
+              case 0 -> (byte) 0x5b;
+              case 1 -> (byte) (0x60 + random.nextInt(32));
+              default -> (byte) random.nextInt(256);
+            };
+      }
+
+      final Code code = new Code(Bytes.wrap(raw));
+      final boolean[] isImmediateData = naiveImmediateData(raw);
+
+      for (int offset = 0; offset < raw.length; offset++) {
+        final boolean expected = raw[offset] != 0x5b || isImmediateData[offset];
+        assertThat(code.isJumpDestInvalid(offset))
+            .describedAs("trial %d offset %d of %s", trial, offset, Bytes.wrap(raw))
+            .isEqualTo(expected);
+      }
+    }
+  }
+
+  private static boolean[] naiveImmediateData(final byte[] raw) {
+    final boolean[] isImmediateData = new boolean[raw.length];
+    for (int pc = 0; pc < raw.length; ) {
+      final int opcode = raw[pc] & 0xff;
+      pc++;
+      if (opcode >= 0x60 && opcode <= 0x7f) {
+        final int size = opcode - 0x60 + 1;
+        for (int i = 0; i < size && pc + i < raw.length; i++) {
+          isImmediateData[pc + i] = true;
+        }
+        pc += size;
+      }
+    }
+    return isImmediateData;
   }
 
   @NotNull

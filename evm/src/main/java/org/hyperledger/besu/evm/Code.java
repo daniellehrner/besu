@@ -31,6 +31,8 @@ public class Code {
   /** The constant EMPTY_CODE. */
   public static final Code EMPTY_CODE = new Code(Bytes.EMPTY);
 
+  private static final byte PUSH_1 = 0x60;
+
   /** The bytes representing the code. */
   private final Bytes bytes;
 
@@ -39,8 +41,8 @@ public class Code {
 
   private final int size;
 
-  /** Bit mask for jump destinations, used to optimize JUMP/JUMPI operations */
-  private long[] jumpDestBitMask = null;
+  /** Bit mask marking bytes that are PUSH immediate data rather than opcodes */
+  private long[] pushDataBitMask = null;
 
   /**
    * Public constructor.
@@ -127,25 +129,21 @@ public class Code {
    * @return true if the operation is both a valid opcode and a JUMPDEST
    */
   public boolean isJumpDestInvalid(final int jumpDestination) {
-    if (jumpDestination < 0 || jumpDestination >= getSize()) {
+    if (jumpDestination < 0 || jumpDestination >= size) {
       return true;
     }
 
-    if (jumpDestBitMask == null) {
-      jumpDestBitMask = calculateJumpDestBitMask();
+    // Testing the byte first keeps destinations that cannot be valid from triggering an analysis
+    if (bytes.get(jumpDestination) != JumpDestOperation.OPCODE) {
+      return true;
     }
 
-    // This selects which long in the array holds the bit for the given offset:
-    //	1)	>>> 6 is equivalent to jumpDestination / 64
-    //	2)	Each long holds 64 bits, so this finds the correct chunk
-    final long targetLong = jumpDestBitMask[jumpDestination >>> 6];
+    if (pushDataBitMask == null) {
+      pushDataBitMask = calculatePushDataBitMask();
+    }
 
-    // 1) & 0x3F is jumpDestination % 64
-    // 2)	1L << ... gives a mask for the specific bit in that long
-    final long targetBit = 1L << (jumpDestination & 0x3F);
-
-    // If the bit is not set, then it is an invalid jump destination
-    return (targetLong & targetBit) == 0L;
+    // The byte is a JUMPDEST, so it is a destination unless it is the immediate data of a PUSH
+    return (pushDataBitMask[jumpDestination >>> 6] & (1L << (jumpDestination & 0x3F))) != 0L;
   }
 
   /**
@@ -166,208 +164,65 @@ public class Code {
   }
 
   /**
-   * Returns a bitmask of valid jump destinations for this code. The bitmask is an array of longs,
-   * where each bit represents a potential jump destination in the code.
+   * Returns the bitmask marking which bytes of this code are PUSH immediate data. The bitmask is an
+   * array of longs, where each bit represents one byte of the code.
    *
-   * @return an array of long values representing the jump destinations, or null if not set
+   * @return an array of long values marking PUSH immediate data, or null if not yet computed
    */
-  public long[] getJumpDestBitMask() {
-    return jumpDestBitMask;
+  public long[] getPushDataBitMask() {
+    return pushDataBitMask;
   }
 
   /**
-   * Sets the jump destination bitmask for this code. This method is intended to be used by the
-   * EVM's JumpService to set the valid jump destinations for the code.
+   * Sets the PUSH immediate data bitmask for this code.
    *
-   * @param jumpDestBitMask an array of long values representing the jump destinations
+   * @param pushDataBitMask an array of long values marking PUSH immediate data
    */
-  public void setJumpDestBitMask(final long[] jumpDestBitMask) {
-    this.jumpDestBitMask = jumpDestBitMask;
+  public void setPushDataBitMask(final long[] pushDataBitMask) {
+    this.pushDataBitMask = pushDataBitMask;
   }
 
   /**
-   * Computes a bitmask where each bit set to 1 indicates a valid `JUMPDEST` opcode in the EVM
-   * bytecode. The bitmap is organized in 64-byte chunks, each represented as a `long` (64 bits).
-   * This is used for efficiently validating dynamic jumps (`JUMP`, `JUMPI`) at runtime.
+   * Computes a bitmask where each bit set to 1 indicates a byte that is the immediate data of a
+   * PUSH rather than an opcode. Together with a JUMPDEST byte test this validates dynamic jumps.
+   *
+   * <p>Marking immediate data rather than jump destinations keeps the cost proportional to the
+   * number of PUSH instructions, so code consisting largely of JUMPDEST costs nothing to record.
+   *
+   * @return the PUSH immediate data bitmask
    */
-  long[] calculateJumpDestBitMask() {
-    // Total number of bytes in the bytecode
-    final int size = getSize();
-
-    // Allocate enough longs to cover all bytes, one long (64 bits) per 64-byte chunk
-    final long[] bitmap = new long[(size >> 6) + 1];
-
-    // Get the raw EVM bytecode as a byte array (no copying)
-    final byte[] rawCode = getBytes().toArrayUnsafe();
+  long[] calculatePushDataBitMask() {
+    final byte[] rawCode = bytes.toArrayUnsafe();
     final int length = rawCode.length;
 
-    // Iterate through the bytecode
-    for (int i = 0; i < length; ) {
-      // One 64-bit entry corresponds to 64 bytecode positions
-      long thisEntry = 0L;
+    // A PUSH near the end of the code marks positions past its end, so the map carries a spare
+    // long rather than bounds checking every run
+    final long[] bitmap = new long[(length >> 6) + 2];
 
-      // Compute which bitmap entry we are in (i / 64)
-      final int entryPos = i >> 6;
+    for (int pc = 0; pc < length; ) {
+      final byte opcode = rawCode[pc];
+      pc++;
 
-      // Compute the number of bytes we can safely examine in this 64-byte window
-      final int max = Math.min(64, length - (entryPos << 6));
-
-      // j is the position within this 64-byte window
-      int j = i & 0x3F;
-
-      // Scan through this 64-byte chunk of the bytecode
-      for (; j < max; i++, j++) {
-        final byte operationNum = rawCode[i];
-
-        // Skip all opcodes below 0x5b (JUMPDEST), since only PUSH1–PUSH32 and JUMPDEST matter
-        if (operationNum >= JumpDestOperation.OPCODE) {
-          switch (operationNum) {
-            // JUMPDEST opcode (0x5b): mark as a valid jump destination
-            case JumpDestOperation.OPCODE:
-              thisEntry |= 1L << j; // Set the bit at position j
-              break;
-            // PUSH1–PUSH32 opcodes (0x60–0x7f): these consume 1-32 bytes of data that should be
-            // skipped
-            case 0x60:
-              i += 1;
-              j += 1;
-              break;
-            case 0x61:
-              i += 2;
-              j += 2;
-              break;
-            case 0x62:
-              i += 3;
-              j += 3;
-              break;
-            case 0x63:
-              i += 4;
-              j += 4;
-              break;
-            case 0x64:
-              i += 5;
-              j += 5;
-              break;
-            case 0x65:
-              i += 6;
-              j += 6;
-              break;
-            case 0x66:
-              i += 7;
-              j += 7;
-              break;
-            case 0x67:
-              i += 8;
-              j += 8;
-              break;
-            case 0x68:
-              i += 9;
-              j += 9;
-              break;
-            case 0x69:
-              i += 10;
-              j += 10;
-              break;
-            case 0x6a:
-              i += 11;
-              j += 11;
-              break;
-            case 0x6b:
-              i += 12;
-              j += 12;
-              break;
-            case 0x6c:
-              i += 13;
-              j += 13;
-              break;
-            case 0x6d:
-              i += 14;
-              j += 14;
-              break;
-            case 0x6e:
-              i += 15;
-              j += 15;
-              break;
-            case 0x6f:
-              i += 16;
-              j += 16;
-              break;
-            case 0x70:
-              i += 17;
-              j += 17;
-              break;
-            case 0x71:
-              i += 18;
-              j += 18;
-              break;
-            case 0x72:
-              i += 19;
-              j += 19;
-              break;
-            case 0x73:
-              i += 20;
-              j += 20;
-              break;
-            case 0x74:
-              i += 21;
-              j += 21;
-              break;
-            case 0x75:
-              i += 22;
-              j += 22;
-              break;
-            case 0x76:
-              i += 23;
-              j += 23;
-              break;
-            case 0x77:
-              i += 24;
-              j += 24;
-              break;
-            case 0x78:
-              i += 25;
-              j += 25;
-              break;
-            case 0x79:
-              i += 26;
-              j += 26;
-              break;
-            case 0x7a:
-              i += 27;
-              j += 27;
-              break;
-            case 0x7b:
-              i += 28;
-              j += 28;
-              break;
-            case 0x7c:
-              i += 29;
-              j += 29;
-              break;
-            case 0x7d:
-              i += 30;
-              j += 30;
-              break;
-            case 0x7e:
-              i += 31;
-              j += 31;
-              break;
-            case 0x7f:
-              i += 32;
-              j += 32;
-              break;
-            default:
-              // No default case needed: any unhandled opcode >= 0x5b but not PUSH or JUMPDEST is
-              // skipped
-          }
-        }
+      // PUSH1..PUSH32 are the only opcodes carrying immediate data, and as signed bytes every
+      // other opcode compares below PUSH1
+      if (opcode < PUSH_1) {
+        continue;
       }
 
-      // Store the computed bitmask for this 64-byte chunk
-      bitmap[entryPos] = thisEntry;
+      final int immediateSize = opcode - PUSH_1 + 1;
+      final int index = pc >>> 6;
+      final int offset = pc & 0x3F;
+
+      // Immediate data is at most 32 bits, so a run spans at most two longs
+      final long mask = (1L << immediateSize) - 1;
+      bitmap[index] |= mask << offset;
+      if (offset + immediateSize > 64) {
+        bitmap[index + 1] |= mask >>> (64 - offset);
+      }
+
+      pc += immediateSize;
     }
 
-    // Return the full jump destination bitmask
     return bitmap;
   }
 
