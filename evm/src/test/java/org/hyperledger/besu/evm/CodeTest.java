@@ -51,7 +51,7 @@ class CodeTest {
   }
 
   @Test
-  void shouldReusePushDataMap() {
+  void shouldReuseJumpDestMap() {
     final JumpOperation operation = new JumpOperation(evm.getGasCalculator());
     final Bytes jumpBytes = Bytes.fromHexString("0x6003565b00");
     final Code getsCached = spy(new Code(jumpBytes));
@@ -59,7 +59,7 @@ class CodeTest {
 
     OperationResult result = operation.execute(frame, evm);
     assertNull(result.getHaltReason());
-    Mockito.verify(getsCached, times(1)).calculatePushDataBitMask();
+    Mockito.verify(getsCached, times(1)).calculateJumpDestBitMask();
 
     // do it again to prove we don't recalculate, and we hit the cache
 
@@ -67,7 +67,7 @@ class CodeTest {
 
     result = operation.execute(frame, evm);
     assertNull(result.getHaltReason());
-    Mockito.verify(getsCached, times(1)).calculatePushDataBitMask();
+    Mockito.verify(getsCached, times(1)).calculateJumpDestBitMask();
   }
 
   @Test
@@ -120,6 +120,31 @@ class CodeTest {
   @Test
   void emptyCodeHasNoJumpDestinations() {
     assertThat(Code.EMPTY_CODE.isJumpDestInvalid(0)).isTrue();
+  }
+
+  @Test
+  void matchesNaiveAnalysisOnJumpDestRuns() {
+    // Runs of JUMPDEST are marked in blocks, so cover lengths that straddle both the block and
+    // the 64 byte window, with and without immediate data interrupting the run
+    for (int runLength = 1; runLength <= 200; runLength++) {
+      for (final String prefix : new String[] {"", "60ff", "7f" + "5b".repeat(32), "5b5b60"}) {
+        final Bytes code = Bytes.fromHexString("0x" + prefix + "5b".repeat(runLength));
+        assertCodeMatchesNaiveAnalysis(code);
+      }
+    }
+  }
+
+  private static void assertCodeMatchesNaiveAnalysis(final Bytes bytes) {
+    final byte[] raw = bytes.toArrayUnsafe();
+    final Code code = new Code(bytes);
+    final boolean[] isImmediateData = naiveImmediateData(raw);
+
+    for (int offset = 0; offset < raw.length; offset++) {
+      final boolean expected = raw[offset] != 0x5b || isImmediateData[offset];
+      assertThat(code.isJumpDestInvalid(offset))
+          .describedAs("offset %d of %s", offset, bytes)
+          .isEqualTo(expected);
+    }
   }
 
   @Test
