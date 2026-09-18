@@ -211,6 +211,19 @@ public class Code {
    * Computes a bitmask where each bit set to 1 indicates a valid `JUMPDEST` opcode in the EVM
    * bytecode. The bitmap is organized in 64-byte chunks, each represented as a `long` (64 bits).
    * This is used for efficiently validating dynamic jumps (`JUMP`, `JUMPI`) at runtime.
+   *
+   * <p>A `0x5b` byte is only a valid destination when it is an instruction, not the immediate data
+   * of a PUSH before it. Telling the two apart needs the instruction boundaries, and those are only
+   * known by walking the code from the start, as every PUSH shifts all boundaries after it. The
+   * shortcut used here: PUSH1..PUSH32 are the only instructions with immediate data, so in a
+   * 64-byte entry that holds no PUSH opcode at all, every byte is an instruction and every `0x5b`
+   * in it is a valid destination. Such an entry is marked straight from its bytes, eight at a time,
+   * and only entries that do hold a PUSH are walked.
+   *
+   * <p>That is sound because the loop only ever looks at an entry from its first byte, and only
+   * when that byte is known to be an instruction: it either got there by skipping whole marked
+   * entries, or the walk returned there, and the walk returns at an entry boundary that it has
+   * established to be an instruction boundary.
    */
   long[] calculateJumpDestBitMask() {
     final int size = getSize();
@@ -218,16 +231,21 @@ public class Code {
     final byte[] rawCode = getBytes().toArrayUnsafe();
     final int length = rawCode.length;
 
+    // i is always at the first byte of an entry here, and that byte is always an instruction
     int i = 0;
     while (i < length) {
-      // Entries without a PUSH are marked whole, everything else is walked. A walk covers all
-      // entries up to the next one without a PUSH, so that it costs one call per run of them
+      // Mark entries whole for as long as they hold no PUSH. The last, partial entry is never
+      // marked this way, only walked
       while (i + 64 <= length && markEntryWithoutPush(rawCode, i, bitmap)) {
         i += 64;
       }
       if (i >= length) {
         break;
       }
+      // The entry at i holds a PUSH or is the partial one at the end, so it has to be walked.
+      // Rather than returning after every entry, the walk is given the whole run of entries up to
+      // the next one that can be marked, as returning and calling has its own cost. That next
+      // entry is marked here already; if the walk later runs into it, the walk overwrites it
       int end = i + 64;
       while (end + 64 <= length && !markEntryWithoutPush(rawCode, end, bitmap)) {
         end += 64;
@@ -241,17 +259,21 @@ public class Code {
    * Marks the JUMPDESTs of the 64 bytes at the offset, unless one of them is a PUSH. Without a PUSH
    * every byte is an instruction and the flags can be taken from the bytes as they are; with one
    * the immediate data has to be skipped, which needs a walk. The caller has to guarantee that the
-   * offset is a multiple of 64 and that 64 bytes are in bounds.
+   * offset is a multiple of 64, that its byte is an instruction, and that 64 bytes are in bounds.
    *
    * @return whether the entry was marked
    */
   private static boolean markEntryWithoutPush(
       final byte[] rawCode, final int offset, final long[] bitmap) {
+    // The PUSH test comes first and on its own, so that an entry with a PUSH, which is what most
+    // entries of compiled code are, costs no more than the words up to its first PUSH. The words
+    // are loaded again below rather than kept: eight live words made C2 run out of registers
     for (int k = 0; k < 64; k += 8) {
       if (pushFlags((long) LONG_VIEW.get(rawCode, offset + k)) != 0L) {
         return false;
       }
     }
+    // Each word gives one flag bit per byte, and word k of the entry covers bits k..k+7
     long bits = 0L;
     for (int k = 0; k < 64; k += 8) {
       bits |= jumpDestFlags((long) LONG_VIEW.get(rawCode, offset + k)) << k;
@@ -262,10 +284,14 @@ public class Code {
 
   /**
    * Walks the instructions from the offset up to the end and marks the JUMPDESTs among them, one
-   * bitmap entry at a time. When a PUSH straddles the end, the walk carries on to the next entry
-   * boundary, as the entry after starts with immediate data and cannot be marked whole. Kept apart
-   * from the word-wise code on purpose: this loop already uses nearly every register, and anything
-   * else compiled into the same method makes it spill
+   * bitmap entry at a time. The offset has to be an instruction. When the last PUSH of an entry has
+   * immediate data in the entry after, the walk carries on through that entry as well, even past
+   * the end, because an entry that starts with immediate data cannot be marked whole and its first
+   * instruction is only known to the walk. The walk therefore always returns at an entry boundary
+   * that is an instruction boundary, or at the end of the code.
+   *
+   * <p>Kept apart from the word-wise code on purpose: this loop already uses nearly every register,
+   * and anything else compiled into the same method makes it spill
    *
    * @return the offset of the first instruction at an entry boundary at or after the end
    */
@@ -273,10 +299,16 @@ public class Code {
       final byte[] rawCode, final int offset, final int end, final long[] bitmap) {
     final int length = rawCode.length;
     int i = offset;
+    // Past the end, the walk only goes on while i is inside an entry, which is the case exactly
+    // when the last PUSH ran over the boundary
     while (i < end || ((i & 0x3F) != 0 && i < length)) {
       final int entryPos = i >> 6;
       final int entryEnd = Math.min((entryPos + 1) << 6, length);
+      // The bits of one entry are collected in a register and stored once, as storing them one by
+      // one would put a memory round trip on every JUMPDEST
       long thisEntry = 0L;
+      // A PUSH skips its immediate data by adding to i, so i can leave the loop beyond entryEnd,
+      // in the entry after; the outer loop then picks up there
       for (; i < entryEnd; i++) {
         final byte opcode = rawCode[i];
         // JUMPDEST is tested on its own and first: inside the switch its place would be up to the
@@ -286,6 +318,8 @@ public class Code {
           // the entry
           thisEntry |= 1L << i;
         } else if (opcode >= 0x60) {
+          // One case per PUSH with a constant skip: the branch predictor runs ahead over those,
+          // while a skip computed from the opcode would wait for each byte's load in turn
           switch (opcode) {
             case 0x60:
               i += 1;
@@ -393,12 +427,19 @@ public class Code {
     return i;
   }
 
-  /** Flags, in the high bit of each byte, the bytes of the word that are a PUSH opcode. */
+  /**
+   * Flags, in the high bit of each byte, the bytes of the word that are a PUSH opcode.
+   * PUSH1..PUSH32 are 0x60..0x7f, the only opcodes whose top three bits are 011, so keeping just
+   * those bits of every byte turns the range test into an equality test.
+   */
   private static long pushFlags(final long word) {
     return bytesEqualTo(word & PUSH_OPCODE_PREFIX_MASKS, EIGHT_PUSH_PREFIXES);
   }
 
-  /** Flags, in the low eight bits, the bytes of the word that are JUMPDEST. */
+  /**
+   * Flags, in the low eight bits, the bytes of the word that are JUMPDEST: bit n is set when byte n
+   * is, so the result slots straight into the bitmap.
+   */
   private static long jumpDestFlags(final long word) {
     return gatherByteFlags(bytesEqualTo(word, EIGHT_JUMPDESTS));
   }
