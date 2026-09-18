@@ -219,8 +219,10 @@ public class Code {
       // Compute which bitmap entry we are in (i / 64)
       final int entryPos = i >> 6;
 
-      // A whole window of JUMPDEST is marked at once. Every byte of it is an opcode, so consuming
-      // the window preserves the instruction boundary
+      // A window of nothing but JUMPDEST is marked whole. JUMPDEST carries no immediate data, so
+      // all 64 bytes are opcodes, every one of them is a valid destination, and the next
+      // instruction boundary is exactly 64 bytes on. Only from the start of a window, otherwise
+      // the bits below i, which belong to immediate data, would be set as well
       if ((i & 0x3F) == 0 && length - i >= 64 && isAllJumpDests(rawCode, i)) {
         bitmap[entryPos] = -1L;
         i += 64;
@@ -392,7 +394,10 @@ public class Code {
     return bitmap;
   }
 
-  /** Are the 64 bytes at the given offset all JUMPDEST? */
+  /**
+   * Are the 64 bytes at the given offset all JUMPDEST? Compared eight at a time, which is why the
+   * caller has to guarantee that 64 bytes are in bounds.
+   */
   private static boolean isAllJumpDests(final byte[] rawCode, final int offset) {
     for (int i = 0; i < 64; i += 8) {
       if ((long) LONG_VIEW.get(rawCode, offset + i) != EIGHT_JUMPDESTS) {
