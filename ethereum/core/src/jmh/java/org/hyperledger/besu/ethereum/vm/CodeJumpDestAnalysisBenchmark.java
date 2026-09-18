@@ -26,6 +26,7 @@ import org.apache.tuweni.bytes.Bytes;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
+import org.openjdk.jmh.annotations.Level;
 import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
@@ -96,6 +97,41 @@ public class CodeJumpDestAnalysisBenchmark {
   private Bytes codeBytes;
   private int jumpDestination;
   private Code warmCode;
+
+  /**
+   * Every fork sees a single shape, so without this the JIT would specialise the analysis to that
+   * shape alone, which production never gets. Running all shapes first gives it a mixed profile.
+   */
+  @Setup(Level.Trial)
+  public void warmUpAllShapes() {
+    final byte[][] shapes = {
+      attackContract(),
+      pushDense(MAX_CODE_SIZE_GLAMSTERDAM),
+      mixed(MAX_CODE_SIZE_MAINNET),
+      solidityContract(),
+      mixed(256)
+    };
+    final byte[] stopPadded = attackContract();
+    for (int i = 64; i < MAX_CODE_SIZE_GLAMSTERDAM - 1; i += 64) {
+      stopPadded[i] = 0x00;
+    }
+    final byte[] push1Dense = new byte[MAX_CODE_SIZE_GLAMSTERDAM];
+    for (int i = 0; i < MAX_CODE_SIZE_GLAMSTERDAM - 1; i += 2) {
+      push1Dense[i] = 0x60;
+      push1Dense[i + 1] = (byte) JUMPDEST;
+    }
+    int sink = 0;
+    for (int round = 0; round < 300; round++) {
+      for (final byte[] shape : shapes) {
+        sink += new Code(Bytes.wrap(shape)).isJumpDestInvalid(lastJumpDest(shape)) ? 1 : 0;
+      }
+      sink += new Code(Bytes.wrap(stopPadded)).isJumpDestInvalid(stopPadded.length - 1) ? 1 : 0;
+      sink += new Code(Bytes.wrap(push1Dense)).isJumpDestInvalid(push1Dense.length - 1) ? 1 : 0;
+    }
+    if (sink < 0) {
+      throw new IllegalStateException();
+    }
+  }
 
   @Setup
   public void setUp() {

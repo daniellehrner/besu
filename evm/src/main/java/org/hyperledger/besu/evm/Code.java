@@ -279,14 +279,14 @@ public class Code {
       long thisEntry = 0L;
       for (; i < entryEnd; i++) {
         final byte opcode = rawCode[i];
-        // Only PUSH1-PUSH32 and JUMPDEST matter, and all of them are 0x5b and above
-        if (opcode >= JumpDestOperation.OPCODE) {
+        // JUMPDEST is tested on its own and first: inside the switch its place would be up to the
+        // profile, and a run of JUMPDESTs is the shape that has to stay cheap
+        if (opcode == JumpDestOperation.OPCODE) {
+          // A long shift only uses the low six bits of its count, which is the position within
+          // the entry
+          thisEntry |= 1L << i;
+        } else if (opcode >= 0x60) {
           switch (opcode) {
-            case JumpDestOperation.OPCODE:
-              // A long shift only uses the low six bits of its count, which is the position
-              // within the entry
-              thisEntry |= 1L << i;
-              break;
             case 0x60:
               i += 1;
               break;
