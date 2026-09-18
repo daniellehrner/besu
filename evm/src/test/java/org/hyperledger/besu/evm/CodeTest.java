@@ -151,15 +151,17 @@ class CodeTest {
   void matchesNaiveAnalysisOnRandomCode() {
     final Random random = new Random(0xC0DE);
 
-    for (int trial = 0; trial < 200; trial++) {
-      final byte[] raw = new byte[1 + random.nextInt(600)];
+    for (int trial = 0; trial < 400; trial++) {
+      final byte[] raw = new byte[1 + random.nextInt(2000)];
+      // Odd trials are PUSH-dense, even trials are JUMPDEST runs with a rare PUSH or other opcode,
+      // so that both frequent and rare word boundaries at PUSH are exercised
+      final int pushOneIn = (trial & 1) == 0 ? 40 : 3;
       for (int i = 0; i < raw.length; i++) {
-        // Bias towards JUMPDEST and PUSH so boundaries between them are exercised often
         raw[i] =
-            switch (random.nextInt(3)) {
-              case 0 -> (byte) 0x5b;
-              case 1 -> (byte) (0x60 + random.nextInt(32));
-              default -> (byte) random.nextInt(256);
+            switch (random.nextInt(pushOneIn)) {
+              case 0 -> (byte) (0x60 + random.nextInt(32));
+              case 1 -> (byte) random.nextInt(256);
+              default -> (byte) 0x5b;
             };
       }
 

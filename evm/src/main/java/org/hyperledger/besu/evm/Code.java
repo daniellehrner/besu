@@ -39,6 +39,15 @@ public class Code {
 
   private static final long EIGHT_JUMPDESTS = 0x5b5b5b5b5b5b5b5bL;
 
+  // PUSH1..PUSH32 are exactly the opcodes 0b011xxxxx
+  private static final long PUSH_OPCODE_PREFIX_MASKS = 0xE0E0E0E0E0E0E0E0L;
+  private static final long EIGHT_PUSH_PREFIXES = 0x6060606060606060L;
+
+  private static final long LOW_SEVEN_BITS = 0x7F7F7F7F7F7F7F7FL;
+  private static final long HIGH_BITS = 0x8080808080808080L;
+  // Multiplying by this sums the high bit of byte n into bit 56 + n without any overlap
+  private static final long BYTE_FLAG_GATHER = 0x0002040810204081L;
+
   /** The bytes representing the code. */
   private final Bytes bytes;
 
@@ -204,207 +213,208 @@ public class Code {
    * This is used for efficiently validating dynamic jumps (`JUMP`, `JUMPI`) at runtime.
    */
   long[] calculateJumpDestBitMask() {
-    // Total number of bytes in the bytecode
     final int size = getSize();
-
-    // Allocate enough longs to cover all bytes, one long (64 bits) per 64-byte chunk
     final long[] bitmap = new long[(size >> 6) + 1];
-
-    // Get the raw EVM bytecode as a byte array (no copying)
     final byte[] rawCode = getBytes().toArrayUnsafe();
     final int length = rawCode.length;
 
-    // Iterate through the bytecode
-    for (int i = 0; i < length; ) {
-      // Compute which bitmap entry we are in (i / 64)
-      final int entryPos = i >> 6;
-
-      // A window of nothing but JUMPDEST is marked whole. JUMPDEST carries no immediate data, so
-      // all 64 bytes are opcodes, every one of them is a valid destination, and the next
-      // instruction boundary is exactly 64 bytes on. Only from the start of a window, otherwise
-      // the bits below i, which belong to immediate data, would be set as well
-      if ((i & 0x3F) == 0 && length - i >= 64 && isAllJumpDests(rawCode, i)) {
-        bitmap[entryPos] = -1L;
+    int i = 0;
+    while (i < length) {
+      // Entries without a PUSH are marked whole, everything else is walked. A walk covers all
+      // entries up to the next one without a PUSH, so that it costs one call per run of them
+      while (i + 64 <= length && markEntryWithoutPush(rawCode, i, bitmap)) {
         i += 64;
-        continue;
       }
-
-      // One 64-bit entry corresponds to 64 bytecode positions
-      long thisEntry = 0L;
-
-      // Compute the number of bytes we can safely examine in this 64-byte window
-      final int max = Math.min(64, length - (entryPos << 6));
-
-      // j is the position within this 64-byte window
-      int j = i & 0x3F;
-
-      // Scan through this 64-byte chunk of the bytecode
-      for (; j < max; i++, j++) {
-        final byte operationNum = rawCode[i];
-
-        // Skip all opcodes below 0x5b (JUMPDEST), since only PUSH1–PUSH32 and JUMPDEST matter
-        if (operationNum >= JumpDestOperation.OPCODE) {
-          switch (operationNum) {
-            // JUMPDEST opcode (0x5b): mark as a valid jump destination
-            case JumpDestOperation.OPCODE:
-              thisEntry |= 1L << j; // Set the bit at position j
-              break;
-            // PUSH1–PUSH32 opcodes (0x60–0x7f): these consume 1-32 bytes of data that should be
-            // skipped
-            case 0x60:
-              i += 1;
-              j += 1;
-              break;
-            case 0x61:
-              i += 2;
-              j += 2;
-              break;
-            case 0x62:
-              i += 3;
-              j += 3;
-              break;
-            case 0x63:
-              i += 4;
-              j += 4;
-              break;
-            case 0x64:
-              i += 5;
-              j += 5;
-              break;
-            case 0x65:
-              i += 6;
-              j += 6;
-              break;
-            case 0x66:
-              i += 7;
-              j += 7;
-              break;
-            case 0x67:
-              i += 8;
-              j += 8;
-              break;
-            case 0x68:
-              i += 9;
-              j += 9;
-              break;
-            case 0x69:
-              i += 10;
-              j += 10;
-              break;
-            case 0x6a:
-              i += 11;
-              j += 11;
-              break;
-            case 0x6b:
-              i += 12;
-              j += 12;
-              break;
-            case 0x6c:
-              i += 13;
-              j += 13;
-              break;
-            case 0x6d:
-              i += 14;
-              j += 14;
-              break;
-            case 0x6e:
-              i += 15;
-              j += 15;
-              break;
-            case 0x6f:
-              i += 16;
-              j += 16;
-              break;
-            case 0x70:
-              i += 17;
-              j += 17;
-              break;
-            case 0x71:
-              i += 18;
-              j += 18;
-              break;
-            case 0x72:
-              i += 19;
-              j += 19;
-              break;
-            case 0x73:
-              i += 20;
-              j += 20;
-              break;
-            case 0x74:
-              i += 21;
-              j += 21;
-              break;
-            case 0x75:
-              i += 22;
-              j += 22;
-              break;
-            case 0x76:
-              i += 23;
-              j += 23;
-              break;
-            case 0x77:
-              i += 24;
-              j += 24;
-              break;
-            case 0x78:
-              i += 25;
-              j += 25;
-              break;
-            case 0x79:
-              i += 26;
-              j += 26;
-              break;
-            case 0x7a:
-              i += 27;
-              j += 27;
-              break;
-            case 0x7b:
-              i += 28;
-              j += 28;
-              break;
-            case 0x7c:
-              i += 29;
-              j += 29;
-              break;
-            case 0x7d:
-              i += 30;
-              j += 30;
-              break;
-            case 0x7e:
-              i += 31;
-              j += 31;
-              break;
-            case 0x7f:
-              i += 32;
-              j += 32;
-              break;
-            default:
-              // No default case needed: any unhandled opcode >= 0x5b but not PUSH or JUMPDEST is
-              // skipped
-          }
-        }
+      if (i >= length) {
+        break;
       }
-
-      // Store the computed bitmask for this 64-byte chunk
-      bitmap[entryPos] = thisEntry;
+      int end = i + 64;
+      while (end + 64 <= length && !markEntryWithoutPush(rawCode, end, bitmap)) {
+        end += 64;
+      }
+      i = walkEntries(rawCode, i, Math.min(end, length), bitmap);
     }
-
-    // Return the full jump destination bitmask
     return bitmap;
   }
 
   /**
-   * Are the 64 bytes at the given offset all JUMPDEST? Compared eight at a time, which is why the
-   * caller has to guarantee that 64 bytes are in bounds.
+   * Marks the JUMPDESTs of the 64 bytes at the offset, unless one of them is a PUSH. Without a PUSH
+   * every byte is an instruction and the flags can be taken from the bytes as they are; with one
+   * the immediate data has to be skipped, which needs a walk. The caller has to guarantee that the
+   * offset is a multiple of 64 and that 64 bytes are in bounds.
+   *
+   * @return whether the entry was marked
    */
-  private static boolean isAllJumpDests(final byte[] rawCode, final int offset) {
-    for (int i = 0; i < 64; i += 8) {
-      if ((long) LONG_VIEW.get(rawCode, offset + i) != EIGHT_JUMPDESTS) {
+  private static boolean markEntryWithoutPush(
+      final byte[] rawCode, final int offset, final long[] bitmap) {
+    for (int k = 0; k < 64; k += 8) {
+      if (pushFlags((long) LONG_VIEW.get(rawCode, offset + k)) != 0L) {
         return false;
       }
     }
+    long bits = 0L;
+    for (int k = 0; k < 64; k += 8) {
+      bits |= jumpDestFlags((long) LONG_VIEW.get(rawCode, offset + k)) << k;
+    }
+    bitmap[offset >>> 6] = bits;
     return true;
+  }
+
+  /**
+   * Walks the instructions from the offset up to the end and marks the JUMPDESTs among them, one
+   * bitmap entry at a time. When a PUSH straddles the end, the walk carries on to the next entry
+   * boundary, as the entry after starts with immediate data and cannot be marked whole. Kept apart
+   * from the word-wise code on purpose: this loop already uses nearly every register, and anything
+   * else compiled into the same method makes it spill
+   *
+   * @return the offset of the first instruction at an entry boundary at or after the end
+   */
+  private static int walkEntries(
+      final byte[] rawCode, final int offset, final int end, final long[] bitmap) {
+    final int length = rawCode.length;
+    int i = offset;
+    while (i < end || ((i & 0x3F) != 0 && i < length)) {
+      final int entryPos = i >> 6;
+      final int entryEnd = Math.min((entryPos + 1) << 6, length);
+      long thisEntry = 0L;
+      for (; i < entryEnd; i++) {
+        final byte opcode = rawCode[i];
+        // Only PUSH1-PUSH32 and JUMPDEST matter, and all of them are 0x5b and above
+        if (opcode >= JumpDestOperation.OPCODE) {
+          switch (opcode) {
+            case JumpDestOperation.OPCODE:
+              // A long shift only uses the low six bits of its count, which is the position
+              // within the entry
+              thisEntry |= 1L << i;
+              break;
+            case 0x60:
+              i += 1;
+              break;
+            case 0x61:
+              i += 2;
+              break;
+            case 0x62:
+              i += 3;
+              break;
+            case 0x63:
+              i += 4;
+              break;
+            case 0x64:
+              i += 5;
+              break;
+            case 0x65:
+              i += 6;
+              break;
+            case 0x66:
+              i += 7;
+              break;
+            case 0x67:
+              i += 8;
+              break;
+            case 0x68:
+              i += 9;
+              break;
+            case 0x69:
+              i += 10;
+              break;
+            case 0x6a:
+              i += 11;
+              break;
+            case 0x6b:
+              i += 12;
+              break;
+            case 0x6c:
+              i += 13;
+              break;
+            case 0x6d:
+              i += 14;
+              break;
+            case 0x6e:
+              i += 15;
+              break;
+            case 0x6f:
+              i += 16;
+              break;
+            case 0x70:
+              i += 17;
+              break;
+            case 0x71:
+              i += 18;
+              break;
+            case 0x72:
+              i += 19;
+              break;
+            case 0x73:
+              i += 20;
+              break;
+            case 0x74:
+              i += 21;
+              break;
+            case 0x75:
+              i += 22;
+              break;
+            case 0x76:
+              i += 23;
+              break;
+            case 0x77:
+              i += 24;
+              break;
+            case 0x78:
+              i += 25;
+              break;
+            case 0x79:
+              i += 26;
+              break;
+            case 0x7a:
+              i += 27;
+              break;
+            case 0x7b:
+              i += 28;
+              break;
+            case 0x7c:
+              i += 29;
+              break;
+            case 0x7d:
+              i += 30;
+              break;
+            case 0x7e:
+              i += 31;
+              break;
+            case 0x7f:
+              i += 32;
+              break;
+            default:
+              break;
+          }
+        }
+      }
+      bitmap[entryPos] = thisEntry;
+    }
+    return i;
+  }
+
+  /** Flags, in the high bit of each byte, the bytes of the word that are a PUSH opcode. */
+  private static long pushFlags(final long word) {
+    return bytesEqualTo(word & PUSH_OPCODE_PREFIX_MASKS, EIGHT_PUSH_PREFIXES);
+  }
+
+  /** Flags, in the low eight bits, the bytes of the word that are JUMPDEST. */
+  private static long jumpDestFlags(final long word) {
+    return gatherByteFlags(bytesEqualTo(word, EIGHT_JUMPDESTS));
+  }
+
+  /** Flags, in the high bit of each byte, which bytes of the word equal their byte in pattern. */
+  private static long bytesEqualTo(final long word, final long pattern) {
+    final long diff = word ^ pattern;
+    // Adding 0x7F to the low seven bits carries into the high bit for every non-zero byte, and
+    // the byte's own high bit covers the remaining case, so only zero bytes end up with a clear
+    // high bit. The carries cannot cross a byte boundary
+    return ~(((diff & LOW_SEVEN_BITS) + LOW_SEVEN_BITS) | diff) & HIGH_BITS;
+  }
+
+  /** Moves the high bit of byte n into bit n, giving one flag bit per byte. */
+  private static long gatherByteFlags(final long byteFlags) {
+    return (byteFlags * BYTE_FLAG_GATHER) >>> 56;
   }
 
   /**
