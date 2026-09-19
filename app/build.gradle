@@ -65,6 +65,7 @@ dependencies {
   implementation project(':metrics:core')
   implementation project(':nat')
   implementation project(':plugin-api')
+  implementation project(':plugins:codestore')
   implementation project(':plugins:rocksdb')
   implementation project(':plugins:health')
   implementation project(':services:kvstore')

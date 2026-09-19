@@ -181,6 +181,7 @@ import org.hyperledger.besu.plugin.services.health.LivenessCheckPlugin;
 import org.hyperledger.besu.plugin.services.health.ReadinessCheckPlugin;
 import org.hyperledger.besu.plugin.services.securitymodule.SecurityModule;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
+import org.hyperledger.besu.plugin.services.storage.codestore.MmapCodeStoragePlugin;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBPlugin;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.VersionedStorageFormat;
 import org.hyperledger.besu.plugin.storage.StorageConfiguration;
@@ -371,6 +372,7 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
       Suppliers.memoize(this::getApiConfiguration);
 
   private RocksDBPlugin rocksDBPlugin;
+  private MmapCodeStoragePlugin mmapCodeStoragePlugin;
   private LivenessCheckPlugin livenessCheckPlugin;
   private ReadinessCheckPlugin readinessCheckPlugin;
 
@@ -1373,6 +1375,8 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
     // register built-in plugins
     rocksDBPlugin = new RocksDBPlugin();
     rocksDBPlugin.register(besuPluginContext);
+    mmapCodeStoragePlugin = new MmapCodeStoragePlugin();
+    mmapCodeStoragePlugin.register(besuPluginContext);
     new InMemoryStoragePlugin().register(besuPluginContext);
 
     // register default security module
@@ -2581,6 +2585,10 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
                     }
                     besuPluginContext.stopPlugins();
                     runner.close();
+                    // Only once nothing imports blocks any more: a clean close trims the code log.
+                    if (mmapCodeStoragePlugin != null) {
+                      mmapCodeStoragePlugin.stop();
+                    }
                     LogConfigurator.shutdown();
                   } catch (final Exception e) {
                     logger.error("Failed to stop Besu");

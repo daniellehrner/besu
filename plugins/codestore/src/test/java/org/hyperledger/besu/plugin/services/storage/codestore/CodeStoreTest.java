@@ -25,6 +25,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -231,6 +232,95 @@ class CodeStoreTest {
     assertThat(manifest.formatVersion()).isEqualTo(1);
     assertThat(manifest.sourceBesuVersion()).isEqualTo("26.9.0-test");
     assertThat(manifest.codeKeying()).isEqualTo(CodeStoreOptions.CODE_HASH_KEYING);
+  }
+
+  @Test
+  void streamsEntriesInInsertionOrderLazily() throws IOException {
+    try (CodeStore store = CodeStore.open(dir, SMALL)) {
+      for (int i = 0; i < 300; i++) {
+        store.put(TestData.hash(14, i), TestData.code(14, i));
+        if (i == 150) {
+          store.sync();
+        }
+      }
+      final List<Map.Entry<byte[], byte[]>> entries = store.stream().toList();
+      assertThat(entries).hasSize(300);
+      for (int i = 0; i < 300; i++) {
+        assertThat(entries.get(i).getKey()).isEqualTo(TestData.hash(14, i));
+        assertThat(entries.get(i).getValue()).isEqualTo(TestData.code(14, i));
+      }
+      assertThat(store.stream().limit(1).findFirst().orElseThrow().getKey())
+          .isEqualTo(TestData.hash(14, 0));
+    }
+    try (CodeStore store = CodeStore.open(dir, SMALL)) {
+      assertThat(store.stream()).hasSize(300);
+    }
+  }
+
+  @Test
+  void streamOfAnEmptyStoreIsEmpty() throws IOException {
+    try (CodeStore store = CodeStore.open(dir, SMALL)) {
+      assertThat(store.stream()).isEmpty();
+    }
+  }
+
+  @Test
+  void putAllAndSyncStoresABatchDurably() throws IOException {
+    try (CodeStore store = CodeStore.open(dir, SMALL)) {
+      final List<Map.Entry<byte[], byte[]>> batch = new ArrayList<>();
+      for (int i = 0; i < 100; i++) {
+        batch.add(Map.entry(TestData.hash(15, i), TestData.code(15, i)));
+      }
+      batch.add(Map.entry(TestData.hash(15, 3), new byte[] {9}));
+      store.putAllAndSync(batch);
+      assertThat(store.entries()).isEqualTo(100);
+      assertThat(store.verify()).isEqualTo(100);
+      assertThat(bytes(store.get(TestData.hash(15, 3)).orElseThrow()))
+          .isEqualTo(TestData.code(15, 3));
+    }
+  }
+
+  @Test
+  void clearRemovesEverythingDurably() throws IOException {
+    try (CodeStore store = CodeStore.open(dir, SMALL)) {
+      for (int i = 0; i < 200; i++) {
+        store.put(TestData.hash(16, i), TestData.code(16, i));
+      }
+      store.sync();
+      store.put(TestData.hash(16, 200), TestData.code(16, 200));
+      final MemorySegment view = store.get(TestData.hash(16, 0)).orElseThrow();
+
+      store.clear();
+
+      assertThat(store.entries()).isZero();
+      assertThat(store.logBytes()).isEqualTo(CodeLog.HEADER_SIZE);
+      assertThat(store.contains(TestData.hash(16, 0))).isFalse();
+      assertThat(store.contains(TestData.hash(16, 200))).isFalse();
+      assertThatThrownBy(() -> view.get(ValueLayout.JAVA_BYTE, 0))
+          .isInstanceOf(IllegalStateException.class);
+
+      store.put(TestData.hash(16, 7), TestData.code(16, 7));
+    }
+    try (CodeStore store = CodeStore.open(dir, SMALL)) {
+      assertThat(store.entries()).isEqualTo(1);
+      assertThat(store.verify()).isEqualTo(1);
+      assertThat(bytes(store.get(TestData.hash(16, 7)).orElseThrow()))
+          .isEqualTo(TestData.code(16, 7));
+    }
+  }
+
+  @Test
+  void aStreamFailsIfTheStoreIsClearedUnderIt() throws IOException {
+    try (CodeStore store = CodeStore.open(dir, SMALL)) {
+      for (int i = 0; i < 10; i++) {
+        store.put(TestData.hash(17, i), TestData.code(17, i));
+      }
+      final java.util.Iterator<Map.Entry<byte[], byte[]>> entries = store.stream().iterator();
+      entries.next();
+      store.clear();
+      assertThatThrownBy(entries::next)
+          .isInstanceOf(java.util.ConcurrentModificationException.class);
+    }
   }
 
   @Test

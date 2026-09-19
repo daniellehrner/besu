@@ -128,6 +128,11 @@ final class CodeLog implements AutoCloseable {
     }
   }
 
+  /** Atomically replaces {@code code.log} with an empty log. No log may be open on {@code dir}. */
+  static void reset(final Path dir) throws IOException {
+    create(dir, dir.resolve(FILE_NAME));
+  }
+
   private static void create(final Path dir, final Path path) throws IOException {
     final Path tmp = dir.resolve(FILE_NAME + ".new");
     final ByteBuffer header = ByteBuffer.allocate(HEADER_SIZE).order(ByteOrder.BIG_ENDIAN);
@@ -303,6 +308,13 @@ final class CodeLog implements AutoCloseable {
     final long length =
         Integer.toUnsignedLong(segment.get(INT, payloadOffset - REC_HEADER_SIZE + 4));
     return segment.asSlice(payloadOffset, length).asReadOnly();
+  }
+
+  /** Offset of the record that follows the one whose payload is at {@code payloadOffset}. */
+  long nextRecord(final long payloadOffset) {
+    final long length =
+        Integer.toUnsignedLong(segment.get(INT, payloadOffset - REC_HEADER_SIZE + 4));
+    return payloadOffset - REC_HEADER_SIZE + recordSize(length);
   }
 
   /** The code hash recorded with the payload at {@code payloadOffset}. */

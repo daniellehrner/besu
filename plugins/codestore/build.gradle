@@ -29,7 +29,21 @@ jar {
 }
 
 dependencies {
-  implementation 'org.slf4j:slf4j-api'
+  api project(':plugin-api')
+  api 'org.slf4j:slf4j-api'
+
+  implementation project(':crypto:algorithms')
+  implementation project(':ethereum:core')
+  implementation project(':services:kvstore')
+  implementation project(':util')
+
+  implementation 'io.consensys.tuweni:tuweni-bytes'
+  implementation 'org.apache.commons:commons-lang3'
+
+  testImplementation project(':datatypes')
+  testImplementation project(':metrics:core')
+  testImplementation project(':plugins:rocksdb')
+  testImplementation 'org.mockito:mockito-core'
 
   testImplementation 'org.junit.jupiter:junit-jupiter'
   testImplementation 'org.assertj:assertj-core'

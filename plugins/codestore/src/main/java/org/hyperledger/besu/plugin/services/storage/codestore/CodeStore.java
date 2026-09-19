@@ -24,11 +24,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
+import java.util.ConcurrentModificationException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Spliterator;
+import java.util.Spliterators;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,7 +61,7 @@ import org.slf4j.LoggerFactory;
  * <h2>Threading</h2>
  *
  * Any number of concurrent readers, one writer, guarded by a read-write lock. Segments returned by
- * {@link #get} stay valid until {@link #close}; accessing one afterwards throws.
+ * {@link #get} stay valid until {@link #close} or {@link #clear}; accessing one afterwards throws.
  */
 public final class CodeStore implements AutoCloseable {
 
@@ -68,15 +74,18 @@ public final class CodeStore implements AutoCloseable {
   private final Path dir;
   private final FileChannel lockChannel;
   private final FileLock fileLock;
-  private final CodeLog log;
   private final ProbeListener probes;
   private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
   private final Map<HashKey, Long> pending = new LinkedHashMap<>();
   private final long truncatedBytesOnOpen;
   private final long recoveredRecordsOnOpen;
 
+  private final CodeStoreOptions options;
+
+  private CodeLog log;
   private CodeIndex index;
   private boolean closed;
+  private long epoch;
 
   /** A code hash usable as a map key. */
   private record HashKey(byte[] bytes) {
@@ -97,7 +106,7 @@ public final class CodeStore implements AutoCloseable {
       final FileLock fileLock,
       final CodeLog log,
       final CodeIndex index,
-      final ProbeListener probes,
+      final CodeStoreOptions options,
       final long truncatedBytesOnOpen,
       final long recoveredRecordsOnOpen) {
     this.dir = dir;
@@ -105,7 +114,8 @@ public final class CodeStore implements AutoCloseable {
     this.fileLock = fileLock;
     this.log = log;
     this.index = index;
-    this.probes = probes;
+    this.options = options;
+    this.probes = options.probeListener();
     this.truncatedBytesOnOpen = truncatedBytesOnOpen;
     this.recoveredRecordsOnOpen = recoveredRecordsOnOpen;
   }
@@ -156,7 +166,7 @@ public final class CodeStore implements AutoCloseable {
                 "%s is %d bytes but the index covers %d bytes of it",
                 dir.resolve(CodeLog.FILE_NAME), log.sizeAtOpen(), watermark));
       }
-      if (rebuild) {
+      if (rebuild && log.sizeAtOpen() > CodeLog.HEADER_SIZE) {
         LOG.info("No usable index in {}, rebuilding it from the log", dir);
       }
 
@@ -192,14 +202,7 @@ public final class CodeStore implements AutoCloseable {
         log.load();
       }
       return new CodeStore(
-          dir,
-          lockChannel,
-          fileLock,
-          log,
-          index[0],
-          options.probeListener(),
-          truncated,
-          scan.records());
+          dir, lockChannel, fileLock, log, index[0], options, truncated, scan.records());
     } catch (final Throwable t) {
       if (index[0] != null) {
         index[0].close();
@@ -285,6 +288,108 @@ public final class CodeStore implements AutoCloseable {
     } finally {
       lock.writeLock().unlock();
     }
+  }
+
+  /**
+   * Stores and syncs a batch under one hold of the write lock. A crash part-way may keep a prefix
+   * of the batch; that is safe only because entries are content-addressed, so a caller must make
+   * this batch durable before it commits anything that refers to it.
+   *
+   * @param batch code keyed by code hash
+   */
+  public void putAllAndSync(final Iterable<Map.Entry<byte[], byte[]>> batch) {
+    lock.writeLock().lock();
+    try {
+      checkOpen();
+      for (final Map.Entry<byte[], byte[]> entry : batch) {
+        checkHash(entry.getKey());
+        if (offsetOf(entry.getKey()) < 0) {
+          pending.put(
+              new HashKey(entry.getKey().clone()), log.append(entry.getKey(), entry.getValue()));
+        }
+      }
+      syncLocked();
+    } finally {
+      lock.writeLock().unlock();
+    }
+  }
+
+  /**
+   * Removes every entry, durably. Views handed out earlier become invalid.
+   *
+   * <p>The index is deleted first, then the log is replaced, then a new index is created. A crash
+   * in between leaves a log without an index, which the next open rebuilds: the clear either
+   * happened or it did not.
+   *
+   * @throws IOException if the files cannot be replaced
+   */
+  public void clear() throws IOException {
+    lock.writeLock().lock();
+    try {
+      checkOpen();
+      pending.clear();
+      epoch++;
+      index.close();
+      log.abandon();
+      Files.deleteIfExists(dir.resolve(CodeIndex.FILE_NAME));
+      Durable.syncDirectory(dir);
+      CodeLog.reset(dir);
+      log = CodeLog.open(dir, options.logGrowStep());
+      log.recoverTail(CodeLog.HEADER_SIZE, CodeLog.HEADER_SIZE);
+      index = CodeIndex.create(dir, options.initialIndexCapacity());
+    } finally {
+      lock.writeLock().unlock();
+    }
+  }
+
+  /**
+   * Lazily streams every entry in insertion order, copying each out of the mapping. Entries added
+   * after the call are not included. The stream fails if the store is cleared under it.
+   *
+   * @return code hash and code pairs
+   */
+  public Stream<Map.Entry<byte[], byte[]>> stream() {
+    final long limit;
+    final long startEpoch;
+    lock.readLock().lock();
+    try {
+      checkOpen();
+      limit = log.end();
+      startEpoch = epoch;
+    } finally {
+      lock.readLock().unlock();
+    }
+    final Spliterator<Map.Entry<byte[], byte[]>> entries =
+        new Spliterators.AbstractSpliterator<>(
+            Long.MAX_VALUE, Spliterator.NONNULL | Spliterator.DISTINCT) {
+          private long payloadOffset = CodeLog.HEADER_SIZE + CodeLog.REC_HEADER_SIZE;
+
+          @Override
+          public boolean tryAdvance(final Consumer<? super Map.Entry<byte[], byte[]>> action) {
+            lock.readLock().lock();
+            try {
+              checkOpen();
+              if (epoch != startEpoch) {
+                throw new ConcurrentModificationException("code store was cleared");
+              }
+              while (payloadOffset < limit) {
+                final long current = payloadOffset;
+                payloadOffset = log.nextRecord(current) + CodeLog.REC_HEADER_SIZE;
+                final byte[] hash = log.hashAt(current);
+                // A later duplicate of a hash is not the entry readers see; skip it.
+                if (offsetOf(hash) == current) {
+                  action.accept(
+                      Map.entry(hash, log.payload(current).toArray(ValueLayout.JAVA_BYTE)));
+                  return true;
+                }
+              }
+              return false;
+            } finally {
+              lock.readLock().unlock();
+            }
+          }
+        };
+    return StreamSupport.stream(entries, false);
   }
 
   /** Makes every preceding {@link #put} durable. */

@@ -223,6 +223,16 @@ class RecoveryTest {
   }
 
   @Test
+  void aClearInterruptedAfterDeletingTheIndexDidNotHappen() throws IOException {
+    // clear() deletes the index before it replaces the log; dying in between is a missing index.
+    Files.delete(image.resolve(CodeIndex.FILE_NAME));
+    Files.write(image.resolve(CodeLog.FILE_NAME + ".new"), new byte[17]);
+    try (CodeStore store = CodeStore.open(image, SMALL)) {
+      assertIntact(store, SYNCED + UNSYNCED);
+    }
+  }
+
+  @Test
   void failsLoudlyOnABadLogMagic() throws IOException {
     writeToLog(0, new byte[] {9, 9, 9, 9});
     assertThatThrownBy(() -> CodeStore.open(image, SMALL))

@@ -12,7 +12,7 @@ processing faster: code reads are served almost entirely from Besu's in-memory `
 | Milestone | State |
 |---|---|
 | M1 standalone store, crash recovery, JMH | done |
-| M2 Besu plugin wiring | blocked on two decisions, see `NOTES-core-changes.md` |
+| M2 Besu plugin wiring | built and unit/integration tested; testnet sync, reference and acceptance test runs still open |
 | M3 migration tooling | not started |
 | M4 metrics and benchmark report | not started |
 
@@ -30,7 +30,9 @@ What was verified in that source, and where it differs from the original instruc
 ## Layout
 
 ```
-src/main   the engine (the plugin wiring arrives with M2)
+src/main   the engine (CodeStore, CodeLog, CodeIndex) and the Besu wiring
+           (MmapCodeStoragePlugin, DelegatingKeyValueStorageFactory,
+           CodeRoutingKeyValueStorage, MmapCodeKeyValueStorage)
 src/test   unit, recovery, property and SIGKILL tests
 src/jmh    microbenchmarks
 ```
@@ -45,6 +47,41 @@ src/jmh    microbenchmarks
 
 `slowTest` writes about 5 GiB under the system temp directory. Its size can be reduced with
 `-Dcodestore.property.pairs=N` and `-Dcodestore.kill.iterations=N`.
+
+## Running Besu on it
+
+```
+besu --data-storage-format=BONSAI --key-value-storage=bonsai-mmap ...
+```
+
+`MmapCodeStoragePlugin` is registered as a built-in next to the RocksDB plugin. The factory fetches
+the registered `rocksdb` factory on first use, so every RocksDB option, including
+`--Xplugin-rocksdb-high-spec-enabled`, applies unchanged. The code store lives in
+`<data-path>/code-store/`.
+
+| System property | Default | Effect |
+|---|---|---|
+| `bonsai.mmap.mirror` | `true` | also write code into RocksDB's own `CODE_STORAGE`, so that going back to `--key-value-storage=rocksdb` needs no migration |
+| `bonsai.mmap.verify` | `false` | mirror, and check every code read against RocksDB; any difference fails the read |
+| `bonsai.mmap.preload` | `true` | pre-fault the code log on open |
+
+Rules the wiring enforces:
+
+- **Code-hash keying only.** Every code write is checked for `keccak256(value) == key` before
+  anything is written. Besu does not tell a storage plugin which keying it uses, and decides it by
+  sampling the first row of `CODE_STORAGE`, which here is this store. A non-empty store therefore
+  forces code-hash keying; on an empty store `--Xbonsai-code-using-code-hash-enabled=false` is
+  refused at the first contract deployment, with nothing committed.
+- **Code first.** Bonsai commits accounts, storage, trie nodes and code in one transaction. Across
+  two backends that cannot be atomic, so the code store is synced first and RocksDB commits second.
+  Code without state that names it is inert; state naming code that is missing would be corruption,
+  and cannot happen in this order.
+- **No start on an unmigrated database.** An empty code store next to a RocksDB that already holds
+  code is refused: every code read would miss.
+- **Snapshots** read code from the live store; their writes stay in the snapshot.
+- Removing a single code entry is an error (it only happens under account-hash keying). `clear` is
+  supported. Streams are in insertion order, and ordered lookups on code are unsupported; Besu uses
+  neither on this segment.
 
 ## On-disk format
 
