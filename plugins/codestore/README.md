@@ -61,8 +61,9 @@ the registered `rocksdb` factory on first use, so every RocksDB option, includin
 
 | System property | Default | Effect |
 |---|---|---|
-| `bonsai.mmap.mirror` | `true` | also write code into RocksDB's own `CODE_STORAGE`, so that going back to `--key-value-storage=rocksdb` needs no migration |
+| `bonsai.mmap.mirror` | `false` | also write code into RocksDB's own `CODE_STORAGE`, so that going back to `--key-value-storage=rocksdb` needs no migration. Costs the code a second time on disk |
 | `bonsai.mmap.verify` | `false` | mirror, and check every code read against RocksDB; any difference fails the read |
+| `bonsai.mmap.drop-delegate-code` | `false` | on a database that used to mirror: once every RocksDB code row is confirmed present in the code store, clear RocksDB's `CODE_STORAGE` |
 | `bonsai.mmap.preload` | `false` | pre-fault the code log on open; off because on a log that is large next to RAM it evicts pages RocksDB is using. To be measured in M4 |
 
 Rules the wiring enforces:
@@ -76,6 +77,11 @@ Rules the wiring enforces:
   two backends that cannot be atomic, so the code store is synced first and RocksDB commits second.
   Code without state that names it is inert; state naming code that is missing would be corruption,
   and cannot happen in this order.
+- **One copy of the code.** By default RocksDB never sees code. The first such start leaves a
+  `SOLE_COPY` marker in the code store directory, written durably before any code is. From then on
+  Besu refuses any other `--key-value-storage` on that data directory, and the store refuses
+  `mirror` and `verify`, because RocksDB no longer holds all the code. Going back to plain RocksDB
+  needs the reverse migration (M3).
 - **No start on an unmigrated database.** An empty code store next to a RocksDB that already holds
   code is refused: every code read would miss.
 - **Snapshots** read code from the live store; their writes stay in the snapshot.

@@ -196,6 +196,12 @@ public final class CodeStore implements AutoCloseable {
       }
       // A clean close trims the file to the log, so any other length means the writer died.
       final boolean unclean = log.sizeAtOpen() != scan.validEnd();
+      if (unclean && log.sizeAtOpen() > CodeLog.HEADER_SIZE) {
+        LOG.info(
+            "{} was not closed cleanly, re-indexed {} records written after the last sync",
+            dir,
+            scan.records());
+      }
       if (!rebuild && unclean && index[0].hasTornSlot(watermark, log)) {
         LOG.info("The index in {} has a half-written slot, rebuilding it from the log", dir);
         index[0].close();
@@ -570,8 +576,11 @@ public final class CodeStore implements AutoCloseable {
       syncLocked();
       closed = true;
       try {
+        final long entries = index.count();
+        final long bytes = log.end();
         index.close();
         log.close();
+        LOG.info("Closed the code store in {} cleanly: {} entries, {} bytes", dir, entries, bytes);
       } finally {
         fileLock.release();
         lockChannel.close();

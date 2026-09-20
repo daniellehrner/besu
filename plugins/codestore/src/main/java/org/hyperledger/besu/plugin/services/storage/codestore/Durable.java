@@ -31,6 +31,12 @@ final class Durable {
     syncDirectory(to.toAbsolutePath().getParent());
   }
 
+  /** Creates an empty file that survives a crash. */
+  static void create(final Path file) throws IOException {
+    Files.createFile(file);
+    syncDirectory(file.toAbsolutePath().getParent());
+  }
+
   static void syncDirectory(final Path dir) throws IOException {
     try (FileChannel ch = FileChannel.open(dir, StandardOpenOption.READ)) {
       ch.force(true);

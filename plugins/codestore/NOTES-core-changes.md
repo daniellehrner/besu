@@ -33,14 +33,19 @@ from Besu `main` at
   not how a client keys its code table, but every client keys by it.
 - **The four-segment transaction**: code store first, RocksDB second. The order is the safety
   mechanism, see below.
-- **Mirroring**, added while building M2: code is also written to RocksDB's `CODE_STORAGE` by
-  default, so that the fallback really is one flag. It costs duplicate disk space and can be
-  switched off with `-Dbonsai.mmap.mirror=false`.
+- **Mirroring** into RocksDB's `CODE_STORAGE` was the default while M2 was validated, so that the
+  fallback was one flag. It is now opt-in (`-Dbonsai.mmap.mirror=true`): the code store holds the
+  only copy, a `SOLE_COPY` marker records that, and `BesuCommand` refuses to open such a data
+  directory with any other storage.
 - **Snapshots** turned out simpler than proposed below: RocksDB snapshots hand out a no-op
   transaction, so no overlay is needed. Code reads go to the live store, writes to the snapshot's
   own transaction.
 - **Core changes made**: `BesuCommand` registers `MmapCodeStoragePlugin` as a built-in and stops it
-  after the runner has closed; `app` depends on `:plugins:codestore`. Nothing else.
+  after the runner has closed, and checks `requireCodeReachable` before building the storage
+  provider; `app` depends on `:plugins:codestore`. Test plumbing only: the reference tests build
+  their storage through `ReferenceTestStorageProvider` (`-Dbesu.reftest.mmapCodeStoreDir=DIR` puts
+  code on an mmap store in verify mode), and the acceptance-test process runner takes its storage
+  from `-Dacctests.keyValueStorage`.
 
 ## Stop-and-ask condition 1: the code-keying strategy is not visible to a plugin
 

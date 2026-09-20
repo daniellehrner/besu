@@ -85,7 +85,7 @@ class BonsaiMmapStorageTest {
     final BesuConfiguration configuration = mock(BesuConfiguration.class);
 
     /** A null mode starts the node on plain RocksDB. */
-    Node(final DelegateCodeMode mode) {
+    Node(final DelegateCodeMode mode, final boolean dropDelegateCode) {
       final org.hyperledger.besu.plugin.services.storage.DataStorageConfiguration storage =
           mock(org.hyperledger.besu.plugin.services.storage.DataStorageConfiguration.class);
       when(storage.getDatabaseFormat()).thenReturn(DataStorageFormat.BONSAI);
@@ -93,7 +93,10 @@ class BonsaiMmapStorageTest {
       when(configuration.getDatabaseFormat()).thenReturn(DataStorageFormat.BONSAI);
       when(configuration.getDataPath()).thenReturn(dataDir);
       when(configuration.getStoragePath()).thenReturn(dataDir.resolve("database"));
-      factory = mode == null ? rocksDb : new DelegatingKeyValueStorageFactory(() -> rocksDb, mode);
+      factory =
+          mode == null
+              ? rocksDb
+              : new DelegatingKeyValueStorageFactory(() -> rocksDb, mode, dropDelegateCode);
       provider =
           new KeyValueStorageProviderBuilder()
               .withStorageFactory(factory)
@@ -127,10 +130,14 @@ class BonsaiMmapStorageTest {
   }
 
   private Node start(final DelegateCodeMode mode) throws Exception {
+    return start(mode, false);
+  }
+
+  private Node start(final DelegateCodeMode mode, final boolean dropDelegateCode) throws Exception {
     if (node != null) {
       node.close();
     }
-    node = new Node(mode);
+    node = new Node(mode, dropDelegateCode);
     return node;
   }
 
@@ -239,6 +246,52 @@ class BonsaiMmapStorageTest {
   void withoutMirroringRocksDbStillStartsCleanlyButLacksTheCode() throws Exception {
     deployCode(start(DelegateCodeMode.IGNORE).bonsai());
     assertThat(start(null).bonsai().getCode(CODE_HASH, ACCOUNT)).isEmpty();
+  }
+
+  @Test
+  void aDatabaseThatRanWithoutMirroringIsOnlyReachableThroughTheMmapStore() throws Exception {
+    deployCode(start(DelegateCodeMode.IGNORE).bonsai());
+
+    assertThatThrownBy(
+            () -> DelegatingKeyValueStorageFactory.requireCodeReachable("rocksdb", dataDir))
+        .isInstanceOf(StorageException.class)
+        .hasMessageContaining("--key-value-storage=bonsai-mmap");
+    DelegatingKeyValueStorageFactory.requireCodeReachable("bonsai-mmap", dataDir);
+    for (final DelegateCodeMode mode : List.of(DelegateCodeMode.MIRROR, DelegateCodeMode.VERIFY)) {
+      assertThatThrownBy(start(mode)::bonsai)
+          .isInstanceOf(StorageException.class)
+          .hasMessageContaining("has run without mirroring");
+    }
+  }
+
+  @Test
+  void aMirroredDatabaseStaysReachableFromRocksDb() throws Exception {
+    deployCode(start(DelegateCodeMode.MIRROR).bonsai());
+    DelegatingKeyValueStorageFactory.requireCodeReachable("rocksdb", dataDir);
+  }
+
+  @Test
+  void dropsTheMirroredCodeOnceItIsUnused() throws Exception {
+    deployCode(start(DelegateCodeMode.MIRROR).bonsai());
+
+    final BonsaiWorldStateKeyValueStorage bonsai = start(DelegateCodeMode.IGNORE, true).bonsai();
+
+    assertThat(node.codeInRocksDb()).isEmpty();
+    assertThat(bonsai.getCode(CODE_HASH, ACCOUNT)).contains(CODE);
+  }
+
+  @Test
+  void keepsTheDelegateCodeIfTheMmapStoreLacksAnyOfIt() throws Exception {
+    deployCode(start(DelegateCodeMode.MIRROR).bonsai());
+    final Bytes other = Bytes.fromHexString("0x6002600201");
+    final BonsaiWorldStateKeyValueStorage.Updater updater = start(null).bonsai().updater();
+    updater.putCode(ACCOUNT, Hash.hash(other), other);
+    updater.commit();
+
+    assertThatThrownBy(start(DelegateCodeMode.IGNORE, true)::bonsai)
+        .isInstanceOf(StorageException.class)
+        .hasMessageContaining("Not dropping the code");
+    assertThat(start(null).bonsai().getCode(CODE_HASH, ACCOUNT)).contains(CODE);
   }
 
   @Test

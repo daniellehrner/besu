@@ -181,6 +181,7 @@ import org.hyperledger.besu.plugin.services.health.LivenessCheckPlugin;
 import org.hyperledger.besu.plugin.services.health.ReadinessCheckPlugin;
 import org.hyperledger.besu.plugin.services.securitymodule.SecurityModule;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
+import org.hyperledger.besu.plugin.services.storage.codestore.DelegatingKeyValueStorageFactory;
 import org.hyperledger.besu.plugin.services.storage.codestore.MmapCodeStoragePlugin;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBPlugin;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.VersionedStorageFormat;
@@ -2301,6 +2302,7 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
 
   private KeyValueStorageProvider keyValueStorageProvider(final String name) {
     if (this.keyValueStorageProvider == null) {
+      DelegatingKeyValueStorageFactory.requireCodeReachable(name, dataDir());
       this.keyValueStorageProvider =
           new KeyValueStorageProviderBuilder()
               .withStorageFactory(
