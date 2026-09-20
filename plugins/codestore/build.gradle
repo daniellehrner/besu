@@ -40,6 +40,12 @@ dependencies {
   implementation 'io.consensys.tuweni:tuweni-bytes'
   implementation 'org.apache.commons:commons-lang3'
 
+  testImplementation project(':ethereum:core:plugin-api-worldstate-backend')
+  testImplementation 'com.fasterxml.jackson.core:jackson-databind'
+  testImplementation project(':config')
+  testImplementation project(':crypto:algorithms')
+  testImplementation project(':evm')
+  testImplementation project(path: ':ethereum:core', configuration: 'testSupportArtifacts')
   testImplementation project(':datatypes')
   testImplementation project(':metrics:core')
   testImplementation project(':plugins:rocksdb')

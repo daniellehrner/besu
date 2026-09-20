@@ -109,6 +109,14 @@ testing {
             if (System.getProperty('root.log.level')) {
               systemProperty 'root.log.level', System.getProperty('root.log.level')
             }
+            [
+              'acctests.keyValueStorage',
+              'acctests.nodeJavaOpts'
+            ].each { name ->
+              if (System.getProperty(name)) {
+                systemProperty name, System.getProperty(name)
+              }
+            }
             def javaProjects = rootProject.subprojects - project(':platform')
             mustRunAfter javaProjects.test
             description = 'Runs ALL Besu acceptance tests (excluding bftsoak).'

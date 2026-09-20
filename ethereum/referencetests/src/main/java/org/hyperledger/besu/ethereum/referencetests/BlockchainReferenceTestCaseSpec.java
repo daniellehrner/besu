@@ -89,8 +89,8 @@ public class BlockchainReferenceTestCaseSpec {
       final long cacheSize,
       final Blockchain blockchain) {
 
-    final InMemoryKeyValueStorageProvider inMemoryKeyValueStorageProvider =
-        new InMemoryKeyValueStorageProvider();
+    final ReferenceTestStorageProvider inMemoryKeyValueStorageProvider =
+        new ReferenceTestStorageProvider();
     final WorldStateArchive worldStateArchive =
         new BonsaiWorldStateProvider(
             (BonsaiWorldStateKeyValueStorage)

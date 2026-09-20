@@ -201,8 +201,8 @@ public class EngineTestCaseSpec {
 
   private WorldStateArchive buildWorldStateArchive(
       final org.hyperledger.besu.ethereum.chain.Blockchain blockchain) {
-    final InMemoryKeyValueStorageProvider inMemoryKeyValueStorageProvider =
-        new InMemoryKeyValueStorageProvider();
+    final ReferenceTestStorageProvider inMemoryKeyValueStorageProvider =
+        new ReferenceTestStorageProvider();
     final WorldStateArchive worldStateArchive =
         new BonsaiWorldStateProvider(
             (BonsaiWorldStateKeyValueStorage)

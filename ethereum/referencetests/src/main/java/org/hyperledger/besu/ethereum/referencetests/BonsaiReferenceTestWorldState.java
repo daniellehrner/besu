@@ -18,7 +18,6 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.Worl
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
-import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.code.BonsaiCodeCache;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiPreImageProxy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
@@ -241,7 +240,7 @@ public class BonsaiReferenceTestWorldState extends BonsaiWorldState
 
     final BonsaiWorldStateKeyValueStorage bonsaiWorldStateKeyValueStorage =
         new BonsaiWorldStateKeyValueStorage(
-            new InMemoryKeyValueStorageProvider(),
+            new ReferenceTestStorageProvider(),
             metricsSystem,
             DataStorageConfiguration.DEFAULT_BONSAI_CONFIG);
 

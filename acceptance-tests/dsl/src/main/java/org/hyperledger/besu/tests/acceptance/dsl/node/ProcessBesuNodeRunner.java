@@ -100,7 +100,9 @@ public class ProcessBesuNodeRunner implements BesuNodeRunner {
         .put(
             "JAVA_OPTS",
             "-Djava.security.properties="
-                + "acceptance-tests/tests/build/resources/test/acceptanceTesting.security");
+                + "acceptance-tests/tests/build/resources/test/acceptanceTesting.security"
+                + " "
+                + System.getProperty("acctests.nodeJavaOpts", ""));
     // add additional environment variables
     processBuilder.environment().putAll(node.getEnvironment());
 
@@ -410,7 +412,7 @@ public class ProcessBesuNodeRunner implements BesuNodeRunner {
     params.addAll(node.getExtraCLIOptions());
 
     params.add("--key-value-storage");
-    params.add("rocksdb");
+    params.add(System.getProperty("acctests.keyValueStorage", "rocksdb"));
 
     params.add("--auto-log-bloom-caching-enabled");
     params.add("false");

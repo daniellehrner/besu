@@ -321,6 +321,8 @@ dependencies {
   implementation project(path: ':ethereum:core', configuration: 'testSupportArtifacts')
   implementation project(':ethereum:rlp')
   implementation project(':evm')
+  implementation project(':plugins:codestore')
+  implementation project(':plugin-api')
   implementation project(':services:kvstore')
 
   implementation 'io.consensys.tuweni:tuweni-rlp'
@@ -342,6 +344,7 @@ dependencies {
   referenceTestImplementation project(path: ':ethereum:trie')
   referenceTestImplementation project(path: ':evm')
   referenceTestImplementation project(path: ':plugin-api')
+  referenceTestRuntimeOnly project(path: ':plugins:codestore')
   referenceTestImplementation project(path: ':testutil')
   referenceTestImplementation project(path: ':util')
   // the following will be resolved via custom ivy repository declared in root build.gradle
@@ -371,6 +374,9 @@ dependencies {
 // "Could not complete execution for Gradle Test Executor N" rather than as a test failure.
 tasks.withType(Test).configureEach {
   maxHeapSize = '2g'
+  if (System.getProperty('besu.reftest.mmapCodeStoreDir')) {
+    systemProperty 'besu.reftest.mmapCodeStoreDir', System.getProperty('besu.reftest.mmapCodeStoreDir')
+  }
 }
 
 tasks.register('referenceTests', Test) {
