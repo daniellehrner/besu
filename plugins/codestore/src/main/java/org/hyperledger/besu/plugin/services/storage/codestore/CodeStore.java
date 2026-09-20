@@ -194,7 +194,29 @@ public final class CodeStore implements AutoCloseable {
             truncated,
             dir.resolve(CodeLog.FILE_NAME));
       }
-      if (rebuild || scan.records() > 0 || truncated > 0) {
+      // A clean close trims the file to the log, so any other length means the writer died.
+      final boolean unclean = log.sizeAtOpen() != scan.validEnd();
+      if (!rebuild && unclean && index[0].hasTornSlot(watermark, log)) {
+        LOG.info("The index in {} has a half-written slot, rebuilding it from the log", dir);
+        index[0].close();
+        index[0] = CodeIndex.create(dir, options.initialIndexCapacity());
+        final CodeLog.ScanResult full =
+            log.scan(
+                CodeLog.HEADER_SIZE,
+                log.end(),
+                (segment, hashOffset, payloadOffset, length) -> {
+                  MemorySegment.copy(
+                      segment, ValueLayout.JAVA_BYTE, hashOffset, hash, 0, HASH_SIZE);
+                  index[0] = reindex(index[0], hash, payloadOffset);
+                });
+        if (full.validEnd() != log.end()) {
+          throw new CorruptCodeStoreException(
+              String.format(
+                  "%s has an invalid record at offset %d, below the synced length %d",
+                  dir.resolve(CodeLog.FILE_NAME), full.validEnd(), log.end()));
+        }
+      }
+      if (rebuild || unclean || scan.records() > 0 || truncated > 0) {
         index[0].recount();
         index[0].commit(log.end());
       }

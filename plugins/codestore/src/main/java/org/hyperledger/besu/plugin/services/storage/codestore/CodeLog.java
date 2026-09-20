@@ -32,10 +32,16 @@ import java.util.zip.CRC32C;
 /**
  * The append-only record log ({@code code.log}). All multi-byte fields are big-endian.
  *
- * <p>The file is mapped read-write and grown in fixed steps, so while the store is open the file is
- * longer than the log it holds and everything past {@link #end()} is zero. That invariant is what
- * lets a forward scan find the end of the log: a zero record magic. A clean close truncates the
- * file back to the exact log length.
+ * <p>Reads go through a read-only mapping; writes go through the file channel. Writing through a
+ * mapping would let the OS persist half-written data whenever it likes, would turn a full disk into
+ * a SIGBUS instead of an {@code IOException}, and would leave committed records open to a stray
+ * write. Both paths share the page cache, so a record is readable through the mapping as soon as
+ * the write returns.
+ *
+ * <p>The file is extended sparsely in fixed steps ahead of the log, so while the store is open the
+ * file is longer than the log it holds and everything past {@link #end()} is zero. That invariant
+ * is what lets a forward scan find the end of the log: a zero record magic. A clean close truncates
+ * the file back to the exact log length.
  *
  * <p>Growing maps the whole file again rather than closing the previous mapping. Superseded
  * mappings stay alive until {@link #close()}, so a segment handed out by {@link #payload} remains
@@ -167,7 +173,8 @@ final class CodeLog implements AutoCloseable {
   private void map(final long size) throws IOException {
     final Arena arena = Arena.ofShared();
     arenas.add(arena);
-    segment = channel.map(FileChannel.MapMode.READ_WRITE, 0, size, arena);
+    // Mapping past the end of the file extends it, sparsely, which needs the writable channel.
+    segment = channel.map(FileChannel.MapMode.READ_ONLY, 0, size, arena);
   }
 
   /** File length when the log was opened, before mapping extended it. */
@@ -261,9 +268,16 @@ final class CodeLog implements AutoCloseable {
     forcedUpTo = validEnd;
     final long torn = dataEnd - validEnd;
     if (torn > 0) {
-      final MemorySegment tail = segment.asSlice(validEnd, torn);
-      tail.fill((byte) 0);
-      tail.force();
+      final ByteBuffer zeros = ByteBuffer.allocate((int) Math.min(torn, 1 << 20));
+      for (long done = 0; done < torn; done += zeros.limit()) {
+        zeros.clear().limit((int) Math.min(zeros.capacity(), torn - done));
+        writeFully(zeros, validEnd + done);
+      }
+      try {
+        channel.force(false);
+      } catch (final IOException e) {
+        throw new UncheckedIOException("failed to sync " + path, e);
+      }
     }
     return torn;
   }
@@ -278,18 +292,30 @@ final class CodeLog implements AutoCloseable {
     ensureMapped(start + total);
 
     final long payloadOffset = start + REC_HEADER_SIZE;
-    segment.set(INT, start + 4, code.length);
-    MemorySegment.copy(codeHash, 0, segment, ValueLayout.JAVA_BYTE, start + 8, codeHash.length);
-    MemorySegment.copy(code, 0, segment, ValueLayout.JAVA_BYTE, payloadOffset, code.length);
     final CRC32C crc = new CRC32C();
     crc.update(codeHash);
     crc.update(code);
-    segment.set(INT, payloadOffset + code.length, (int) crc.getValue());
-    // The magic goes last: a writer killed mid-record leaves bytes that do not scan as a record.
-    segment.set(INT, start, REC_MAGIC);
+    // Allocated zeroed, which provides the padding.
+    final ByteBuffer record =
+        ByteBuffer.allocate(Math.toIntExact(total)).order(ByteOrder.BIG_ENDIAN);
+    record.putInt(REC_MAGIC).putInt(code.length).put(codeHash).put(code);
+    record.putInt((int) crc.getValue());
+    // A writer killed inside the write leaves a prefix; its CRC cannot match, so it scans as torn.
+    writeFully(record.clear(), start);
 
     end = start + total;
     return payloadOffset;
+  }
+
+  private void writeFully(final ByteBuffer buffer, final long position) {
+    try {
+      long at = position;
+      while (buffer.hasRemaining()) {
+        at += channel.write(buffer, at);
+      }
+    } catch (final IOException e) {
+      throw new UncheckedIOException("failed to write " + path, e);
+    }
   }
 
   private void ensureMapped(final long required) {
@@ -307,7 +333,7 @@ final class CodeLog implements AutoCloseable {
   MemorySegment payload(final long payloadOffset) {
     final long length =
         Integer.toUnsignedLong(segment.get(INT, payloadOffset - REC_HEADER_SIZE + 4));
-    return segment.asSlice(payloadOffset, length).asReadOnly();
+    return segment.asSlice(payloadOffset, length);
   }
 
   /** Offset of the record that follows the one whose payload is at {@code payloadOffset}. */
@@ -315,6 +341,18 @@ final class CodeLog implements AutoCloseable {
     final long length =
         Integer.toUnsignedLong(segment.get(INT, payloadOffset - REC_HEADER_SIZE + 4));
     return payloadOffset - REC_HEADER_SIZE + recordSize(length);
+  }
+
+  /** True if a record with {@code codeHash} has its payload at {@code payloadOffset}. */
+  boolean isRecordFor(final long payloadOffset, final MemorySegment codeHash) {
+    final long start = payloadOffset - REC_HEADER_SIZE;
+    return start >= HEADER_SIZE
+        && (start & 7) == 0
+        && payloadOffset < end
+        && segment.get(INT, start) == REC_MAGIC
+        && MemorySegment.mismatch(
+                segment, start + 8, payloadOffset, codeHash, 0, CodeStore.HASH_SIZE)
+            == -1;
   }
 
   /** The code hash recorded with the payload at {@code payloadOffset}. */
@@ -327,7 +365,11 @@ final class CodeLog implements AutoCloseable {
   /** Makes every record appended so far durable. */
   void force() {
     if (end > forcedUpTo) {
-      segment.asSlice(forcedUpTo, end - forcedUpTo).force();
+      try {
+        channel.force(false);
+      } catch (final IOException e) {
+        throw new UncheckedIOException("failed to sync " + path, e);
+      }
       forcedUpTo = end;
     }
   }

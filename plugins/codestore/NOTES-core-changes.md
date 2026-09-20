@@ -121,11 +121,15 @@ This weakens "atomic" to "ordered and idempotent" for one segment. It needs a de
   can be registered as a built-in the way `RocksDBPlugin` is.
 - **Byte order**: the format section does not name one. Everything is big-endian, which is what
   makes the magics read as `BCS1`, `BCSI` and `REC\0` on disk.
-- **File length vs log length**: `code.log` is mapped read-write in 1 GiB steps, and mapping past
-  the end of a file extends it. While the store is open the file is therefore longer than the log,
+- **File length vs log length**: `code.log` is mapped read-only in 1 GiB steps, and mapping past
+  the end of a file extends it (sparsely). Writes go through the file channel, not the mapping, so
+  §4.2's `READ_WRITE` mapping and `MemorySegment.force()` are not used for the log: see the mmap
+  section of the README. While the store is open the file is therefore longer than the log,
   with zeros past the end; a clean close truncates it back. "Truncate the trailing partial record"
   is implemented as zeroing the torn bytes, and the byte count logged at INFO is the torn bytes,
   not the zero padding.
+- **`MemorySegment.load()` after open** (§4.2) is off by default, `-Dbonsai.mmap.preload=true`
+  turns it on; M4 is to report whether it helps.
 - **Atomicity wording in §4.4**: log append order does not make a multi-record commit atomic; a
   kill half-way through leaves the first records of the batch in the log, and recovery keeps them.
   That is safe only because records are content-addressed (see above), and the class javadoc says

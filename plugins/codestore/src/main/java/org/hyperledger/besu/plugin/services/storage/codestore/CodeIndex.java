@@ -252,6 +252,28 @@ final class CodeIndex implements AutoCloseable {
     count = occupied[0];
   }
 
+  /**
+   * Looks for a slot that matches no record. A slot can straddle two pages, and after a power
+   * failure only one of them may have reached the disk, leaving an occupied slot with half a hash
+   * or no offset. Only slots written since the last commit can be torn, and those are the ones
+   * whose offset is at or past {@code watermark} or is not an offset at all, so the check touches
+   * nothing but the tail of the log.
+   */
+  boolean hasTornSlot(final long watermark, final CodeLog log) {
+    for (long slot = 0; slot < capacity; slot++) {
+      final long base = slotBase(slot);
+      if (isEmpty(base)) {
+        continue;
+      }
+      final long offset = segment.get(LONG, base + CodeStore.HASH_SIZE);
+      final boolean settled = offset >= CodeLog.HEADER_SIZE && offset < watermark;
+      if (!settled && !log.isRecordFor(offset, segment.asSlice(base, CodeStore.HASH_SIZE))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Records that the index now covers the log up to {@code newLogLength}, durably. */
   void commit(final long newLogLength) {
     logLength = newLogLength;

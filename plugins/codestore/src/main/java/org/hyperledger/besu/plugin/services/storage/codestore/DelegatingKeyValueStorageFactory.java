@@ -58,7 +58,10 @@ public class DelegatingKeyValueStorageFactory implements KeyValueStorageFactory 
   /** Set to {@code false} to stop mirroring code into the delegate. */
   public static final String MIRROR_PROPERTY = "bonsai.mmap.mirror";
 
-  /** Set to {@code false} to skip pre-faulting the code log on open. */
+  /**
+   * Set to {@code true} to pre-fault the code log on open. Off by default: on a log that is large
+   * next to the machine's memory it evicts pages the rest of the node is using.
+   */
   public static final String PRELOAD_PROPERTY = "bonsai.mmap.preload";
 
   private static final Logger LOG = LoggerFactory.getLogger(DelegatingKeyValueStorageFactory.class);
@@ -140,7 +143,8 @@ public class DelegatingKeyValueStorageFactory implements KeyValueStorageFactory 
               dir,
               CodeStoreOptions.defaults()
                   .withSourceBesuVersion(BesuVersionUtils.shortVersion())
-                  .withPreload(Boolean.parseBoolean(System.getProperty(PRELOAD_PROPERTY, "true"))));
+                  .withPreload(
+                      Boolean.parseBoolean(System.getProperty(PRELOAD_PROPERTY, "false"))));
     } catch (final IOException e) {
       throw new StorageException("Failed to open the mmap code store in " + dir, e);
     }

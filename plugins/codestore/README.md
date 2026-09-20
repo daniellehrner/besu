@@ -63,7 +63,7 @@ the registered `rocksdb` factory on first use, so every RocksDB option, includin
 |---|---|---|
 | `bonsai.mmap.mirror` | `true` | also write code into RocksDB's own `CODE_STORAGE`, so that going back to `--key-value-storage=rocksdb` needs no migration |
 | `bonsai.mmap.verify` | `false` | mirror, and check every code read against RocksDB; any difference fails the read |
-| `bonsai.mmap.preload` | `true` | pre-fault the code log on open |
+| `bonsai.mmap.preload` | `false` | pre-fault the code log on open; off because on a log that is large next to RAM it evicts pages RocksDB is using. To be measured in M4 |
 
 Rules the wiring enforces:
 
@@ -90,8 +90,9 @@ multi-byte fields are big-endian.
 
 - `code.log`: 64-byte header (`BCS1`, version 1), then 8-byte-aligned records of
   `REC\0 | length u32 | codeHash[32] | payload | crc32c(codeHash ‖ payload) | zero padding`.
-  Records are immutable. While the store is open the file is longer than the log (it is mapped in
-  1 GiB steps) and is zero past the log end; a clean close truncates it to the exact length.
+  Records are immutable. While the store is open the file is longer than the log (it is extended
+  sparsely in 1 GiB steps ahead of the read-only mapping) and is zero past the log end; a clean
+  close truncates it to the exact length.
 - `code.idx`: 64-byte header (`BCSI`, version 1, capacity, count, logLength), then 40-byte slots of
   `codeHash[32] | payload offset u64`. Open addressing, linear probing, power-of-two capacity, load
   factor at most 0.5, probe start taken from the first 8 bytes of the hash. Derived: it can always
@@ -100,7 +101,8 @@ multi-byte fields are big-endian.
 
 ### Durability and recovery
 
-`put` appends to the log and promises nothing. `sync` forces the log, then writes the index slots,
+Reads go through a read-only mapping, writes through the file channel (`write` + `force`), never
+through the mapping. `put` appends to the log and promises nothing. `sync` forces the log, then writes the index slots,
 then advances and forces the index header's `logLength`. The index on disk therefore never points
 at log bytes that were not forced first, and `logLength` is a durable watermark.
 
@@ -109,6 +111,36 @@ thing that is not a valid record ends the log; what follows was never acknowledg
 discarded, with the byte count logged at INFO. Damage below the watermark is corruption: `open`
 fails if it can see it (index missing, or log shorter than the index claims), `verify()` finds the
 rest. A failed open never modifies the log.
+
+A slot of the index can straddle two pages, and after a power failure only one of them may be on
+disk. On an unclean open every slot written since the last commit is checked against the log, and
+the index is rebuilt if one does not match.
+
+### mmap, and what "Are You Sure You Want to Use MMAP in Your DBMS?" means here
+
+Crotty, Leis and Pavlo (CIDR 2022) argue against mmap as a buffer pool replacement. Their "maybe"
+case is a read-only working set that fits in memory, which is what this store is: immutable
+records, a small hot set, and Besu's code cache in front. How their four problems land:
+
+1. *Transactional safety*: the OS may flush dirty mapped pages at any time. The log is not written
+   through a mapping at all. The index is, but it is derived, its slots are written only after the
+   log is forced, and torn slots are repaired as described above.
+2. *I/O stalls*: a cold read is a blocking page fault, as a RocksDB block-cache miss is a blocking
+   `pread`. Specific to the JVM: a thread faulting inside a mapped access may hold up a safepoint
+   for the duration of the fault.
+3. *Error handling*: reads do not check the CRC (see below), a disk read error surfaces as an
+   `InternalError` rather than an exception, and both are accepted. A full disk is an
+   `IOException`, because writes do not go through the mapping.
+4. *Eviction cost* (page table contention, kswapd, TLB shootdowns) appears only when the code set
+   exceeds the free page cache, at rates far below the paper's. M4 measures it: replay the
+   devnet-8 JUMPDEST attack under a cgroup memory limit and record TLB shootdowns, kswapd CPU,
+   major faults and time-to-safepoint.
+
+In Stage 1 mmap buys nothing over `pread`, because the storage SPI forces a copy to `byte[]`. It is
+kept for the zero-copy `Code` of a later stage, the only thing that removes the 64 KB allocate,
+zero-fill and copy per cold call. None of this carries over to a flat account/storage engine:
+mutable, far larger than memory, random point reads of tiny values. That wants an explicit
+off-heap page cache with positional reads.
 
 ### Reads do not check the CRC
 

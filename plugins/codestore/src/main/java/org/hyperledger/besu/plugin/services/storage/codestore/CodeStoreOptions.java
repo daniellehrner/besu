@@ -36,13 +36,13 @@ public record CodeStoreOptions(
   public static final String CODE_HASH_KEYING = "code-hash";
 
   /**
-   * Production defaults: 1 GiB log growth, 65,536 index slots, preload on.
+   * Production defaults: 1 GiB log growth, 65,536 index slots, preload off.
    *
    * @return the default options
    */
   public static CodeStoreOptions defaults() {
     return new CodeStoreOptions(
-        1L << 30, 1L << 16, true, "unknown", CODE_HASH_KEYING, ProbeListener.NONE);
+        1L << 30, 1L << 16, false, "unknown", CODE_HASH_KEYING, ProbeListener.NONE);
   }
 
   /**

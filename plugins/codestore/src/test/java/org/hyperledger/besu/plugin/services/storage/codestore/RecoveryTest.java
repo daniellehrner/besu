@@ -232,6 +232,52 @@ class RecoveryTest {
     }
   }
 
+  /** Offset in {@code code.idx} of the first empty slot. */
+  private long firstEmptySlot() throws IOException {
+    final byte[] idx = Files.readAllBytes(image.resolve(CodeIndex.FILE_NAME));
+    for (int base = CodeIndex.HEADER_SIZE; base < idx.length; base += CodeIndex.SLOT_SIZE) {
+      boolean empty = true;
+      for (int i = 0; i < CodeStore.HASH_SIZE; i++) {
+        empty &= idx[base + i] == 0;
+      }
+      if (empty) {
+        return base;
+      }
+    }
+    throw new IllegalStateException("no empty slot");
+  }
+
+  private void writeToIndex(final long offset, final byte[] data) throws IOException {
+    try (FileChannel ch =
+        FileChannel.open(image.resolve(CodeIndex.FILE_NAME), StandardOpenOption.WRITE)) {
+      ch.write(ByteBuffer.wrap(data), offset);
+    }
+  }
+
+  // A slot can straddle two pages, and after a power failure only one of them may have reached
+  // the disk. Either half alone is an occupied slot that matches no record.
+
+  @Test
+  void repairsASlotWhoseSecondHalfWasLost() throws IOException {
+    final byte[] firstHalf = new byte[16];
+    java.util.Arrays.fill(firstHalf, (byte) 0x5A);
+    writeToIndex(firstEmptySlot(), firstHalf);
+    try (CodeStore store = CodeStore.open(image, SMALL)) {
+      assertIntact(store, SYNCED + UNSYNCED);
+    }
+  }
+
+  @Test
+  void repairsASlotWhoseFirstHalfWasLost() throws IOException {
+    final ByteBuffer secondHalf = ByteBuffer.allocate(CodeIndex.SLOT_SIZE - 16);
+    secondHalf.put(new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16});
+    secondHalf.putLong(syncedLogBytes + CodeLog.REC_HEADER_SIZE);
+    writeToIndex(firstEmptySlot() + 16, secondHalf.array());
+    try (CodeStore store = CodeStore.open(image, SMALL)) {
+      assertIntact(store, SYNCED + UNSYNCED);
+    }
+  }
+
   @Test
   void failsLoudlyOnABadLogMagic() throws IOException {
     writeToLog(0, new byte[] {9, 9, 9, 9});
