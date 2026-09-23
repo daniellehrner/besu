@@ -26,8 +26,10 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.StorageSubscr
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.metrics.ObservableMetricsSystem;
 
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
@@ -44,10 +46,23 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
 
   private static final int ACCOUNT_CACHE_SIZE = 100_000;
   private static final int STORAGE_CACHE_SIZE = 200_000;
+
+  // Guava locks a segment per write; the default of 4 serialises the trie pools
+  private static final int CACHE_CONCURRENCY =
+      Math.max(4, Runtime.getRuntime().availableProcessors());
+
   private final Cache<Bytes, Bytes> accountNodes =
-      CacheBuilder.newBuilder().recordStats().maximumSize(ACCOUNT_CACHE_SIZE).build();
+      CacheBuilder.newBuilder()
+          .concurrencyLevel(CACHE_CONCURRENCY)
+          .recordStats()
+          .maximumSize(ACCOUNT_CACHE_SIZE)
+          .build();
   private final Cache<Bytes, Bytes> storageNodes =
-      CacheBuilder.newBuilder().recordStats().maximumSize(STORAGE_CACHE_SIZE).build();
+      CacheBuilder.newBuilder()
+          .concurrencyLevel(CACHE_CONCURRENCY)
+          .recordStats()
+          .maximumSize(STORAGE_CACHE_SIZE)
+          .build();
 
   public BonsaiCachedMerkleTrieLoader(final ObservableMetricsSystem metricsSystem) {
     metricsSystem.createGuavaCacheCollector(BLOCKCHAIN, "accountsNodes", accountNodes);
@@ -75,7 +90,7 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
               (location, hash) -> {
                 Optional<Bytes> node =
                     getAccountStateTrieNode(worldStateKeyValueStorage, location, hash);
-                node.ifPresent(bytes -> accountNodes.put(Hash.hash(bytes).getBytes(), bytes));
+                node.ifPresent(bytes -> accountNodes.put(hash, bytes));
                 return node;
               },
               Bytes32.wrap(worldStateRootHash.getBytes()),
@@ -116,8 +131,7 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
                             Optional<Bytes> node =
                                 getAccountStorageTrieNode(
                                     worldStateKeyValueStorage, accountHash, location, hash);
-                            node.ifPresent(
-                                bytes -> storageNodes.put(Hash.hash(bytes).getBytes(), bytes));
+                            node.ifPresent(bytes -> storageNodes.put(hash, bytes));
                             return node;
                           },
                           Bytes32.wrap(Hash.hash(storageRoot).getBytes()),
@@ -131,6 +145,44 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
     } finally {
       worldStateKeyValueStorage.unSubscribe(storageSubscriberId);
     }
+  }
+
+  /**
+   * Trie nodes produced by one state root computation, to be added to the node cache. Every node on
+   * a modified path gets a new hash, so without this the next block's walk down that path misses at
+   * each level and reads back what was just written. The cache is keyed by hash, so an entry stays
+   * valid even if the block that produced it is never persisted.
+   *
+   * <p>Nodes are collected here rather than cached one by one because the trie pools commit
+   * concurrently and would contend on the cache's segment locks.
+   */
+  public static class CommittedNodeBatch {
+    private final ConcurrentLinkedQueue<Map.Entry<Bytes32, Bytes>> accountNodes =
+        new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Map.Entry<Bytes32, Bytes>> storageNodes =
+        new ConcurrentLinkedQueue<>();
+
+    public void addAccountNode(final Bytes32 nodeHash, final Bytes node) {
+      accountNodes.add(Map.entry(nodeHash, node));
+    }
+
+    public void addStorageNode(final Bytes32 nodeHash, final Bytes node) {
+      storageNodes.add(Map.entry(nodeHash, node));
+    }
+  }
+
+  /** Adds the batch to the node cache on a background thread. */
+  public void cacheCommittedNodes(final CommittedNodeBatch batch) {
+    if (batch.accountNodes.isEmpty() && batch.storageNodes.isEmpty()) {
+      return;
+    }
+    VIRTUAL_POOL.execute(() -> cacheCommittedNodesNow(batch));
+  }
+
+  @VisibleForTesting
+  void cacheCommittedNodesNow(final CommittedNodeBatch batch) {
+    batch.accountNodes.forEach(node -> accountNodes.put(node.getKey(), node.getValue()));
+    batch.storageNodes.forEach(node -> storageNodes.put(node.getKey(), node.getValue()));
   }
 
   public Optional<Bytes> getAccountStateTrieNode(

@@ -96,6 +96,32 @@ class BonsaiCachedMerkleTrieLoaderTest {
   }
 
   @Test
+  void shouldServeCommittedNodesFromCache() {
+    final Bytes accountNode = Bytes.fromHexString("0xc58320aaaa01");
+    final Bytes storageNode = Bytes.fromHexString("0xc58320bbbb02");
+    final Bytes32 accountNodeHash = Bytes32.wrap(Hash.hash(accountNode).getBytes());
+    final Bytes32 storageNodeHash = Bytes32.wrap(Hash.hash(storageNode).getBytes());
+    final BonsaiCachedMerkleTrieLoader.CommittedNodeBatch batch =
+        new BonsaiCachedMerkleTrieLoader.CommittedNodeBatch();
+    batch.addAccountNode(accountNodeHash, accountNode);
+    batch.addStorageNode(storageNodeHash, storageNode);
+    merkleTrieLoader.cacheCommittedNodesNow(batch);
+
+    final BonsaiWorldStateKeyValueStorage emptyStorage =
+        new BonsaiWorldStateKeyValueStorage(
+            new InMemoryKeyValueStorageProvider(),
+            new NoOpMetricsSystem(),
+            DataStorageConfiguration.DEFAULT_BONSAI_CONFIG);
+
+    assertThat(merkleTrieLoader.getAccountStateTrieNode(emptyStorage, Bytes.EMPTY, accountNodeHash))
+        .contains(accountNode);
+    assertThat(
+            merkleTrieLoader.getAccountStorageTrieNode(
+                emptyStorage, accounts.get(0).addressHash(), Bytes.EMPTY, storageNodeHash))
+        .contains(storageNode);
+  }
+
+  @Test
   void shouldAddStorageNodesInCacheDuringPreload() {
     final Hash hashAccountZero = accounts.get(0).addressHash();
     final PmtStateTrieAccountValue stateTrieAccountValue =
