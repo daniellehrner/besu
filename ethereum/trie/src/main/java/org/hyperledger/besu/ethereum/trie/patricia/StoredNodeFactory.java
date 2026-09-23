@@ -26,6 +26,7 @@ import org.hyperledger.besu.ethereum.trie.NodeFactory;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
 import org.hyperledger.besu.ethereum.trie.NullNode;
 import org.hyperledger.besu.ethereum.trie.StoredNode;
+import org.hyperledger.besu.ethereum.trie.TrieNodeLoadStats;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -122,10 +123,13 @@ public class StoredNodeFactory<V> implements NodeFactory<V> {
 
   private Node<V> decode(final Bytes location, final Bytes rlp, final Supplier<String> errMessage)
       throws MerkleTrieException {
+    final long start = System.nanoTime();
     try {
       return decode(location, RLP.input(rlp), errMessage);
     } catch (final RLPException ex) {
       throw new MerkleTrieException(errMessage.get(), ex);
+    } finally {
+      TrieNodeLoadStats.recordDecode(System.nanoTime() - start);
     }
   }
 

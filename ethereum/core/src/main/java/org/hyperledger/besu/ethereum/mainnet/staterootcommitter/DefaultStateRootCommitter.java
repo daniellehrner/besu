@@ -112,6 +112,15 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
     }
 
     Hash executeInto(final List<StateRootComputations.UpdaterWrite> writeSink) {
+      final long start = System.nanoTime();
+      try {
+        return doExecuteInto(writeSink);
+      } finally {
+        StateRootStats.recordComputation(sink.isFrozen(), System.nanoTime() - start);
+      }
+    }
+
+    private Hash doExecuteInto(final List<StateRootComputations.UpdaterWrite> writeSink) {
       clearStorage();
       if (!sink.isFrozen()) {
         collectCodeWrites();
@@ -198,6 +207,7 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
           (accountOriginal == null || storageCleared)
               ? Hash.EMPTY_TRIE_HASH
               : accountOriginal.getStorageRoot();
+      final long start = System.nanoTime();
       final MerkleTrie<Bytes, Bytes> storageTrie =
           bonsai.createStorageTrie(updatedAddressHash, storageRoot);
 
@@ -227,7 +237,10 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
             (location, nodeHash, value) ->
                 u -> u.putAccountStorageTrieNode(updatedAddressHash, location, nodeHash, value));
       }
-      return accountDeleted ? Hash.EMPTY_TRIE_HASH : Hash.wrap(storageTrie.getRootHash());
+      final Hash newStorageRoot =
+          accountDeleted ? Hash.EMPTY_TRIE_HASH : Hash.wrap(storageTrie.getRootHash());
+      StateRootStats.recordStorageTrie(storageUpdates.size(), System.nanoTime() - start);
+      return newStorageRoot;
     }
 
     private void clearStorage() {

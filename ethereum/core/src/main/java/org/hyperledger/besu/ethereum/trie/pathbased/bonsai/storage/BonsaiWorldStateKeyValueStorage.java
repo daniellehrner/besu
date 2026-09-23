@@ -24,6 +24,7 @@ import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
+import org.hyperledger.besu.ethereum.trie.TrieNodeLoadStats;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.cache.FlatDbCacheManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.cache.VersionedFlatDbCacheManager;
@@ -384,7 +385,7 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     }
     return trieNodeStrategy
         .getFlatAccountTrieNode(location, nodeHash, composedWorldStateStorage)
-        .filter(b -> Hash.hash(b).getBytes().equals(nodeHash));
+        .filter(b -> hasExpectedHash(b, nodeHash));
   }
 
   public Optional<Bytes> getAccountStorageTrieNode(
@@ -394,7 +395,14 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     }
     return trieNodeStrategy
         .getFlatStorageTrieNode(accountHash, location, nodeHash, composedWorldStateStorage)
-        .filter(b -> Hash.hash(b).getBytes().equals(nodeHash));
+        .filter(b -> hasExpectedHash(b, nodeHash));
+  }
+
+  private static boolean hasExpectedHash(final Bytes node, final Bytes32 expectedHash) {
+    final long start = System.nanoTime();
+    final boolean matches = Hash.hash(node).getBytes().equals(expectedHash);
+    TrieNodeLoadStats.recordValidationHash(System.nanoTime() - start);
+    return matches;
   }
 
   public Optional<Bytes> getTrieNodeUnsafe(final Bytes key) {

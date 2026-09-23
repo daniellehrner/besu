@@ -19,18 +19,23 @@ import static org.hyperledger.besu.metrics.BesuMetricCategory.BLOCKCHAIN;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
+import org.hyperledger.besu.ethereum.mainnet.staterootcommitter.StateRootStats;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
+import org.hyperledger.besu.ethereum.trie.TrieNodeLoadStats;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.StorageSubscriber;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.metrics.ObservableMetricsSystem;
+import org.hyperledger.besu.plugin.services.metrics.LabelledSuppliedMetric;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.cache.Cache;
@@ -42,8 +47,16 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
 
   private static final ExecutorService VIRTUAL_POOL = Executors.newVirtualThreadPerTaskExecutor();
 
-  private static final int ACCOUNT_CACHE_SIZE = 100_000;
-  private static final int STORAGE_CACHE_SIZE = 200_000;
+  private static final int ACCOUNT_CACHE_SIZE =
+      Integer.getInteger("besu.bonsai.trieNodeCache.accountSize", 100_000);
+  private static final int STORAGE_CACHE_SIZE =
+      Integer.getInteger("besu.bonsai.trieNodeCache.storageSize", 200_000);
+
+  private static final String ACCOUNT = "account";
+  private static final String STORAGE = "storage";
+  private static final String PRELOAD = "preload";
+  private static final String COMMIT = "commit";
+
   private final Cache<Bytes, Bytes> accountNodes =
       CacheBuilder.newBuilder().recordStats().maximumSize(ACCOUNT_CACHE_SIZE).build();
   private final Cache<Bytes, Bytes> storageNodes =
@@ -52,6 +65,115 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
   public BonsaiCachedMerkleTrieLoader(final ObservableMetricsSystem metricsSystem) {
     metricsSystem.createGuavaCacheCollector(BLOCKCHAIN, "accountsNodes", accountNodes);
     metricsSystem.createGuavaCacheCollector(BLOCKCHAIN, "storageNodes", storageNodes);
+    registerLoadMetrics(metricsSystem);
+  }
+
+  /** Node lookups of one trie kind in one phase, split by where the node came from. */
+  private static final class LookupStats {
+    final LongAdder cacheHits = new LongAdder();
+    final LongAdder dbReads = new LongAdder();
+    final LongAdder dbAbsent = new LongAdder();
+    final LongAdder dbReadNanos = new LongAdder();
+  }
+
+  /** Preload walks of one trie kind. */
+  private static final class WalkStats {
+    final LongAdder walks = new LongAdder();
+    final LongAdder walkNanos = new LongAdder();
+  }
+
+  private final LookupStats accountPreloadLookups = new LookupStats();
+  private final LookupStats accountCommitLookups = new LookupStats();
+  private final LookupStats storagePreloadLookups = new LookupStats();
+  private final LookupStats storageCommitLookups = new LookupStats();
+  private final WalkStats accountWalks = new WalkStats();
+  private final WalkStats storageWalks = new WalkStats();
+
+  private void registerLoadMetrics(final ObservableMetricsSystem metricsSystem) {
+    final LabelledSuppliedMetric lookups =
+        metricsSystem.createLabelledSuppliedCounter(
+            BLOCKCHAIN,
+            "trie_node_lookups_total",
+            "Trie node lookups through the cached merkle trie loader",
+            "trie",
+            "phase",
+            "source");
+    final LabelledSuppliedMetric dbReadNanos =
+        metricsSystem.createLabelledSuppliedCounter(
+            BLOCKCHAIN,
+            "trie_node_db_read_nanos_total",
+            "Time spent reading trie nodes from storage on a cache miss, validation hash included",
+            "trie",
+            "phase");
+    registerLookups(lookups, dbReadNanos, ACCOUNT, PRELOAD, accountPreloadLookups);
+    registerLookups(lookups, dbReadNanos, ACCOUNT, COMMIT, accountCommitLookups);
+    registerLookups(lookups, dbReadNanos, STORAGE, PRELOAD, storagePreloadLookups);
+    registerLookups(lookups, dbReadNanos, STORAGE, COMMIT, storageCommitLookups);
+
+    final LabelledSuppliedMetric walks =
+        metricsSystem.createLabelledSuppliedCounter(
+            BLOCKCHAIN, "trie_preload_walks_total", "Preload walks down a trie", "trie");
+    final LabelledSuppliedMetric walkNanos =
+        metricsSystem.createLabelledSuppliedCounter(
+            BLOCKCHAIN,
+            "trie_preload_walk_nanos_total",
+            "Wall time of preload walks, summed over the virtual threads running them",
+            "trie");
+    walks.labels(accountWalks.walks::sum, ACCOUNT);
+    walks.labels(storageWalks.walks::sum, STORAGE);
+    walkNanos.labels(accountWalks.walkNanos::sum, ACCOUNT);
+    walkNanos.labels(storageWalks.walkNanos::sum, STORAGE);
+
+    final LabelledSuppliedMetric stateRoot =
+        metricsSystem.createLabelledSuppliedCounter(
+            BLOCKCHAIN,
+            "state_root_computation_total",
+            "State root computations by pass: frozen while validating, persisting on roll forward",
+            "pass",
+            "unit");
+    stateRoot.labels(() -> StateRootStats.computations(StateRootStats.FROZEN), "frozen", "count");
+    stateRoot.labels(() -> StateRootStats.nanos(StateRootStats.FROZEN), "frozen", "nanos");
+    stateRoot.labels(
+        () -> StateRootStats.computations(StateRootStats.PERSISTING), "persisting", "count");
+    stateRoot.labels(() -> StateRootStats.nanos(StateRootStats.PERSISTING), "persisting", "nanos");
+    final LabelledSuppliedMetric storageTries =
+        metricsSystem.createLabelledSuppliedCounter(
+            BLOCKCHAIN,
+            "state_root_storage_tries_total",
+            "Storage trie updates by number of slot updates",
+            "max_updates",
+            "unit");
+    for (int i = 0; i < StateRootStats.storageBucketCount(); i++) {
+      final int bucket = i;
+      final String label = StateRootStats.storageBucketLabel(i);
+      storageTries.labels(() -> StateRootStats.storageTries(bucket), label, "count");
+      storageTries.labels(() -> StateRootStats.storageTrieNanos(bucket), label, "nanos");
+    }
+
+    // process-wide: every trie in the node, not only the ones loaded through this class
+    final LabelledSuppliedMetric materialise =
+        metricsSystem.createLabelledSuppliedCounter(
+            BLOCKCHAIN,
+            "trie_node_materialise_total",
+            "Process-wide trie node RLP decodes and storage validation hashes",
+            "step",
+            "unit");
+    materialise.labels(TrieNodeLoadStats::decodeCount, "decode", "count");
+    materialise.labels(TrieNodeLoadStats::decodeNanos, "decode", "nanos");
+    materialise.labels(TrieNodeLoadStats::validationHashCount, "validation_hash", "count");
+    materialise.labels(TrieNodeLoadStats::validationHashNanos, "validation_hash", "nanos");
+  }
+
+  private static void registerLookups(
+      final LabelledSuppliedMetric lookups,
+      final LabelledSuppliedMetric dbReadNanos,
+      final String trie,
+      final String phase,
+      final LookupStats stats) {
+    lookups.labels(stats.cacheHits::sum, trie, phase, "cache");
+    lookups.labels(stats.dbReads::sum, trie, phase, "db");
+    lookups.labels(stats.dbAbsent::sum, trie, phase, "db_absent");
+    dbReadNanos.labels(stats.dbReadNanos::sum, trie, phase);
   }
 
   public void preLoadAccount(
@@ -69,12 +191,17 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
       final Hash worldStateRootHash,
       final Address account) {
     final long storageSubscriberId = worldStateKeyValueStorage.subscribe(this);
+    final long start = System.nanoTime();
     try {
       final StoredMerklePatriciaTrie<Bytes, Bytes> accountTrie =
           new StoredMerklePatriciaTrie<>(
               (location, hash) -> {
                 Optional<Bytes> node =
-                    getAccountStateTrieNode(worldStateKeyValueStorage, location, hash);
+                    lookup(
+                        accountNodes,
+                        hash,
+                        accountPreloadLookups,
+                        () -> worldStateKeyValueStorage.getAccountStateTrieNode(location, hash));
                 node.ifPresent(bytes -> accountNodes.put(Hash.hash(bytes).getBytes(), bytes));
                 return node;
               },
@@ -85,6 +212,8 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
     } catch (MerkleTrieException e) {
       // ignore exception for the cache
     } finally {
+      accountWalks.walks.increment();
+      accountWalks.walkNanos.add(System.nanoTime() - start);
       worldStateKeyValueStorage.unSubscribe(storageSubscriberId);
     }
   }
@@ -104,6 +233,7 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
       final StorageSlotKey slotKey) {
     final Hash accountHash = account.addressHash();
     final long storageSubscriberId = worldStateKeyValueStorage.subscribe(this);
+    final long start = System.nanoTime();
     try {
       worldStateKeyValueStorage
           .getStateTrieNode(Bytes.concatenate(accountHash.getBytes(), Bytes.EMPTY))
@@ -114,8 +244,13 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
                       new StoredMerklePatriciaTrie<Bytes, Bytes>(
                           (location, hash) -> {
                             Optional<Bytes> node =
-                                getAccountStorageTrieNode(
-                                    worldStateKeyValueStorage, accountHash, location, hash);
+                                lookup(
+                                    storageNodes,
+                                    hash,
+                                    storagePreloadLookups,
+                                    () ->
+                                        worldStateKeyValueStorage.getAccountStorageTrieNode(
+                                            accountHash, location, hash));
                             node.ifPresent(
                                 bytes -> storageNodes.put(Hash.hash(bytes).getBytes(), bytes));
                             return node;
@@ -129,20 +264,41 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
                 }
               });
     } finally {
+      storageWalks.walks.increment();
+      storageWalks.walkNanos.add(System.nanoTime() - start);
       worldStateKeyValueStorage.unSubscribe(storageSubscriberId);
     }
+  }
+
+  private static Optional<Bytes> lookup(
+      final Cache<Bytes, Bytes> cache,
+      final Bytes32 nodeHash,
+      final LookupStats stats,
+      final Supplier<Optional<Bytes>> storageRead) {
+    if (nodeHash.equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
+      return Optional.of(MerkleTrie.EMPTY_TRIE_NODE);
+    }
+    final Bytes cached = cache.getIfPresent(nodeHash);
+    if (cached != null) {
+      stats.cacheHits.increment();
+      return Optional.of(cached);
+    }
+    final long start = System.nanoTime();
+    final Optional<Bytes> node = storageRead.get();
+    stats.dbReadNanos.add(System.nanoTime() - start);
+    (node.isPresent() ? stats.dbReads : stats.dbAbsent).increment();
+    return node;
   }
 
   public Optional<Bytes> getAccountStateTrieNode(
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
       final Bytes location,
       final Bytes32 nodeHash) {
-    if (nodeHash.equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
-      return Optional.of(MerkleTrie.EMPTY_TRIE_NODE);
-    } else {
-      return Optional.ofNullable(accountNodes.getIfPresent(nodeHash))
-          .or(() -> worldStateKeyValueStorage.getAccountStateTrieNode(location, nodeHash));
-    }
+    return lookup(
+        accountNodes,
+        nodeHash,
+        accountCommitLookups,
+        () -> worldStateKeyValueStorage.getAccountStateTrieNode(location, nodeHash));
   }
 
   public Optional<Bytes> getAccountStorageTrieNode(
@@ -150,14 +306,10 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
       final Hash accountHash,
       final Bytes location,
       final Bytes32 nodeHash) {
-    if (nodeHash.equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
-      return Optional.of(MerkleTrie.EMPTY_TRIE_NODE);
-    } else {
-      return Optional.ofNullable(storageNodes.getIfPresent(nodeHash))
-          .or(
-              () ->
-                  worldStateKeyValueStorage.getAccountStorageTrieNode(
-                      accountHash, location, nodeHash));
-    }
+    return lookup(
+        storageNodes,
+        nodeHash,
+        storageCommitLookups,
+        () -> worldStateKeyValueStorage.getAccountStorageTrieNode(accountHash, location, nodeHash));
   }
 }
