@@ -29,8 +29,10 @@ import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.metrics.ObservableMetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.LabelledSuppliedMetric;
 
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.LongAdder;
@@ -52,15 +54,27 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
   private static final int STORAGE_CACHE_SIZE =
       Integer.getInteger("besu.bonsai.trieNodeCache.storageSize", 200_000);
 
+  // Guava locks a segment per write; the default of 4 serialises the trie pools
+  private static final int CACHE_CONCURRENCY =
+      Math.max(4, Runtime.getRuntime().availableProcessors());
+
   private static final String ACCOUNT = "account";
   private static final String STORAGE = "storage";
   private static final String PRELOAD = "preload";
   private static final String COMMIT = "commit";
 
   private final Cache<Bytes, Bytes> accountNodes =
-      CacheBuilder.newBuilder().recordStats().maximumSize(ACCOUNT_CACHE_SIZE).build();
+      CacheBuilder.newBuilder()
+          .concurrencyLevel(CACHE_CONCURRENCY)
+          .recordStats()
+          .maximumSize(ACCOUNT_CACHE_SIZE)
+          .build();
   private final Cache<Bytes, Bytes> storageNodes =
-      CacheBuilder.newBuilder().recordStats().maximumSize(STORAGE_CACHE_SIZE).build();
+      CacheBuilder.newBuilder()
+          .concurrencyLevel(CACHE_CONCURRENCY)
+          .recordStats()
+          .maximumSize(STORAGE_CACHE_SIZE)
+          .build();
 
   public BonsaiCachedMerkleTrieLoader(final ObservableMetricsSystem metricsSystem) {
     metricsSystem.createGuavaCacheCollector(BLOCKCHAIN, "accountsNodes", accountNodes);
@@ -88,6 +102,8 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
   private final LookupStats storageCommitLookups = new LookupStats();
   private final WalkStats accountWalks = new WalkStats();
   private final WalkStats storageWalks = new WalkStats();
+  private final LongAdder committedAccountNodes = new LongAdder();
+  private final LongAdder committedStorageNodes = new LongAdder();
 
   private void registerLoadMetrics(final ObservableMetricsSystem metricsSystem) {
     final LabelledSuppliedMetric lookups =
@@ -123,6 +139,15 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
     walks.labels(storageWalks.walks::sum, STORAGE);
     walkNanos.labels(accountWalks.walkNanos::sum, ACCOUNT);
     walkNanos.labels(storageWalks.walkNanos::sum, STORAGE);
+
+    final LabelledSuppliedMetric committed =
+        metricsSystem.createLabelledSuppliedCounter(
+            BLOCKCHAIN,
+            "trie_node_commit_cached_total",
+            "Committed trie nodes written through to the node cache",
+            "trie");
+    committed.labels(committedAccountNodes::sum, ACCOUNT);
+    committed.labels(committedStorageNodes::sum, STORAGE);
 
     final LabelledSuppliedMetric stateRoot =
         metricsSystem.createLabelledSuppliedCounter(
@@ -202,7 +227,7 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
                         hash,
                         accountPreloadLookups,
                         () -> worldStateKeyValueStorage.getAccountStateTrieNode(location, hash));
-                node.ifPresent(bytes -> accountNodes.put(Hash.hash(bytes).getBytes(), bytes));
+                node.ifPresent(bytes -> accountNodes.put(hash, bytes));
                 return node;
               },
               Bytes32.wrap(worldStateRootHash.getBytes()),
@@ -251,8 +276,7 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
                                     () ->
                                         worldStateKeyValueStorage.getAccountStorageTrieNode(
                                             accountHash, location, hash));
-                            node.ifPresent(
-                                bytes -> storageNodes.put(Hash.hash(bytes).getBytes(), bytes));
+                            node.ifPresent(bytes -> storageNodes.put(hash, bytes));
                             return node;
                           },
                           Bytes32.wrap(Hash.hash(storageRoot).getBytes()),
@@ -288,6 +312,46 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
     stats.dbReadNanos.add(System.nanoTime() - start);
     (node.isPresent() ? stats.dbReads : stats.dbAbsent).increment();
     return node;
+  }
+
+  /**
+   * Trie nodes produced by one state root computation, to be added to the node cache. Every node on
+   * a modified path gets a new hash, so without this the next block's walk down that path misses at
+   * each level and reads back what was just written. The cache is keyed by hash, so an entry stays
+   * valid even if the block that produced it is never persisted.
+   *
+   * <p>Nodes are collected here rather than cached one by one because the trie pools commit
+   * concurrently and would contend on the cache's segment locks.
+   */
+  public static class CommittedNodeBatch {
+    private final ConcurrentLinkedQueue<Map.Entry<Bytes32, Bytes>> accountNodes =
+        new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Map.Entry<Bytes32, Bytes>> storageNodes =
+        new ConcurrentLinkedQueue<>();
+
+    public void addAccountNode(final Bytes32 nodeHash, final Bytes node) {
+      accountNodes.add(Map.entry(nodeHash, node));
+    }
+
+    public void addStorageNode(final Bytes32 nodeHash, final Bytes node) {
+      storageNodes.add(Map.entry(nodeHash, node));
+    }
+  }
+
+  /** Adds the batch to the node cache on a background thread. */
+  public void cacheCommittedNodes(final CommittedNodeBatch batch) {
+    if (batch.accountNodes.isEmpty() && batch.storageNodes.isEmpty()) {
+      return;
+    }
+    VIRTUAL_POOL.execute(() -> cacheCommittedNodesNow(batch));
+  }
+
+  @VisibleForTesting
+  void cacheCommittedNodesNow(final CommittedNodeBatch batch) {
+    batch.accountNodes.forEach(node -> accountNodes.put(node.getKey(), node.getValue()));
+    batch.storageNodes.forEach(node -> storageNodes.put(node.getKey(), node.getValue()));
+    committedAccountNodes.add(batch.accountNodes.size());
+    committedStorageNodes.add(batch.storageNodes.size());
   }
 
   public Optional<Bytes> getAccountStateTrieNode(

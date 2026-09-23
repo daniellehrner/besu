@@ -222,6 +222,13 @@ public class BonsaiWorldState extends PathBasedWorldState {
     this.bonsaiCachedMerkleTrieLoader = new NoOpBonsaiCachedMerkleTrieLoader();
   }
 
+  /** Hands trie nodes produced by a state root computation to the node cache, if there is one. */
+  public void cacheCommittedNodes(final BonsaiCachedMerkleTrieLoader.CommittedNodeBatch batch) {
+    if (bonsaiCachedMerkleTrieLoader != null) {
+      bonsaiCachedMerkleTrieLoader.cacheCommittedNodes(batch);
+    }
+  }
+
   /**
    * Frontier receipt computation is inherently sequential (each receipt depends on the prior
    * transaction's state root), so its tries skip the parallel implementation and its ForkJoinPool

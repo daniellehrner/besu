@@ -41,4 +41,9 @@ public class NoOpBonsaiCachedMerkleTrieLoader extends BonsaiCachedMerkleTrieLoad
       final StorageSlotKey slotKey) {
     // noop
   }
+
+  @Override
+  public void cacheCommittedNodes(final CommittedNodeBatch batch) {
+    // noop
+  }
 }
