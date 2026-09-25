@@ -32,6 +32,7 @@ import org.hyperledger.besu.cli.CommandTestAbstract;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.code.CodeStorageMigration;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.code.JumpDestCodeStorageStrategy;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.DatabaseMetadata;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
@@ -74,7 +75,7 @@ public class StorageSubCommandTest extends CommandTestAbstract {
     parseCommand("storage", "revert-code-format", "--help");
 
     assertThat(commandOutput.toString(UTF_8))
-        .contains("Revert the contract code storage to the format read by Besu versions before");
+        .contains("Revert the contract code storage to the bare code read by Besu versions before");
     assertThat(commandErrorOutput.toString(UTF_8)).isEmpty();
   }
 
@@ -96,7 +97,7 @@ public class StorageSubCommandTest extends CommandTestAbstract {
 
     assertThat(commandErrorOutput.toString(UTF_8)).isEmpty();
     assertThat(codeStorage.get(CODE_STORAGE, key)).contains(code.toArrayUnsafe());
-    assertThat(codeStorage.get(CODE_STORAGE, CodeStorageMigration.FORMAT_KEY)).isEmpty();
+    assertThat(codeStorage.get(CODE_STORAGE, JumpDestCodeStorageStrategy.MARKER_KEY)).isEmpty();
     assertThat(DatabaseMetadata.lookUpFrom(dataDir).getVersionedStorageFormat())
         .isEqualTo(BaseVersionedStorageFormat.BONSAI_WITH_RECEIPT_COMPACTION);
   }
