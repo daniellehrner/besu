@@ -175,6 +175,8 @@ final class CodeLog implements AutoCloseable {
     arenas.add(arena);
     // Mapping past the end of the file extends it, sparsely, which needs the writable channel.
     segment = channel.map(FileChannel.MapMode.READ_ONLY, 0, size, arena);
+    // Code reads are random: readahead around a fault would pull in pages nobody asked for.
+    MemoryAdvice.random(segment);
   }
 
   /** File length when the log was opened, before mapping extended it. */
@@ -344,15 +346,25 @@ final class CodeLog implements AutoCloseable {
   }
 
   /** True if a record with {@code codeHash} has its payload at {@code payloadOffset}. */
-  boolean isRecordFor(final long payloadOffset, final MemorySegment codeHash) {
+  boolean isRecordFor(final long payloadOffset, final long hashPrefix) {
     final long start = payloadOffset - REC_HEADER_SIZE;
     return start >= HEADER_SIZE
         && (start & 7) == 0
         && payloadOffset < end
         && segment.get(INT, start) == REC_MAGIC
-        && MemorySegment.mismatch(
-                segment, start + 8, payloadOffset, codeHash, 0, CodeStore.HASH_SIZE)
-            == -1;
+        && segment.get(LONG, start + 8) == hashPrefix;
+  }
+
+  /** True if the record whose payload starts at {@code payloadOffset} carries {@code codeHash}. */
+  boolean isHashAt(final long payloadOffset, final byte[] codeHash) {
+    return MemorySegment.mismatch(
+            segment,
+            payloadOffset - CodeStore.HASH_SIZE,
+            payloadOffset,
+            MemorySegment.ofArray(codeHash),
+            0,
+            CodeStore.HASH_SIZE)
+        == -1;
   }
 
   /** The code hash recorded with the payload at {@code payloadOffset}. */

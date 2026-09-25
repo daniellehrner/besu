@@ -154,6 +154,7 @@ public final class CodeStore implements AutoCloseable {
       }
       Manifest.loadOrCreate(dir, options);
       log = CodeLog.open(dir, options.logGrowStep());
+      final CodeLog openLog = log;
 
       final Optional<CodeIndex> existing = CodeIndex.openExisting(dir);
       final boolean rebuild = existing.isEmpty();
@@ -177,7 +178,7 @@ public final class CodeStore implements AutoCloseable {
               log.sizeAtOpen(),
               (segment, hashOffset, payloadOffset, length) -> {
                 MemorySegment.copy(segment, ValueLayout.JAVA_BYTE, hashOffset, hash, 0, HASH_SIZE);
-                index[0] = reindex(index[0], hash, payloadOffset);
+                index[0] = reindex(index[0], openLog, hash, payloadOffset);
               });
 
       final long dataEnd = log.dataEnd(scan.validEnd());
@@ -213,7 +214,7 @@ public final class CodeStore implements AutoCloseable {
                 (segment, hashOffset, payloadOffset, length) -> {
                   MemorySegment.copy(
                       segment, ValueLayout.JAVA_BYTE, hashOffset, hash, 0, HASH_SIZE);
-                  index[0] = reindex(index[0], hash, payloadOffset);
+                  index[0] = reindex(index[0], openLog, hash, payloadOffset);
                 });
         if (full.validEnd() != log.end()) {
           throw new CorruptCodeStoreException(
@@ -226,6 +227,7 @@ public final class CodeStore implements AutoCloseable {
         index[0].recount();
         index[0].commit(log.end());
       }
+      index[0].load();
       if (options.preload()) {
         log.load();
       }
@@ -244,9 +246,9 @@ public final class CodeStore implements AutoCloseable {
   }
 
   private static CodeIndex reindex(
-      final CodeIndex index, final byte[] hash, final long payloadOffset) {
+      final CodeIndex index, final CodeLog log, final byte[] hash, final long payloadOffset) {
     final CodeIndex target = index.needsGrowFor(1) ? grow(index) : index;
-    target.insertIfAbsent(hash, payloadOffset);
+    target.insertIfAbsent(hash, payloadOffset, log::isHashAt);
     return target;
   }
 
@@ -439,7 +441,7 @@ public final class CodeStore implements AutoCloseable {
     while (index.needsGrowFor(pending.size())) {
       index = grow(index);
     }
-    pending.forEach((hash, offset) -> index.insertIfAbsent(hash.bytes(), offset));
+    pending.forEach((hash, offset) -> index.insertIfAbsent(hash.bytes(), offset, log::isHashAt));
     index.commit(log.end());
     pending.clear();
   }
@@ -480,7 +482,7 @@ public final class CodeStore implements AutoCloseable {
       index.forEach(
           offset -> {
             if (offset >= log.end()
-                || index.find(log.hashAt(offset), ProbeListener.NONE) != offset) {
+                || index.find(log.hashAt(offset), log::isHashAt, ProbeListener.NONE) != offset) {
               throw new CorruptCodeStoreException(
                   dir.resolve(CodeIndex.FILE_NAME) + ": slot for offset " + offset + " is broken");
             }
@@ -544,7 +546,7 @@ public final class CodeStore implements AutoCloseable {
         return offset;
       }
     }
-    return index.find(codeHash, probes);
+    return index.find(codeHash, log::isHashAt, probes);
   }
 
   private static void checkHash(final byte[] codeHash) {

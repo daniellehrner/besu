@@ -45,6 +45,16 @@ src/jmh    microbenchmarks
 ./gradlew :plugins:codestore:jmh        # get latency, p50/p99
 ```
 
+`CodeStoreVsRocksDbBenchmark` compares reads against RocksDB on a real store; it needs the JMH jar
+and a copy of a node's `code-store` directory, and builds the RocksDB column family from it on
+first use:
+
+```
+./gradlew :plugins:codestore:jmhJar
+java -Dcodestore.bench.dir=/path/to/code-store --enable-native-access=ALL-UNNAMED \
+     -jar plugins/codestore/build/libs/codestore-*-jmh.jar CodeStoreVsRocksDb -rf json
+```
+
 `slowTest` writes about 5 GiB under the system temp directory. Its size can be reduced with
 `-Dcodestore.property.pairs=N` and `-Dcodestore.kill.iterations=N`.
 
@@ -65,6 +75,7 @@ the registered `rocksdb` factory on first use, so every RocksDB option, includin
 | `bonsai.mmap.verify` | `false` | mirror, and check every code read against RocksDB; any difference fails the read |
 | `bonsai.mmap.drop-delegate-code` | `false` | on a database that used to mirror: once every RocksDB code row is confirmed present in the code store, clear RocksDB's `CODE_STORAGE` |
 | `bonsai.mmap.preload` | `false` | pre-fault the code log on open; off because on a log that is large next to RAM it evicts pages RocksDB is using. To be measured in M4 |
+| `bonsai.mmap.random-access` | `true` | `madvise(MADV_RANDOM)` on the log mapping, through an FFM downcall at open. Off, a cold read costs 2.5x more (see below) |
 
 Rules the wiring enforces:
 
@@ -99,10 +110,14 @@ multi-byte fields are big-endian.
   Records are immutable. While the store is open the file is longer than the log (it is extended
   sparsely in 1 GiB steps ahead of the read-only mapping) and is zero past the log end; a clean
   close truncates it to the exact length.
-- `code.idx`: 64-byte header (`BCSI`, version 1, capacity, count, logLength), then 40-byte slots of
-  `codeHash[32] | payload offset u64`. Open addressing, linear probing, power-of-two capacity, load
-  factor at most 0.5, probe start taken from the first 8 bytes of the hash. Derived: it can always
-  be rebuilt from the log. Grows by building `code.idx.new` and renaming it over.
+- `code.idx`: 64-byte header (`BCSI`, version 2, capacity, count, logLength), then 16-byte slots of
+  `codeHash[0..8] | payload offset u64`. Open addressing, linear probing, power-of-two capacity, load
+  factor at most 0.5, probe start taken from the same first 8 bytes of the hash. A prefix match is
+  confirmed against the full hash in the log record, which sits right before the payload a hit reads
+  anyway. Derived: it can always be rebuilt from the log, and an index of another version is. Grows
+  by building `code.idx.new` and renaming it over. The whole index is loaded into memory at open
+  (134 MB for mainnet's 2.8M contracts, 268 MB for hoodi's 4.9M), so a cold read faults once, in
+  the log.
 - `MANIFEST`: JSON with format version, creation time, source Besu version and code keying.
 
 ### Durability and recovery
@@ -118,9 +133,9 @@ discarded, with the byte count logged at INFO. Damage below the watermark is cor
 fails if it can see it (index missing, or log shorter than the index claims), `verify()` finds the
 rest. A failed open never modifies the log.
 
-A slot of the index can straddle two pages, and after a power failure only one of them may be on
-disk. On an unclean open every slot written since the last commit is checked against the log, and
-the index is rebuilt if one does not match.
+A slot written just before a power failure may reach the disk in part. On an unclean open every
+slot written since the last commit is checked against the log, and the index is rebuilt if one does
+not match.
 
 ### mmap, and what "Are You Sure You Want to Use MMAP in Your DBMS?" means here
 
@@ -147,6 +162,34 @@ kept for the zero-copy `Code` of a later stage, the only thing that removes the 
 zero-fill and copy per cold call. None of this carries over to a flat account/storage engine:
 mutable, far larger than memory, random point reads of tiny values. That wants an explicit
 off-heap page cache with positional reads.
+
+### Measured against RocksDB
+
+`get` through the `KeyValueStorage` boundary (a `byte[]` comes back either way), on the hoodi
+store copied from the node (4.85M contracts, 4.5 GB), RocksDB built from the same entries with the
+options Besu gives `CODE_STORAGE` (LZ4, 32 KB blocks, 128 MB block cache). 24-core desktop, NVMe,
+two forks, about a million samples per row.
+
+| keys | page cache | mmap p50 | mmap p99 | RocksDB p50 | RocksDB p99 |
+|---|---|---|---|---|---|
+| 1k hot | warm | 90 ns | 410 ns | 1,540 ns | 2,508 ns |
+| all 4.85M | warm | 520 ns | 1,020 ns | 6,368 ns | 12,048 ns |
+| absent | warm | 60 ns | 280 ns | 1,370 ns | 3,728 ns |
+| all 4.85M | cold, reopened | 112 µs | 245 µs | 122 µs | 250 µs |
+
+In memory the store is 12-17x faster than RocksDB; that is the JNI call, bloom filter, block lookup
+and LZ4 decompression it does not do. Cold it is at par. Two things made the cold case, which was
+3x slower with the first index format: the 40-byte slots put the index out of memory (671 MB on
+hoodi) and cost a second fault per read, and the kernel's 128 KB readahead around each fault made
+every read pull in far more than it needed. With `MADV_RANDOM` off the cold p50 is 276 µs.
+
+What remains: with readahead off, a record that straddles a page boundary costs two faults in
+sequence (p90 218 µs against RocksDB's 141 µs). On mainnet, where the average contract is 5.6 KB,
+that will be most cold reads. A `MADV_WILLNEED` on the payload range before the copy would fix it
+at the price of a syscall per read; not done, to be decided with the M4 memory-pressure run.
+
+In the node both backends sit behind the 256 MB `BonsaiCodeCache`, so block time only sees these
+differences on its misses.
 
 ### Reads do not check the CRC
 

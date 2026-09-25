@@ -20,7 +20,6 @@ import static org.hyperledger.besu.plugin.services.storage.codestore.CodeLog.LON
 import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,6 +29,11 @@ import java.util.Optional;
 /**
  * The open-addressed hash index ({@code code.idx}): linear probing, power-of-two capacity, load
  * factor at most 0.5. All multibyte fields are big-endian.
+ *
+ * <p>A slot holds the first eight bytes of the code hash and the payload offset. The full hash is
+ * read from the log record, which a hit is about to read anyway, so a slot match is confirmed there
+ * before it is returned and a false match costs one log read. The index is kept small enough to
+ * stay resident, which makes a cold read one page fault instead of two.
  *
  * <p>The index is derived from the log and can always be rebuilt from it, so nothing here needs to
  * be crash-atomic beyond one rule: the header's {@code logLength} is only advanced, and forced,
@@ -41,9 +45,9 @@ final class CodeIndex implements AutoCloseable {
 
   static final String FILE_NAME = "code.idx";
   static final int HEADER_SIZE = 64;
-  static final int SLOT_SIZE = CodeStore.HASH_SIZE + 8;
+  static final int SLOT_SIZE = 16;
   static final int MAGIC = 0x42435349; // "BCSI"
-  static final int VERSION = 1;
+  static final int VERSION = 2;
 
   private static final long CAPACITY_OFFSET = 8;
   private static final long COUNT_OFFSET = 16;
@@ -53,6 +57,12 @@ final class CodeIndex implements AutoCloseable {
   @FunctionalInterface
   interface SlotVisitor {
     void visit(long logOffset);
+  }
+
+  /** Confirms a slot match against the hash stored in the log record. */
+  @FunctionalInterface
+  interface HashCheck {
+    boolean isHashAt(long payloadOffset, byte[] codeHash);
   }
 
   private final Path dir;
@@ -154,15 +164,35 @@ final class CodeIndex implements AutoCloseable {
     }
   }
 
+  // Entries are distinct already, so each one goes into the first free slot of its probe run.
   private void copySlotsInto(final CodeIndex target) {
-    final byte[] hash = new byte[CodeStore.HASH_SIZE];
     for (long slot = 0; slot < capacity; slot++) {
       final long base = slotBase(slot);
       if (!isEmpty(base)) {
-        MemorySegment.copy(segment, ValueLayout.JAVA_BYTE, base, hash, 0, hash.length);
-        target.insertIfAbsent(hash, segment.get(LONG, base + CodeStore.HASH_SIZE));
+        target.insertNew(segment.get(LONG, base), segment.get(LONG, base + 8));
       }
     }
+  }
+
+  private void insertNew(final long prefix, final long logOffset) {
+    final long mask = capacity - 1;
+    long slot = prefix & mask;
+    while (!isEmpty(slotBase(slot))) {
+      slot = (slot + 1) & mask;
+    }
+    write(slotBase(slot), prefix, logOffset);
+  }
+
+  private void write(final long base, final long prefix, final long logOffset) {
+    // Offset last: a slot only becomes visible once its offset is non-zero.
+    segment.set(LONG, base, prefix);
+    segment.set(LONG, base + 8, logOffset);
+    count++;
+  }
+
+  /** Pulls the whole index into memory, so lookups never wait for it. */
+  void load() {
+    segment.load();
   }
 
   /**
@@ -196,19 +226,22 @@ final class CodeIndex implements AutoCloseable {
    *
    * @return the payload offset in the log, or -1 if absent
    */
-  long find(final byte[] codeHash, final ProbeListener probes) {
+  long find(final byte[] codeHash, final HashCheck check, final ProbeListener probes) {
     final long mask = capacity - 1;
-    final MemorySegment key = MemorySegment.ofArray(codeHash);
-    long slot = homeSlot(codeHash) & mask;
+    final long prefix = prefixOf(codeHash);
+    long slot = prefix & mask;
     for (int probe = 1; ; probe++, slot = (slot + 1) & mask) {
       final long base = slotBase(slot);
-      if (matches(base, key)) {
-        probes.onProbes(probe);
-        return segment.get(LONG, base + CodeStore.HASH_SIZE);
-      }
       if (isEmpty(base)) {
         probes.onProbes(probe);
         return -1;
+      }
+      if (segment.get(LONG, base) == prefix) {
+        final long offset = segment.get(LONG, base + 8);
+        if (check.isHashAt(offset, codeHash)) {
+          probes.onProbes(probe);
+          return offset;
+        }
       }
     }
   }
@@ -219,24 +252,24 @@ final class CodeIndex implements AutoCloseable {
    *
    * @return -1 if inserted, otherwise the payload offset already recorded for the hash
    */
-  long insertIfAbsent(final byte[] codeHash, final long logOffset) {
+  long insertIfAbsent(final byte[] codeHash, final long logOffset, final HashCheck check) {
     if (needsGrowFor(1)) {
       throw new IllegalStateException("index is full, grow it first");
     }
     final long mask = capacity - 1;
-    final MemorySegment key = MemorySegment.ofArray(codeHash);
-    long slot = homeSlot(codeHash) & mask;
+    final long prefix = prefixOf(codeHash);
+    long slot = prefix & mask;
     while (true) {
       final long base = slotBase(slot);
       if (isEmpty(base)) {
-        // Offset first: a slot only becomes visible to a scan once its hash is non-zero.
-        segment.set(LONG, base + CodeStore.HASH_SIZE, logOffset);
-        MemorySegment.copy(codeHash, 0, segment, ValueLayout.JAVA_BYTE, base, codeHash.length);
-        count++;
+        write(base, prefix, logOffset);
         return -1;
       }
-      if (matches(base, key)) {
-        return segment.get(LONG, base + CodeStore.HASH_SIZE);
+      if (segment.get(LONG, base) == prefix) {
+        final long offset = segment.get(LONG, base + 8);
+        if (check.isHashAt(offset, codeHash)) {
+          return offset;
+        }
       }
       slot = (slot + 1) & mask;
     }
@@ -253,11 +286,9 @@ final class CodeIndex implements AutoCloseable {
   }
 
   /**
-   * Looks for a slot that matches no record. A slot can straddle two pages, and after a power
-   * failure only one of them may have reached the disk, leaving an occupied slot with half a hash
-   * or no offset. Only slots written since the last commit can be torn, and those are the ones
-   * whose offset is at or past {@code watermark} or is not an offset at all, so the check touches
-   * nothing but the tail of the log.
+   * Looks for a slot that matches no record. Only slots written since the last commit can be
+   * damaged, and those are the ones whose offset is at or past {@code watermark} or is not an
+   * offset at all, so the check touches nothing but the tail of the log.
    */
   boolean hasTornSlot(final long watermark, final CodeLog log) {
     for (long slot = 0; slot < capacity; slot++) {
@@ -265,9 +296,9 @@ final class CodeIndex implements AutoCloseable {
       if (isEmpty(base)) {
         continue;
       }
-      final long offset = segment.get(LONG, base + CodeStore.HASH_SIZE);
+      final long offset = segment.get(LONG, base + 8);
       final boolean settled = offset >= CodeLog.HEADER_SIZE && offset < watermark;
-      if (!settled && !log.isRecordFor(offset, segment.asSlice(base, CodeStore.HASH_SIZE))) {
+      if (!settled && !log.isRecordFor(offset, segment.get(LONG, base))) {
         return true;
       }
     }
@@ -286,7 +317,7 @@ final class CodeIndex implements AutoCloseable {
     for (long slot = 0; slot < capacity; slot++) {
       final long base = slotBase(slot);
       if (!isEmpty(base)) {
-        visitor.visit(segment.get(LONG, base + CodeStore.HASH_SIZE));
+        visitor.visit(segment.get(LONG, base + 8));
       }
     }
   }
@@ -296,8 +327,9 @@ final class CodeIndex implements AutoCloseable {
     segment.set(LONG, LOG_LENGTH_OFFSET, logLength);
   }
 
-  // Keys are keccak outputs, so their leading bytes are already uniformly distributed.
-  private static long homeSlot(final byte[] codeHash) {
+  // Keys are keccak outputs, so their leading bytes are already uniformly distributed and serve
+  // both as the home slot and as the stored prefix.
+  private static long prefixOf(final byte[] codeHash) {
     return MemorySegment.ofArray(codeHash).get(LONG, 0);
   }
 
@@ -305,17 +337,9 @@ final class CodeIndex implements AutoCloseable {
     return HEADER_SIZE + slot * SLOT_SIZE;
   }
 
+  // No record starts inside the log header, so an offset of zero marks a free slot.
   private boolean isEmpty(final long base) {
-    return segment.get(LONG, base) == 0
-        && segment.get(LONG, base + 8) == 0
-        && segment.get(LONG, base + 16) == 0
-        && segment.get(LONG, base + 24) == 0;
-  }
-
-  private boolean matches(final long base, final MemorySegment key) {
-    return MemorySegment.mismatch(
-            segment, base, base + CodeStore.HASH_SIZE, key, 0, CodeStore.HASH_SIZE)
-        == -1;
+    return segment.get(LONG, base + 8) == 0;
   }
 
   private static long fileSize(final long capacity) {
