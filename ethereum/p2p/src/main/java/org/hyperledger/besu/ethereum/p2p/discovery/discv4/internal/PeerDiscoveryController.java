@@ -567,8 +567,31 @@ public class PeerDiscoveryController {
       // An under-peered node always falls back to its bootnodes, regardless of network type:
       // without this, a bootnode that was slow, full or offline during the single bonding
       // round at startup is never contacted again until the node restarts.
-      refreshTable(true);
+      if (recursivePeerRefreshState.isSearchInProgress()) {
+        // The iterative search can run for minutes (up to 100 rounds), and a new search cannot
+        // start until it finishes. Don't wait for it: bond with the bootnodes directly.
+        retryUnbondedBootnodes();
+      } else {
+        refreshTable(true);
+      }
     }
+  }
+
+  private void retryUnbondedBootnodes() {
+    final List<DiscoveryPeerV4> unbonded =
+        bootstrapNodes.stream()
+            .filter(p -> p.getStatus() != PeerDiscoveryStatus.BONDED)
+            .filter(peerPermissions::allowOutboundBonding)
+            .toList();
+    if (unbonded.isEmpty()) {
+      return;
+    }
+    LOG.debug("Retrying bonding with {} unbonded bootnodes", unbonded.size());
+    unbonded.forEach(
+        p -> {
+          p.setStatus(PeerDiscoveryStatus.KNOWN);
+          bond(p);
+        });
   }
 
   private void cleanPeerTableIfRequired() {

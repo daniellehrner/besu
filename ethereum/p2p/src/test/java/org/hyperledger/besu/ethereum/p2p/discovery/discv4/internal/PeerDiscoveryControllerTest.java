@@ -733,6 +733,46 @@ public class PeerDiscoveryControllerTest {
   }
 
   @Test
+  public void shouldRetryUnbondedBootnodesDirectlyWhenUnderPeeredAndSearchStillInProgress() {
+    final List<NodeKey> nodeKeys = PeerDiscoveryTestHelper.generateNodeKeys(2);
+    final List<DiscoveryPeerV4> bootnodes = helper.createDiscoveryPeers(nodeKeys);
+
+    final MockTimerUtil timer = new MockTimerUtil();
+    final OutboundMessageHandler outboundMessageHandler = mock(OutboundMessageHandler.class);
+    controller =
+        getControllerBuilder()
+            .peers(bootnodes)
+            .timerUtil(timer)
+            .outboundMessageHandler(outboundMessageHandler)
+            .includeBootnodesOnPeerRefresh(false)
+            .peerRequirement(() -> false)
+            .build();
+    controller.setRetryDelayFunction(PeerDiscoveryControllerTest::longDelayFunction);
+    controller.start();
+
+    for (final DiscoveryPeerV4 bootnode : bootnodes) {
+      verify(controller, times(1)).bond(eq(bootnode));
+    }
+    // No timers are run, so the startup search never completes: its bonding round stays
+    // outstanding and a new iterative search cannot be started.
+    assertThat(controller.getRecursivePeerRefreshState().isSearchInProgress()).isTrue();
+
+    // First periodic check: the full table refresh. Skipped by the in-progress search.
+    timer.runPeriodicHandlers();
+    for (final DiscoveryPeerV4 bootnode : bootnodes) {
+      verify(controller, times(1)).bond(eq(bootnode));
+    }
+
+    // Second periodic check: under-peered. The bootnodes are bonded with directly, without
+    // waiting for the search to finish.
+    timer.runPeriodicHandlers();
+    assertThat(controller.getRecursivePeerRefreshState().isSearchInProgress()).isTrue();
+    for (final DiscoveryPeerV4 bootnode : bootnodes) {
+      verify(controller, times(2)).bond(eq(bootnode));
+    }
+  }
+
+  @Test
   public void shouldNotRetryBootnodesOnRefreshWhenSufficientlyPeeredOnNonPoaNetwork() {
     final List<NodeKey> nodeKeys = PeerDiscoveryTestHelper.generateNodeKeys(2);
     final List<DiscoveryPeerV4> bootnodes = helper.createDiscoveryPeers(nodeKeys);
