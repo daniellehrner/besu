@@ -133,7 +133,7 @@ This weakens "atomic" to "ordered and idempotent" for one segment. It needs a de
   with zeros past the end; a clean close truncates it back. "Truncate the trailing partial record"
   is implemented as zeroing the torn bytes, and the byte count logged at INFO is the torn bytes,
   not the zero padding.
-- **The index format** (§3.2) uses 16-byte slots (8-byte hash prefix + offset) instead of full
+- **The index format** (§3.2) uses 16-byte slots (8-byte hash prefix + offset) rather than full
   hashes, is loaded into memory at open, and the log mapping gets `madvise(MADV_RANDOM)` through
   an FFM downcall; measured reasons in the README.
 - **`MemorySegment.load()` after open** (§4.2) is off by default, `-Dbonsai.mmap.preload=true`

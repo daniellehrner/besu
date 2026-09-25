@@ -110,11 +110,11 @@ multi-byte fields are big-endian.
   Records are immutable. While the store is open the file is longer than the log (it is extended
   sparsely in 1 GiB steps ahead of the read-only mapping) and is zero past the log end; a clean
   close truncates it to the exact length.
-- `code.idx`: 64-byte header (`BCSI`, version 2, capacity, count, logLength), then 16-byte slots of
+- `code.idx`: 64-byte header (`BCSI`, version 1, capacity, count, logLength), then 16-byte slots of
   `codeHash[0..8] | payload offset u64`. Open addressing, linear probing, power-of-two capacity, load
   factor at most 0.5, probe start taken from the same first 8 bytes of the hash. A prefix match is
   confirmed against the full hash in the log record, which sits right before the payload a hit reads
-  anyway. Derived: it can always be rebuilt from the log, and an index of another version is. Grows
+  anyway. Derived: it can always be rebuilt from the log. Grows
   by building `code.idx.new` and renaming it over. The whole index is loaded into memory at open
   (134 MB for mainnet's 2.8M contracts, 268 MB for hoodi's 4.9M), so a cold read faults once, in
   the log.
@@ -178,10 +178,9 @@ two forks, about a million samples per row.
 | all 4.85M | cold, reopened | 112 µs | 245 µs | 122 µs | 250 µs |
 
 In memory the store is 12-17x faster than RocksDB; that is the JNI call, bloom filter, block lookup
-and LZ4 decompression it does not do. Cold it is at par. Two things made the cold case, which was
-3x slower with the first index format: the 40-byte slots put the index out of memory (671 MB on
-hoodi) and cost a second fault per read, and the kernel's 128 KB readahead around each fault made
-every read pull in far more than it needed. With `MADV_RANDOM` off the cold p50 is 276 µs.
+and LZ4 decompression it does not do. Cold it is at par. Two things decide the cold case: the index
+has to be in memory, or a read faults twice, and the kernel's 128 KB readahead around each fault
+makes every read pull in far more than it needs. With `MADV_RANDOM` off the cold p50 is 276 µs.
 
 What remains: with readahead off, a record that straddles a page boundary costs two faults in
 sequence (p90 218 µs against RocksDB's 141 µs). On mainnet, where the average contract is 5.6 KB,

@@ -47,7 +47,7 @@ final class CodeIndex implements AutoCloseable {
   static final int HEADER_SIZE = 64;
   static final int SLOT_SIZE = 16;
   static final int MAGIC = 0x42435349; // "BCSI"
-  static final int VERSION = 2;
+  static final int VERSION = 1;
 
   private static final long CAPACITY_OFFSET = 8;
   private static final long COUNT_OFFSET = 16;
