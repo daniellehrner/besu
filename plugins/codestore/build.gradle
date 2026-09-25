@@ -46,6 +46,11 @@ dependencies {
   testImplementation project(':crypto:algorithms')
   testImplementation project(':evm')
   testImplementation project(path: ':ethereum:core', configuration: 'testSupportArtifacts')
+  jmhImplementation project(':ethereum:core')
+  jmhImplementation project(':metrics:core')
+  jmhImplementation project(':plugins:rocksdb')
+  jmhImplementation 'org.mockito:mockito-core'
+
   testImplementation project(':datatypes')
   testImplementation project(':metrics:core')
   testImplementation project(':plugins:rocksdb')
