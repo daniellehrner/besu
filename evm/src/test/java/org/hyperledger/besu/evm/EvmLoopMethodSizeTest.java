@@ -92,7 +92,7 @@ class EvmLoopMethodSizeTest {
    * which runs an operation through its implementation, and what the loop does once before it
    * starts. Everything else it calls must be inlined, or C2 keeps the loop's locals in memory.
    */
-  private static final Set<String> NOT_INLINED =
+  static final Set<String> NOT_INLINED =
       Set.of(
           "EVM.executeOperationV2",
           "EVM.completeOperationV2",
