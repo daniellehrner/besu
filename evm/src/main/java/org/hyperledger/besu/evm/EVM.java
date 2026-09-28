@@ -17,6 +17,14 @@ package org.hyperledger.besu.evm;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static org.hyperledger.besu.evm.operation.PushOperation.PUSH_BASE;
 import static org.hyperledger.besu.evm.operation.SwapOperation.SWAP_BASE;
+import static org.hyperledger.besu.evm.v2.operation.Arms.BASE_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.HIGH_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.JUMPDEST_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.LONG_BE;
+import static org.hyperledger.besu.evm.v2.operation.Arms.LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.MID_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.isJumpDestinationV2;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
@@ -183,9 +191,6 @@ import org.hyperledger.besu.evm.v2.operation.TStoreOperationV2;
 import org.hyperledger.besu.evm.v2.operation.TimestampOperationV2;
 import org.hyperledger.besu.evm.v2.operation.XorOperationV2;
 
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
-import java.nio.ByteOrder;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -205,20 +210,6 @@ public class EVM {
   /** The constant UNDERFLOW_RESPONSE. */
   protected static final OperationResult UNDERFLOW_RESPONSE =
       new OperationResult(0L, ExceptionalHaltReason.INSUFFICIENT_STACK_ITEMS);
-
-  // The costs the untraced loops charge for the operations they run inline, the same numbers the
-  // operations' results carry. Constants rather than fields of the gas calculator: as fields they
-  // are loads C2 hoists to the loop's dispatch, where they run for every operation.
-  static final long BASE_TIER_GAS = 2L;
-  static final long VERY_LOW_TIER_GAS = 3L;
-  static final long LOW_TIER_GAS = 5L;
-  static final long MID_TIER_GAS = 8L;
-  static final long HIGH_TIER_GAS = 10L;
-  static final long JUMPDEST_GAS = 1L;
-
-  // Reads and writes a big-endian word of a byte array, as memory and input data hold them.
-  static final VarHandle LONG_BE =
-      MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
 
   // The values PUSH1 and PUSH2 put on the stack, shared by all code so that the loop pushes them
   // without allocating. PUSH2 values are added as they are first executed.
@@ -1065,7 +1056,7 @@ public class EVM {
   // that the switch's table has an entry per arm instead of one per opcode up to the highest one
   // handled inline: that table is bytecode of the loop and counts against its inlining budget.
   // Opcodes without an arm map to 0 and take the general path.
-  // BEGIN GENERATED arm table from V2LoopArms; do not edit
+  // BEGIN GENERATED arm table from the @Arm methods; do not edit
   private static final int ARM_PUSH1 = 1;
   private static final int ARM_PUSH = 2;
   private static final int ARM_DUP = 3;
@@ -1147,11 +1138,12 @@ public class EVM {
    * {@link #executeOperationV2} with the state handed back to the frame, so halting behaviour is
    * defined in one place for both loops.
    *
-   * <p>The arms between the generated markers come from {@link V2LoopArms}, which documents the
-   * rules they follow; the build rejects an arm that breaks one, and EVM.java that does not hold
-   * what the arms generate. Edit the arms there and run {@code ./gradlew :evm:generateEvmV2Loop}.
-   * The loop around them keeps one rule of its own: no local is read after the general path's call
-   * before it is reloaded, as a local live across a call is kept in memory.
+   * <p>The arms between the generated markers come from the methods of the operation classes marked
+   * {@code @Arm}, whose javadoc documents the rules they follow; the build rejects an arm that
+   * breaks one, and EVM.java that does not hold what the arms generate. Edit an arm in its
+   * operation's class and run {@code ./gradlew :evm:generateEvmV2Loop}. The loop around them keeps
+   * one rule of its own: no local is read after the general path's call before it is reloaded, as a
+   * local live across a call is kept in memory.
    *
    * <p>C2 also stops inlining into a method once its own bytecode and everything inlined into it
    * reach 8000 bytes, after which even the frame's getters become calls. That budget, not the gas
@@ -1164,8 +1156,7 @@ public class EVM {
     }
     final Code codeObject = frame.getCode();
     // builds the tables the PUSH and jump arms read from codeObject
-    codeObject.pushBits();
-    codeObject.jumpDestinations();
+    codeObject.analyse();
     final byte[] code = codeObject.getBytes().toArrayUnsafe();
     final boolean constantinople = enableConstantinople;
     final boolean shanghai = enableShanghai;
@@ -1194,8 +1185,8 @@ public class EVM {
       final int base = (sp << 2) + bias;
       final int pcBase = pc + bias;
       switch (entry & 0xff) {
-        // BEGIN GENERATED arms from V2LoopArms; do not edit
-        case ARM_PUSH1 -> { // V2LoopArms.push1
+        // BEGIN GENERATED arms from the @Arm methods; do not edit
+        case ARM_PUSH1 -> { // PushOperationV2.push1
           if ((sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
             final int dst = base + (ARM_PUSH1 << 4);
             final int i = pcBase + (ARM_PUSH1 << 4);
@@ -1208,22 +1199,22 @@ public class EVM {
             delta = 1;
           }
         }
-        case ARM_PUSH -> { // V2LoopArms.push
+        case ARM_PUSH -> { // PushOperationV2.push
           if ((sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
             final int dst = base + (ARM_PUSH << 4);
             final int block = pc >>> 6;
             final long value =
                 codeObject
-                    .pushValues[
-                    codeObject.pushBase[block]
-                        + Long.bitCount(codeObject.pushBits[block] & ((1L << (pc & 63)) - 1))];
-            if (opcode <= 0x67) { // PUSH3-8, the value itself
+                    .pushValues()[
+                    codeObject.pushBase()[block]
+                        + Long.bitCount(codeObject.pushBits()[block] & ((1L << (pc & 63)) - 1))];
+            if (opcode <= 0x67) { // PUSH1-8, the value itself
               s[dst] = 0;
               s[dst + 1] = 0;
               s[dst + 2] = 0;
               s[dst + 3] = value;
             } else { // PUSH9-32, where the wide values start
-              final long[] wide = codeObject.pushWide;
+              final long[] wide = codeObject.pushWide();
               final int o = (int) value;
               s[dst] = wide[o];
               s[dst + 1] = wide[o + 1];
@@ -1235,7 +1226,7 @@ public class EVM {
             delta = 1;
           }
         }
-        case ARM_DUP -> { // V2LoopArms.dup
+        case ARM_DUP -> { // DupOperationV2.dup
           final int depth = opcode - 0x7f;
           if (sp >= depth && (sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
             final int from = (base + (ARM_DUP << 4)) - (depth << 2);
@@ -1249,7 +1240,7 @@ public class EVM {
             delta = 1;
           }
         }
-        case ARM_SWAP -> { // V2LoopArms.swap
+        case ARM_SWAP -> { // SwapOperationV2.swap
           final int depth = opcode - 0x8f;
           if (sp > depth && gas >= VERY_LOW_TIER_GAS) {
             final int a = base + (ARM_SWAP << 4) - 4;
@@ -1271,28 +1262,28 @@ public class EVM {
             delta = 0;
           }
         }
-        case ARM_JUMPDEST -> { // V2LoopArms.jumpdest
+        case ARM_JUMPDEST -> { // JumpDestOperationV2.jumpdest
           if (gas >= JUMPDEST_GAS) {
             cost = JUMPDEST_GAS;
             step = 1;
             delta = 0;
           }
         }
-        case ARM_POP -> { // V2LoopArms.pop
+        case ARM_POP -> { // PopOperationV2.pop
           if (sp >= 1 && gas >= BASE_TIER_GAS) {
             cost = BASE_TIER_GAS;
             step = 1;
             delta = -1;
           }
         }
-        case ARM_PUSH2 -> { // V2LoopArms.push2
+        case ARM_PUSH2 -> { // PushOperationV2.push2
           final int i = pcBase + (ARM_PUSH2 << 4);
           if ((sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS && i + 2 < code.length) {
             final int immediate = (code[i + 1] & 0xff) << 8 | (code[i + 2] & 0xff);
             final int following = i + 3 < code.length ? code[i + 3] & 0xff : 0;
             if (following == 0x56) {
               if (gas >= VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS
-                  && isJumpDestinationV2(codeObject.jumpDestBitMask, immediate, code.length)) {
+                  && isJumpDestinationV2(codeObject.getJumpDestBitMask(), immediate, code.length)) {
                 // PUSH2 JUMP JUMPDEST, without the destination going through the stack
                 cost = VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS;
                 step = immediate + 1 - pc;
@@ -1309,7 +1300,7 @@ public class EVM {
                 break;
               }
               if (gas >= VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS
-                  && isJumpDestinationV2(codeObject.jumpDestBitMask, immediate, code.length)) {
+                  && isJumpDestinationV2(codeObject.getJumpDestBitMask(), immediate, code.length)) {
                 // PUSH2 JUMPI JUMPDEST, taken
                 cost = VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS;
                 step = immediate + 1 - pc;
@@ -1327,7 +1318,7 @@ public class EVM {
             delta = 1;
           }
         }
-        case ARM_JUMPI -> { // V2LoopArms.jumpi
+        case ARM_JUMPI -> { // JumpiOperationV2.jumpi
           if (sp >= 2 && gas >= HIGH_TIER_GAS) {
             final int d = base + (ARM_JUMPI << 4) - 4;
             final int c = d - 4;
@@ -1340,26 +1331,26 @@ public class EVM {
             final long destination = s[d + 3];
             if ((s[d] | s[d + 1] | s[d + 2]) == 0
                 && gas >= HIGH_TIER_GAS + JUMPDEST_GAS
-                && isJumpDestinationV2(codeObject.jumpDestBitMask, destination, code.length)) {
+                && isJumpDestinationV2(codeObject.getJumpDestBitMask(), destination, code.length)) {
               cost = HIGH_TIER_GAS + JUMPDEST_GAS;
               step = (int) destination + 1 - pc;
               delta = -2;
             }
           }
         }
-        case ARM_JUMP -> { // V2LoopArms.jump
+        case ARM_JUMP -> { // JumpOperationV2.jump
           if (sp >= 1 && gas >= MID_TIER_GAS + JUMPDEST_GAS) {
             final int d = base + (ARM_JUMP << 4) - 4;
             final long destination = s[d + 3];
             if ((s[d] | s[d + 1] | s[d + 2]) == 0
-                && isJumpDestinationV2(codeObject.jumpDestBitMask, destination, code.length)) {
+                && isJumpDestinationV2(codeObject.getJumpDestBitMask(), destination, code.length)) {
               cost = MID_TIER_GAS + JUMPDEST_GAS;
               step = (int) destination + 1 - pc;
               delta = -1;
             }
           }
         }
-        case ARM_ADD -> { // V2LoopArms.add
+        case ARM_ADD -> { // AddOperationV2.add
           if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
             final int a = base + (ARM_ADD << 4) - 4;
             final int b = a - 4;
@@ -1384,7 +1375,7 @@ public class EVM {
             delta = -1;
           }
         }
-        case ARM_MSTORE -> { // V2LoopArms.mstore
+        case ARM_MSTORE -> { // MstoreOperationV2.mstore
           if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
             final int a = base + (ARM_MSTORE << 4) - 4;
             final long location = s[a + 3];
@@ -1403,7 +1394,7 @@ public class EVM {
             }
           }
         }
-        case ARM_ISZERO -> { // V2LoopArms.iszero
+        case ARM_ISZERO -> { // IsZeroOperationV2.iszero
           if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
             final int a = base + (ARM_ISZERO << 4) - 4;
             final long zero = (s[a] | s[a + 1] | s[a + 2] | s[a + 3]) == 0 ? 1L : 0L;
@@ -1416,7 +1407,7 @@ public class EVM {
             delta = 0;
           }
         }
-        case ARM_AND -> { // V2LoopArms.and
+        case ARM_AND -> { // AndOperationV2.and
           if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
             final int a = base + (ARM_AND << 4) - 4;
             s[a - 4] &= s[a];
@@ -1428,7 +1419,7 @@ public class EVM {
             delta = -1;
           }
         }
-        case ARM_LOAD_WORD -> { // V2LoopArms.loadWord
+        case ARM_LOAD_WORD -> { // MloadOperationV2.loadWord
           if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
             final int a = base + (ARM_LOAD_WORD << 4) - 4;
             final long location = s[a + 3];
@@ -1465,7 +1456,7 @@ public class EVM {
             }
           }
         }
-        case ARM_SUB -> { // V2LoopArms.sub
+        case ARM_SUB -> { // SubOperationV2.sub
           if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
             final int a = base + (ARM_SUB << 4) - 4;
             final int b = a - 4;
@@ -1490,7 +1481,7 @@ public class EVM {
             delta = -1;
           }
         }
-        case ARM_EQ -> { // V2LoopArms.eq
+        case ARM_EQ -> { // EqOperationV2.eq
           if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
             final int a = base + (ARM_EQ << 4) - 4;
             final int b = a - 4;
@@ -1511,7 +1502,7 @@ public class EVM {
             delta = -1;
           }
         }
-        case ARM_COMPARE -> { // V2LoopArms.compare
+        case ARM_COMPARE -> { // LtOperationV2.compare
           if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
             final int a = base + (ARM_COMPARE << 4) - 4;
             final int b = a - 4;
@@ -1536,7 +1527,7 @@ public class EVM {
             delta = -1;
           }
         }
-        case ARM_SHIFT -> { // V2LoopArms.shift
+        case ARM_SHIFT -> { // ShlOperationV2.shift
           if (constantinople && sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
             final int a = base + (ARM_SHIFT << 4) - 4;
             final int v = a - 4;
@@ -1589,7 +1580,7 @@ public class EVM {
             delta = -1;
           }
         }
-        case ARM_PUSH0 -> { // V2LoopArms.push0
+        case ARM_PUSH0 -> { // Push0OperationV2.push0
           if (shanghai && (sp << 2) < s.length && gas >= BASE_TIER_GAS) {
             final int dst = base + (ARM_PUSH0 << 4);
             s[dst] = 0;
@@ -1601,7 +1592,7 @@ public class EVM {
             delta = 1;
           }
         }
-        case ARM_MUL -> { // V2LoopArms.mul
+        case ARM_MUL -> { // MulOperationV2.mul
           if (sp >= 2 && gas >= LOW_TIER_GAS) {
             final int a = base + (ARM_MUL << 4) - 4;
             final int b = a - 4;
@@ -1637,7 +1628,7 @@ public class EVM {
             }
           }
         }
-        case ARM_CALLDATASIZE -> { // V2LoopArms.calldatasize
+        case ARM_CALLDATASIZE -> { // CallDataSizeOperationV2.calldatasize
           final byte[] data = frame.inputDataArrayIfPresent();
           if (data != null && (sp << 2) < s.length && gas >= BASE_TIER_GAS) {
             final int dst = base + (ARM_CALLDATASIZE << 4);
@@ -1650,7 +1641,7 @@ public class EVM {
             delta = 1;
           }
         }
-        case ARM_DIV_MOD -> { // V2LoopArms.divMod
+        case ARM_DIV_MOD -> { // DivOperationV2.divMod
           if (sp >= 2 && gas >= LOW_TIER_GAS) {
             final int a = base + (ARM_DIV_MOD << 4) - 4;
             final int b = a - 4;
@@ -1667,7 +1658,7 @@ public class EVM {
             }
           }
         }
-        case ARM_OR -> { // V2LoopArms.or
+        case ARM_OR -> { // OrOperationV2.or
           if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
             final int a = base + (ARM_OR << 4) - 4;
             s[a - 4] |= s[a];
@@ -1679,7 +1670,7 @@ public class EVM {
             delta = -1;
           }
         }
-        case ARM_NOT -> { // V2LoopArms.not
+        case ARM_NOT -> { // NotOperationV2.not
           if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
             final int a = base + (ARM_NOT << 4) - 4;
             s[a] = ~s[a];
@@ -1691,7 +1682,7 @@ public class EVM {
             delta = 0;
           }
         }
-        case ARM_GAS_LEFT -> { // V2LoopArms.gasLeft
+        case ARM_GAS_LEFT -> { // GasOperationV2.gasLeft
           if ((sp << 2) < s.length && gas >= BASE_TIER_GAS) {
             final int dst = base + (ARM_GAS_LEFT << 4);
             s[dst] = 0;
@@ -1703,7 +1694,7 @@ public class EVM {
             delta = 1;
           }
         }
-        case ARM_SIGNEXTEND -> { // V2LoopArms.signextend
+        case ARM_SIGNEXTEND -> { // SignExtendOperationV2.signextend
           if (sp >= 2 && gas >= LOW_TIER_GAS) {
             final int a = base + (ARM_SIGNEXTEND << 4) - 4;
             final int v = a - 4;
@@ -1731,7 +1722,7 @@ public class EVM {
             delta = -1;
           }
         }
-        case ARM_XOR -> { // V2LoopArms.xor
+        case ARM_XOR -> { // XorOperationV2.xor
           if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
             final int a = base + (ARM_XOR << 4) - 4;
             s[a - 4] ^= s[a];
@@ -1784,14 +1775,6 @@ public class EVM {
       completeOperationV2(frame, result);
       operationTracer.tracePostExecution(frame, result);
     }
-  }
-
-  // Called from the untraced loop's arms, so it has to stay within C2's MaxInlineSize of 35 bytes
-  // of bytecode; one unsigned comparison is the range check 0 <= destination < codeSize.
-  static boolean isJumpDestinationV2(
-      final long[] jumpDestBitMask, final long destination, final int codeSize) {
-    return Long.compareUnsigned(destination, codeSize) < 0
-        && (jumpDestBitMask[(int) (destination >>> 6)] & 1L << destination) != 0L;
   }
 
   /**

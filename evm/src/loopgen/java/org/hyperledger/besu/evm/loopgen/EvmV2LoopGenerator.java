@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -28,6 +29,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.stream.Stream;
 import javax.lang.model.element.Modifier;
 import javax.tools.JavaCompiler;
 import javax.tools.StandardJavaFileManager;
@@ -46,6 +48,7 @@ import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.ForLoopTree;
 import com.sun.source.tree.IdentifierTree;
 import com.sun.source.tree.IfTree;
+import com.sun.source.tree.ImportTree;
 import com.sun.source.tree.LambdaExpressionTree;
 import com.sun.source.tree.LineMap;
 import com.sun.source.tree.LiteralTree;
@@ -74,11 +77,11 @@ import com.sun.source.util.TreeScanner;
 import com.sun.source.util.Trees;
 
 /**
- * Generates the inline arms of the untraced EVM v2 loop in EVM.java from the methods of
- * V2LoopArms.java, and checks those methods against the rules that keep the loop fast. The rules
- * and why each exists are documented on V2LoopArms.
+ * Generates the inline arms of the untraced EVM v2 loop in EVM.java from the methods of the
+ * operation classes marked {@code @Arm}, and checks those methods against the rules that keep the
+ * loop fast. The rules and why each exists are documented on {@code Arm}.
  *
- * <p>Usage: {@code EvmV2LoopGenerator write|check <V2LoopArms.java> <EVM.java> [<marker file>]}.
+ * <p>Usage: {@code EvmV2LoopGenerator write|check <operations dir> <EVM.java> [<marker file>]}.
  * {@code write} rewrites the generated regions of EVM.java; {@code check} fails if any rule is
  * broken or EVM.java does not hold what the arms generate, and on success touches the marker file.
  */
@@ -88,6 +91,9 @@ public final class EvmV2LoopGenerator {
   static final String TABLE_END = "// END GENERATED arm table";
   static final String ARMS_BEGIN = "// BEGIN GENERATED arms";
   static final String ARMS_END = "// END GENERATED arms";
+
+  /** Where the constants and helpers an arm may name come from, for the arms and EVM.java alike. */
+  static final String ARMS_CLASS = "org.hyperledger.besu.evm.v2.operation.Arms";
 
   /** The loop state an arm may take as a parameter, by name, with its type. */
   private static final Map<String, String> CONTEXT = new LinkedHashMap<>();
@@ -162,44 +168,43 @@ public final class EvmV2LoopGenerator {
           "LONG_BE.set",
           "frame.memoryArrayV2",
           "frame.memoryByteSize",
-          "frame.inputDataArrayIfPresent");
-
-  /** Fields an arm may read through a qualifier, besides the length of an array. */
-  private static final Set<String> FIELDS =
-      Set.of(
+          "frame.inputDataArrayIfPresent",
           "codeObject.pushValues",
           "codeObject.pushBase",
           "codeObject.pushBits",
           "codeObject.pushWide",
-          "codeObject.jumpDestBitMask",
-          "Long.MIN_VALUE",
-          "Long.MAX_VALUE");
+          "codeObject.getJumpDestBitMask");
+
+  /** Fields an arm may read through a qualifier, besides the length of an array. */
+  private static final Set<String> FIELDS = Set.of("Long.MIN_VALUE", "Long.MAX_VALUE");
 
   private EvmV2LoopGenerator() {}
 
-  /** One arm: the method it comes from and the opcodes it runs. */
-  private record Arm(String method, String constant, Set<Integer> opcodes, String body) {}
+  /** One arm: the method it comes from, its place in the loop and the opcodes it runs. */
+  private record Arm(
+      String owner, String method, String constant, int rank, Set<Integer> opcodes, String body) {}
 
   /**
    * Runs the generator.
    *
-   * @param args the mode, the arms file, EVM.java and, for check, a marker file
+   * @param args the mode, the operations directory, EVM.java and, for check, a marker file
    * @throws IOException if a file cannot be read or written
    */
   public static void main(final String[] args) throws IOException {
     if (args.length < 3 || !(args[0].equals("write") || args[0].equals("check"))) {
       System.err.println(
-          "usage: EvmV2LoopGenerator write|check <V2LoopArms.java> <EVM.java> [<marker file>]");
+          "usage: EvmV2LoopGenerator write|check <operations dir> <EVM.java> [<marker file>]");
       System.exit(2);
     }
-    final Path armsFile = Path.of(args[1]);
+    final Path operations = Path.of(args[1]);
     final Path evmFile = Path.of(args[2]);
     final List<String> errors = new ArrayList<>();
-    final List<Arm> arms = parse(armsFile, errors);
-    checkNoOverloads(evmFile, errors);
+    final Set<String> named = new TreeSet<>();
+    final List<Arm> arms = parse(operations, named, errors);
+    checkNamesResolveToArms(evmFile, named, errors);
     if (!errors.isEmpty()) {
       System.err.println(
-          "The EVM v2 loop arms in " + armsFile + " break the rules documented on V2LoopArms:");
+          "The EVM v2 loop arms in " + operations + " break the rules documented on @Arm:");
       errors.forEach(e -> System.err.println("  " + e));
       System.exit(1);
     }
@@ -212,9 +217,10 @@ public final class EvmV2LoopGenerator {
       if (!withoutWhitespace(generated).equals(withoutWhitespace(current))) {
         System.err.println(
             evmFile
-                + " does not hold the arms "
-                + armsFile
-                + " generates. Edit the arms there, then run ./gradlew :evm:generateEvmV2Loop.");
+                + " does not hold the arms of "
+                + operations
+                + ". Edit an arm in its operation's class, then run ./gradlew"
+                + " :evm:generateEvmV2Loop.");
         System.exit(1);
       }
       if (args.length > 3) {
@@ -239,8 +245,13 @@ public final class EvmV2LoopGenerator {
   // ---------------------------------------------------------------------------------------------
   // Parsing and checking
 
-  private static List<Arm> parse(final Path armsFile, final List<String> errors)
+  private static List<Arm> parse(
+      final Path operations, final Set<String> named, final List<String> errors)
       throws IOException {
+    final List<Path> sources;
+    try (Stream<Path> files = Files.list(operations)) {
+      sources = files.filter(f -> f.toString().endsWith(".java")).sorted().toList();
+    }
     final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
     final List<Arm> arms = new ArrayList<>();
     try (StandardJavaFileManager files = compiler.getStandardFileManager(null, null, UTF_8)) {
@@ -252,51 +263,69 @@ public final class EvmV2LoopGenerator {
                   null,
                   List.of("-proc:none"),
                   null,
-                  files.getJavaFileObjects(armsFile));
-      final CompilationUnitTree unit = task.parse().iterator().next();
+                  files.getJavaFileObjectsFromPaths(sources));
       final SourcePositions positions = Trees.instance(task).getSourcePositions();
-      final String source = unit.getSourceFile().getCharContent(true).toString();
-      final Map<Integer, String> owners = new HashMap<>();
-      for (final Tree type : unit.getTypeDecls()) {
-        if (!(type instanceof ClassTree classTree)) {
-          continue;
-        }
-        for (final Tree member : classTree.getMembers()) {
-          if (member instanceof MethodTree method && armAnnotation(method) != null) {
-            final Kernel kernel = new Kernel(unit, positions, source, method, errors);
-            final Arm arm = kernel.toArm();
-            for (final int opcode : arm.opcodes()) {
-              final String owner = owners.put(opcode, arm.method());
-              if (owner != null) {
-                errors.add(
-                    String.format(
-                        Locale.ROOT,
-                        "opcode 0x%02x belongs to both %s and %s",
-                        opcode,
-                        owner,
-                        arm.method()));
-              }
+      for (final CompilationUnitTree unit : task.parse()) {
+        final String source = unit.getSourceFile().getCharContent(true).toString();
+        for (final Tree type : unit.getTypeDecls()) {
+          if (!(type instanceof ClassTree classTree)) {
+            continue;
+          }
+          for (final Tree member : classTree.getMembers()) {
+            if (member instanceof MethodTree method && armAnnotation(method) != null) {
+              final Kernel kernel = new Kernel(unit, positions, source, classTree, method, errors);
+              arms.add(kernel.toArm());
+              named.addAll(kernel.named);
+              checkNamesResolveToArms(
+                  unit, classTree, kernel.named, classTree.getSimpleName().toString(), errors);
             }
-            arms.add(arm);
           }
         }
       }
     }
     if (arms.isEmpty()) {
-      errors.add("no @Arm methods found in " + armsFile);
+      errors.add("no @Arm methods found in " + operations);
+    }
+    arms.sort(Comparator.comparingInt(Arm::rank));
+    final Map<Integer, String> owners = new HashMap<>();
+    final Map<String, String> constants = new HashMap<>();
+    for (int i = 0; i < arms.size(); i++) {
+      final Arm arm = arms.get(i);
+      final String where = arm.owner() + "." + arm.method();
+      if (arm.rank() != i + 1) {
+        errors.add(
+            where
+                + " has rank "
+                + arm.rank()
+                + " where the arms' ranks should run 1, 2, 3 and on without a gap or a repeat;"
+                + " it would be number "
+                + (i + 1));
+      }
+      final String other = constants.put(arm.constant(), where);
+      if (other != null) {
+        errors.add(where + " and " + other + " need names of their own, as the loop names arms");
+      }
+      for (final int opcode : arm.opcodes()) {
+        final String owner = owners.put(opcode, where);
+        if (owner != null) {
+          errors.add(
+              String.format(
+                  Locale.ROOT, "opcode 0x%02x belongs to both %s and %s", opcode, owner, where));
+        }
+      }
     }
     return arms;
   }
 
   /**
-   * The arms call EVM's helpers without a qualifier, in V2LoopArms and, once generated, inside EVM.
-   * Java chooses among overloads by where the call is, so an overload in EVM could run in the loop
-   * where the arm calls another.
+   * An arm names constants and helpers without a qualifier, in its operation's class and, once
+   * generated, inside EVM. Java resolves such a name by where it stands, and a member of the
+   * enclosing class hides a static import of the same name, overloads included. So each name has to
+   * come from Arms in both places, and neither class may declare a member of that name.
    */
-  private static void checkNoOverloads(final Path evmFile, final List<String> errors)
-      throws IOException {
+  private static void checkNamesResolveToArms(
+      final Path evmFile, final Set<String> named, final List<String> errors) throws IOException {
     final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-    final Map<String, Integer> declared = new HashMap<>();
     try (StandardJavaFileManager files = compiler.getStandardFileManager(null, null, UTF_8)) {
       final JavacTask task =
           (JavacTask)
@@ -307,24 +336,49 @@ public final class EvmV2LoopGenerator {
                   List.of("-proc:none"),
                   null,
                   files.getJavaFileObjects(evmFile));
-      for (final Tree type : task.parse().iterator().next().getTypeDecls()) {
+      final CompilationUnitTree unit = task.parse().iterator().next();
+      for (final Tree type : unit.getTypeDecls()) {
         if (type instanceof ClassTree classTree) {
-          for (final Tree member : classTree.getMembers()) {
-            if (member instanceof MethodTree method) {
-              declared.merge(method.getName().toString(), 1, Integer::sum);
-            }
-          }
+          // the generated code never names done or FALLBACK: it translates them
+          final Set<String> used = new TreeSet<>(named);
+          used.removeAll(Set.of("done", "FALLBACK"));
+          checkNamesResolveToArms(unit, classTree, used, evmFile.toString(), errors);
         }
       }
     }
-    for (final String call : CALLS) {
-      if (!call.contains(".") && declared.getOrDefault(call, 0) > 1) {
+  }
+
+  private static void checkNamesResolveToArms(
+      final CompilationUnitTree unit,
+      final ClassTree classTree,
+      final Set<String> names,
+      final String where,
+      final List<String> errors) {
+    final Set<String> imported = new HashSet<>();
+    for (final ImportTree anImport : unit.getImports()) {
+      final String name = anImport.getQualifiedIdentifier().toString();
+      if (anImport.isStatic() && name.startsWith(ARMS_CLASS + ".")) {
+        imported.add(name.substring(ARMS_CLASS.length() + 1));
+      }
+    }
+    final Set<String> declared = new HashSet<>();
+    for (final Tree member : classTree.getMembers()) {
+      if (member instanceof MethodTree method) {
+        declared.add(method.getName().toString());
+      } else if (member instanceof VariableTree variable) {
+        declared.add(variable.getName().toString());
+      }
+    }
+    for (final String name : names) {
+      if (!imported.contains(name)) {
+        errors.add(where + " has to import " + name + " statically from " + ARMS_CLASS);
+      }
+      if (declared.contains(name)) {
         errors.add(
-            evmFile
-                + " overloads "
-                + call
-                + ", so the loop may call another overload than the arms do; give the one the"
-                + " arms call a name of its own");
+            where
+                + " declares "
+                + name
+                + ", which hides the one the arms mean; give it a name of its own");
       }
     }
   }
@@ -343,9 +397,15 @@ public final class EvmV2LoopGenerator {
     private final CompilationUnitTree unit;
     private final SourcePositions positions;
     private final String source;
+    private final ClassTree owner;
     private final MethodTree method;
     private final List<String> errors;
     private final String constant;
+    private int rank = -1;
+
+    /** The constants and helpers of Arms the arm names without a qualifier. */
+    final Set<String> named = new TreeSet<>();
+
     private final Set<String> parameters = new HashSet<>();
     private final Set<String> locals = new HashSet<>();
     private final Map<String, List<ExpressionTree>> assignments = new HashMap<>();
@@ -354,11 +414,13 @@ public final class EvmV2LoopGenerator {
         final CompilationUnitTree unit,
         final SourcePositions positions,
         final String source,
+        final ClassTree owner,
         final MethodTree method,
         final List<String> errors) {
       this.unit = unit;
       this.positions = positions;
       this.source = source;
+      this.owner = owner;
       this.method = method;
       this.errors = errors;
       this.constant = "ARM_" + upperSnake(method.getName().toString());
@@ -369,13 +431,20 @@ public final class EvmV2LoopGenerator {
       checkSignature();
       collectLocals();
       checkBody();
-      return new Arm(method.getName().toString(), constant, opcodes, translate());
+      return new Arm(
+          owner.getSimpleName().toString(),
+          method.getName().toString(),
+          constant,
+          rank,
+          opcodes,
+          translate());
     }
 
     private void error(final Tree tree, final String message) {
       final LineMap lines = unit.getLineMap();
       final long line = lines.getLineNumber(positions.getStartPosition(unit, tree));
-      errors.add(method.getName() + " (line " + line + "): " + message);
+      errors.add(
+          owner.getSimpleName() + "." + method.getName() + " (line " + line + "): " + message);
     }
 
     private Set<Integer> opcodes() {
@@ -397,10 +466,14 @@ public final class EvmV2LoopGenerator {
               opcodes.add(intValue(value));
             }
           }
+          case "rank" -> rank = intValue(value);
           case "first" -> first = intValue(value);
           case "last" -> last = intValue(value);
           default -> error(argument, "unknown @Arm value " + name);
         }
+      }
+      if (rank < 1) {
+        error(method, "@Arm needs a rank from 1, its place in the loop");
       }
       if ((first < 0) != (last < 0) || first > last) {
         error(method, "@Arm needs both first and last, first no greater than last");
@@ -438,7 +511,7 @@ public final class EvmV2LoopGenerator {
         final String name = parameter.getName().toString();
         final String expected = CONTEXT.get(name);
         if (expected == null) {
-          error(parameter, name + " is not loop state an arm can take; see V2LoopArms");
+          error(parameter, name + " is not loop state an arm can take; see @Arm");
         } else if (!expected.equals(parameter.getType().toString())) {
           error(parameter, name + " must be a " + expected);
         }
@@ -602,6 +675,13 @@ public final class EvmV2LoopGenerator {
         @Override
         public Void visitMethodInvocation(final MethodInvocationTree tree, final Void unused) {
           final String name = tree.getMethodSelect().toString();
+          if (tree.getMethodSelect() instanceof IdentifierTree) {
+            named.add(name);
+          } else if (tree.getMethodSelect() instanceof MemberSelectTree select
+              && select.getExpression() instanceof IdentifierTree qualifier
+              && CONSTANTS.contains(qualifier.getName().toString())) {
+            named.add(qualifier.getName().toString());
+          }
           if (!CALLS.contains(name)) {
             error(
                 tree,
@@ -634,6 +714,9 @@ public final class EvmV2LoopGenerator {
         @Override
         public Void visitIdentifier(final IdentifierTree tree, final Void unused) {
           final String name = tree.getName().toString();
+          if (CONSTANTS.contains(name) && !parameters.contains(name) && !locals.contains(name)) {
+            named.add(name);
+          }
           if (!parameters.contains(name) && !locals.contains(name) && !CONSTANTS.contains(name)) {
             error(
                 tree,
@@ -873,7 +956,7 @@ public final class EvmV2LoopGenerator {
 
   static String generate(final String evm, final List<Arm> arms) {
     final StringBuilder table = new StringBuilder();
-    table.append(TABLE_BEGIN).append(" from V2LoopArms; do not edit\n");
+    table.append(TABLE_BEGIN).append(" from the @Arm methods; do not edit\n");
     for (int i = 0; i < arms.size(); i++) {
       table
           .append("private static final int ")
@@ -902,12 +985,14 @@ public final class EvmV2LoopGenerator {
     table.append(TABLE_END);
 
     final StringBuilder switchArms = new StringBuilder();
-    switchArms.append(ARMS_BEGIN).append(" from V2LoopArms; do not edit\n");
+    switchArms.append(ARMS_BEGIN).append(" from the @Arm methods; do not edit\n");
     for (final Arm arm : arms) {
       switchArms
           .append("case ")
           .append(arm.constant())
-          .append(" -> { // V2LoopArms.")
+          .append(" -> { // ")
+          .append(arm.owner())
+          .append('.')
           .append(arm.method())
           .append('\n')
           .append(arm.body().strip())

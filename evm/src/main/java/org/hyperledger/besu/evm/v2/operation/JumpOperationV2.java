@@ -14,6 +14,13 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.JUMPDEST_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.MID_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+import static org.hyperledger.besu.evm.v2.operation.Arms.isJumpDestinationV2;
+
+import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -75,5 +82,26 @@ public class JumpOperationV2 extends AbstractFixedCostOperationV2 {
     }
     frame.setPC(jumpDestination);
     return validResponse;
+  }
+
+  /** JUMP, and the JUMPDEST it lands on. */
+  @Arm(rank = 9, opcodes = 0x56)
+  static long jump(
+      final long[] s,
+      final int sp,
+      final int top,
+      final int pc,
+      final byte[] code,
+      final Code codeObject,
+      final long gas) {
+    if (sp >= 1 && gas >= MID_TIER_GAS + JUMPDEST_GAS) {
+      final int d = top;
+      final long destination = s[d + 3];
+      if ((s[d] | s[d + 1] | s[d + 2]) == 0
+          && isJumpDestinationV2(codeObject.getJumpDestBitMask(), destination, code.length)) {
+        return done(MID_TIER_GAS + JUMPDEST_GAS, (int) destination + 1 - pc, -1);
+      }
+    }
+    return FALLBACK;
   }
 }

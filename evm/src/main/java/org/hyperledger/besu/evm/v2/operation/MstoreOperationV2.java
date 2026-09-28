@@ -14,6 +14,11 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.LONG_BE;
+import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -62,5 +67,27 @@ public class MstoreOperationV2 extends AbstractOperationV2 {
     frame.writeMemoryWord(location, stack, top, 1);
     frame.setTopV2(top - 2);
     return new OperationResult(cost, null);
+  }
+
+  /** MSTORE within the memory already expanded. */
+  @Arm(rank = 11, opcodes = 0x52)
+  static long mstore(
+      final long[] s, final int sp, final int top, final MessageFrame frame, final long gas) {
+    if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+      final int a = top;
+      final long location = s[a + 3];
+      if ((s[a] | s[a + 1] | s[a + 2]) == 0
+          && location >= 0
+          && location <= frame.memoryByteSize() - 32) {
+        final byte[] memory = frame.memoryArrayV2();
+        final int i = (int) location;
+        LONG_BE.set(memory, i, s[a - 4]);
+        LONG_BE.set(memory, i + 8, s[a - 3]);
+        LONG_BE.set(memory, i + 16, s[a - 2]);
+        LONG_BE.set(memory, i + 24, s[a - 1]);
+        return done(VERY_LOW_TIER_GAS, 1, -2);
+      }
+    }
+    return FALLBACK;
   }
 }

@@ -14,6 +14,10 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.v2.operation.Arms.BASE_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -50,5 +54,20 @@ public class CallDataSizeOperationV2 extends AbstractFixedCostOperationV2 {
     frame.setTopV2(
         StackArithmetic.pushLong(stack, frame.stackTopV2(), frame.getInputData().size()));
     return callDataSizeSuccess;
+  }
+
+  @Arm(rank = 21, opcodes = 0x36)
+  static long calldatasize(
+      final long[] s, final int sp, final int next, final MessageFrame frame, final long gas) {
+    final byte[] data = frame.inputDataArrayIfPresent();
+    if (data != null && (sp << 2) < s.length && gas >= BASE_TIER_GAS) {
+      final int dst = next;
+      s[dst] = 0;
+      s[dst + 1] = 0;
+      s[dst + 2] = 0;
+      s[dst + 3] = data.length;
+      return done(BASE_TIER_GAS, 1, 1);
+    }
+    return FALLBACK;
   }
 }

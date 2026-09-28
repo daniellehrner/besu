@@ -14,6 +14,10 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+
 import org.hyperledger.besu.evm.UInt256;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -68,5 +72,25 @@ public class DivOperationV2 extends AbstractFixedCostOperationV2 {
     stack[denomOffset + 3] = result.u0();
     frame.setTopV2(++top);
     return divSuccess;
+  }
+
+  /** DIV and MOD when both operands fit in 64 bits. */
+  @Arm(
+      rank = 22,
+      opcodes = {0x04, 0x06})
+  static long divMod(
+      final long[] s, final int sp, final int top, final int opcode, final long gas) {
+    if (sp >= 2 && gas >= LOW_TIER_GAS) {
+      final int a = top;
+      final int b = a - 4;
+      if ((s[a] | s[a + 1] | s[a + 2] | s[b] | s[b + 1] | s[b + 2]) == 0) {
+        final long x = s[a + 3];
+        final long y = s[b + 3];
+        s[b + 3] =
+            y == 0 ? 0L : opcode == 0x04 ? Long.divideUnsigned(x, y) : Long.remainderUnsigned(x, y);
+        return done(LOW_TIER_GAS, 1, -1);
+      }
+    }
+    return FALLBACK;
   }
 }

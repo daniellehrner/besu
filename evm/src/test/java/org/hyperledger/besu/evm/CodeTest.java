@@ -78,6 +78,7 @@ class CodeTest {
                     + "67ffffffffffffffff"
                     + "68010000000000000000"
                     + "7f1111111111111111111111111111111111111111111111111111111111111111"));
+    code.analyse();
     assertThat(Long.bitCount(code.pushBits()[0])).isEqualTo(4);
     assertThat(code.pushValues()).hasSize(4);
     assertThat(code.pushValues()[0]).isEqualTo(0xabL);
@@ -96,8 +97,8 @@ class CodeTest {
   @Test
   void truncatedImmediateReadsMissingBytesAsZero() {
     // PUSH3 with a single byte left in the code, and PUSH20 with none
-    assertThat(new Code(Bytes.fromHexString("0x62ab")).pushValues()[0]).isEqualTo(0xab0000L);
-    final Code code = new Code(Bytes.fromHexString("0x73"));
+    assertThat(analysed("0x62ab").pushValues()[0]).isEqualTo(0xab0000L);
+    final Code code = analysed("0x73");
     assertThat(code.pushValues()[0]).isEqualTo(0L);
     assertThat(code.pushWide()).containsOnly(0L);
   }
@@ -105,7 +106,7 @@ class CodeTest {
   @Test
   void pushInsideAnImmediateIsNotAPush() {
     // PUSH1 0x60, PUSH1 0x01: the 0x60 byte is data
-    final Code code = new Code(Bytes.fromHexString("0x60606001"));
+    final Code code = analysed("0x60606001");
     assertThat(Long.bitCount(code.pushBits()[0])).isEqualTo(2);
     assertThat(code.pushValues()).containsExactly(0x60L, 0x01L);
   }
@@ -117,7 +118,7 @@ class CodeTest {
     for (int i = 0; i < 40; i++) {
       hex.append(String.format("60%02x", i));
     }
-    final Code code = new Code(Bytes.fromHexString(hex.toString()));
+    final Code code = analysed(hex.toString());
     assertThat(code.pushBase()).containsExactly(0, 32);
     for (int i = 0; i < 40; i++) {
       final int pc = 2 * i;
@@ -131,10 +132,16 @@ class CodeTest {
   @Test
   void pushTablesAlsoProvideTheJumpDestMask() {
     final Code code = spy(new Code(Bytes.fromHexString("0x6003565b00")));
-    code.pushValues();
+    code.analyse();
     assertThat(code.isJumpDestInvalid(3)).isFalse();
     assertThat(code.isJumpDestInvalid(4)).isTrue();
     Mockito.verify(code, times(0)).calculateJumpDestBitMask();
+  }
+
+  private static Code analysed(final String hex) {
+    final Code code = new Code(Bytes.fromHexString(hex));
+    code.analyse();
+    return code;
   }
 
   @NotNull

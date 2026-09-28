@@ -14,11 +14,13 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.result;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.top;
+import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+import static org.hyperledger.besu.evm.v2.operation.Arms.result;
+import static org.hyperledger.besu.evm.v2.operation.Arms.top;
 
-import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -69,7 +71,29 @@ public class SwapOperationV2 extends AbstractFixedCostOperationV2 {
   public static OperationResult staticOperation(
       final MessageFrame frame, final long[] s, final int index) {
     final int sp = frame.stackTopV2();
-    return result(
-        frame, V2LoopArms.swap(s, sp, top(sp), SWAP_BASE + index, ANY_GAS), index + 1, index + 1);
+    return result(frame, swap(s, sp, top(sp), SWAP_BASE + index, ANY_GAS), index + 1, index + 1);
+  }
+
+  @Arm(rank = 4, first = 0x90, last = 0x9f)
+  static long swap(final long[] s, final int sp, final int top, final int opcode, final long gas) {
+    final int depth = opcode - 0x8f;
+    if (sp > depth && gas >= VERY_LOW_TIER_GAS) {
+      final int a = top;
+      final int b = top - (depth << 2);
+      long t = s[a];
+      s[a] = s[b];
+      s[b] = t;
+      t = s[a + 1];
+      s[a + 1] = s[b + 1];
+      s[b + 1] = t;
+      t = s[a + 2];
+      s[a + 2] = s[b + 2];
+      s[b + 2] = t;
+      t = s[a + 3];
+      s[a + 3] = s[b + 3];
+      s[b + 3] = t;
+      return done(VERY_LOW_TIER_GAS, 1, 0);
+    }
+    return FALLBACK;
   }
 }

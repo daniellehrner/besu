@@ -23,8 +23,9 @@ Code review does not reliably catch these, and nothing fails when they slip in.
 
 The rules therefore live in code:
 
-- The arms are written once, as methods of `V2LoopArms`, whose javadoc gives
-  each rule with the measurement behind it.
+- Each arm is written once, as a method of its operation's class marked
+  `@Arm`, next to the code the class runs when the arm does not. The javadoc of
+  `Arm` gives each rule with the measurement behind it.
 - A generator copies the methods' bodies into the loop.
 - The generator rejects an arm that breaks a rule.
 - The build fails when the loop no longer holds what the arms generate.
@@ -33,10 +34,10 @@ The rules therefore live in code:
 
 | What | Where |
 |---|---|
-| The arms, one method each, in mainnet frequency order | `evm/src/main/java/org/hyperledger/besu/evm/V2LoopArms.java` |
+| The arms, one `@Arm` method each, in the operation classes | `evm/src/main/java/org/hyperledger/besu/evm/v2/operation/`, e.g. `AddOperationV2.add` |
+| The rules, and what arms may name | `Arm` and `Arms` in the same package |
 | The loop, with two generated regions | `EVM.runToHaltV2Untraced`, between `BEGIN GENERATED` and `END GENERATED` |
 | Generator and rule checker | `evm/src/loopgen/java/org/hyperledger/besu/evm/loopgen/EvmV2LoopGenerator.java` |
-| Operation classes calling their arm | `evm/src/main/java/org/hyperledger/besu/evm/v2/operation/`, through `ArmCall` |
 
 Generated code covers only the arm table and the arms. The rest of the loop is
 written by hand:
@@ -50,7 +51,7 @@ An arm handles only the case in which its operation succeeds. Anything else
 returns `FALLBACK`, and the loop hands the operation to its class.
 
 Where an arm runs every successful case, the class calls the arm too, so the
-loop and the class share one implementation. The class passes `ArmCall.ANY_GAS`,
+loop and the class share one implementation. The class passes `Arms.ANY_GAS`,
 because its callers charge the gas, and adds only the stack halts. This applies to:
 
 - ADD, SUB, AND, OR, XOR, NOT, ISZERO, EQ, LT, GT, SLT, SGT,
@@ -66,19 +67,28 @@ The other classes keep an implementation of their own:
   only the common case: small operands, memory already expanded, input data held
   as an array.
 
+Operations that share an arm keep it in the class of the first of them, and the
+others call it there: LT, GT, SLT and SGT in `LtOperationV2`, SHL, SHR and SAR in
+`ShlOperationV2`, MLOAD with CALLDATALOAD in `MloadOperationV2`, DIV with MOD in
+`DivOperationV2`. One arm costs the loop less of its budget than several.
+
 ## Changing or adding an arm
 
-1. Edit or add the method in `V2LoopArms`.
-   - A new arm is annotated with its opcodes: `@Arm(opcodes = …)`, or a range
-     with `first` and `last`.
-   - Place it by how often mainnet executes it. C2 inlines in source order, and
-     that order decides what fits the budget.
+1. Edit or add the `@Arm` method in the operation's class.
+   - A new arm names its opcodes, `@Arm(rank = …, opcodes = …)` or a range with
+     `first` and `last`.
+   - Its `rank` is its place in the loop, by how often mainnet executes it. C2
+     inlines in the loop's order, and that order decides what fits the budget.
+     The ranks run 1 to N without gaps, so a new arm shifts the ones after it.
    - Declare as parameters only the loop state the arm uses, by name. The list is
-     in the javadoc.
+     in the javadoc of `Arm`.
+   - Import the constants and helpers it names statically from `Arms`, as
+     `EVM.java` does. The generator checks both, so that a name means the same in
+     the loop as in the arm.
 2. Run `./gradlew :evm:generateEvmV2Loop`. It rewrites the generated regions of
    `EVM.java` and formats them.
 3. If the arm runs every successful case of its operation, make the operation's
-   class call it through `ArmCall.result`, as `AddOperationV2` does.
+   class call it through `Arms.result`, as `AddOperationV2` does.
    - Keep that method within 35 bytes of bytecode. The traced loop reaches it
      from a switch where C2 inlines nothing larger, and a call per operation
      there cost DUP- and PUSH-heavy code 10 percent.
@@ -93,10 +103,10 @@ Never edit the generated regions by hand. The build rejects that too.
 
 | Check | Runs | Catches |
 |---|---|---|
-| `checkEvmV2Loop`, the generator in check mode | Before every compile of `evm` | An arm breaking a rule; a hand edit of a generated region; an overload in `EVM` of a helper the arms call, which Java would resolve differently in the loop than in `V2LoopArms` |
+| `checkEvmV2Loop`, the generator in check mode | Before every compile of `evm` | An arm breaking a rule; a hand edit of a generated region; ranks out of order; a name an arm uses that does not come from `Arms` in its class or in `EVM.java`, or that a member of either hides, since Java would then resolve it differently in the loop than in the arm |
 | `EvmLoopMethodSizeTest` | `:evm:test` | The loop's bytecode size; any call within three levels that is above `MaxInlineSize` (35 bytes); an operation class that runs through its arm but has grown past 35 bytes itself |
 | `EvmV2LoopCompilationTest` | `:evm:test`, about 3 s | What C2 actually inlined into the loop, read from C2's own report in a child JVM. This includes the 8000-byte budget the bytecode checks cannot see. If the loop outgrows `HugeMethodLimit`, C2 does not compile it and the report is empty |
-| `V2LoopArmsTest` | `:evm:test` | Every arithmetic arm against `BigInteger`, over edge-case and random operands |
+| `ArmsTest` | `:evm:test` | Every arithmetic arm against `BigInteger`, over edge-case and random operands |
 | `InterpreterLoopV2DifferentialTest` | `:evm:test` | The untraced loop against the traced loop, over edge-case and random programs, for eight forks |
 | Reference tests | By hand: `./gradlew :ethereum:referencetests:referenceTests -Dtest.evm.v2=true` | Consensus |
 

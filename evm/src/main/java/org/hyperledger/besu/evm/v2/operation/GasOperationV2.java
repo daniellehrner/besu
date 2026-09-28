@@ -14,10 +14,12 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.next;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.result;
+import static org.hyperledger.besu.evm.v2.operation.Arms.BASE_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+import static org.hyperledger.besu.evm.v2.operation.Arms.next;
+import static org.hyperledger.besu.evm.v2.operation.Arms.result;
 
-import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -40,16 +42,30 @@ public class GasOperationV2 extends AbstractFixedCostOperationV2 {
   @Override
   public Operation.OperationResult executeFixedCostOperation(final MessageFrame frame) {
     final long gas = frame.getRemainingGas();
-    return gas < gasCost ? outOfGas(frame) : result(frame, gasLeft(frame, gas), 0, 1);
+    return gas < gasCost ? outOfGas(frame) : result(frame, runArm(frame, gas), 0, 1);
   }
 
   // the arm pushes the gas left once GAS is paid, so unlike the other arms it needs the real gas
-  private static long gasLeft(final MessageFrame frame, final long gas) {
+  private static long runArm(final MessageFrame frame, final long gas) {
     final int sp = frame.stackTopV2();
-    return V2LoopArms.gasLeft(frame.stackDataV2(), sp, next(sp), gas);
+    return gasLeft(frame.stackDataV2(), sp, next(sp), gas);
   }
 
   private OperationResult outOfGas(final MessageFrame frame) {
     return frame.stackHasSpaceV2(1) ? outOfGasResponse : OVERFLOW_RESPONSE;
+  }
+
+  /** GAS: what is left once GAS itself is paid. */
+  @Arm(rank = 25, opcodes = 0x5a)
+  static long gasLeft(final long[] s, final int sp, final int next, final long gas) {
+    if ((sp << 2) < s.length && gas >= BASE_TIER_GAS) {
+      final int dst = next;
+      s[dst] = 0;
+      s[dst + 1] = 0;
+      s[dst + 2] = 0;
+      s[dst + 3] = gas - BASE_TIER_GAS;
+      return done(BASE_TIER_GAS, 1, 1);
+    }
+    return FALLBACK;
   }
 }

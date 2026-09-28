@@ -14,11 +14,13 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.result;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.top;
+import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+import static org.hyperledger.besu.evm.v2.operation.Arms.result;
+import static org.hyperledger.besu.evm.v2.operation.Arms.top;
 
-import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -49,6 +51,35 @@ public class SignExtendOperationV2 extends AbstractFixedCostOperationV2 {
    */
   public static OperationResult staticOperation(final MessageFrame frame, final long[] stack) {
     final int sp = frame.stackTopV2();
-    return result(frame, V2LoopArms.signextend(stack, sp, top(sp), ANY_GAS), 2, 1);
+    return result(frame, signextend(stack, sp, top(sp), ANY_GAS), 2, 1);
+  }
+
+  @Arm(rank = 26, opcodes = 0x0b)
+  static long signextend(final long[] s, final int sp, final int top, final long gas) {
+    if (sp >= 2 && gas >= LOW_TIER_GAS) {
+      final int a = top;
+      final int v = a - 4;
+      final long index = s[a + 3];
+      if ((s[a] | s[a + 1] | s[a + 2]) == 0 && index >= 0 && index < 31) {
+        // the sign bit and the limb holding it, limbs counted from the least significant
+        final int signBit = (int) index * 8 + 7;
+        final int limb = v + 3 - (signBit >>> 6);
+        final long below = -1L >>> (63 - (signBit & 63));
+        final long fill = (s[limb] >>> (signBit & 63) & 1L) == 0 ? 0L : -1L;
+        s[limb] = (s[limb] & below) | (fill & ~below);
+        // and every limb above it
+        if (limb > v) {
+          s[v] = fill;
+        }
+        if (limb > v + 1) {
+          s[v + 1] = fill;
+        }
+        if (limb > v + 2) {
+          s[v + 2] = fill;
+        }
+      }
+      return done(LOW_TIER_GAS, 1, -1);
+    }
+    return FALLBACK;
   }
 }

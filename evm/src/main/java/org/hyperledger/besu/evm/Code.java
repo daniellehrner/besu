@@ -40,17 +40,17 @@ public class Code {
 
   private final int size;
 
-  // The analysis tables are package-private for the EVM's untraced v2 loop, which reads them as
-  // fields once jumpDestinations() and pushBits() have built them. Holding the five arrays in
-  // locals instead leaves the loop too few registers for its own state.
+  // The untraced v2 loop reads the analysis tables through their plain accessors once analyse()
+  // has built them, rather than holding them in locals: five more locals leave the loop too few
+  // registers for its own state.
 
   /** Bit mask for jump destinations, used to optimize JUMP/JUMPI operations */
-  long[] jumpDestBitMask = null;
+  private long[] jumpDestBitMask = null;
 
-  long[] pushBits = null;
-  int[] pushBase = null;
-  long[] pushValues = null;
-  long[] pushWide = null;
+  private long[] pushBits = null;
+  private int[] pushBase = null;
+  private long[] pushValues = null;
+  private long[] pushWide = null;
 
   /**
    * Public constructor.
@@ -208,12 +208,28 @@ public class Code {
   }
 
   /**
-   * Bit set at the pc of every PUSH, one long per 64 bytes of code.
+   * Builds the jump destinations and the PUSH tables that the EVM v2 loop reads, unless they are
+   * built already. The PUSH tables are only read by the v2 loop, so the standard interpreter never
+   * builds them; the jump destinations come out of the same pass.
+   */
+  public void analyse() {
+    if (pushValues == null) {
+      final long[] mask = scan(true);
+      if (jumpDestBitMask == null) {
+        jumpDestBitMask = mask;
+      }
+    } else if (jumpDestBitMask == null) {
+      jumpDestBitMask = calculateJumpDestBitMask();
+    }
+  }
+
+  /**
+   * Bit set at the pc of every PUSH, one long per 64 bytes of code. A plain accessor, as the v2
+   * loop's arms call it: null until {@link #analyse()} has run.
    *
-   * @return the bitmap, built on first use
+   * @return the bitmap
    */
   public long[] pushBits() {
-    ensureAnalysed();
     return pushBits;
   }
 
@@ -221,10 +237,9 @@ public class Code {
    * Number of PUSHes before each 64-byte block, so that the ordinal of a PUSH is the base of its
    * block plus the count of PUSH bits below it in {@link #pushBits()}.
    *
-   * @return the bases, built on first use
+   * @return the bases, null until {@link #analyse()} has run
    */
   public int[] pushBase() {
-    ensureAnalysed();
     return pushBase;
   }
 
@@ -232,34 +247,19 @@ public class Code {
    * One long per PUSH in code order: the immediate of a PUSH1..PUSH8, or the index of the limbs of
    * a wider PUSH in {@link #pushWide()}.
    *
-   * @return the values, built on first use
+   * @return the values, null until {@link #analyse()} has run
    */
   public long[] pushValues() {
-    ensureAnalysed();
     return pushValues;
   }
 
   /**
    * Four big-endian limbs per PUSH9..PUSH32, addressed through {@link #pushValues()}.
    *
-   * @return the limbs, built on first use
+   * @return the limbs, null until {@link #analyse()} has run
    */
   public long[] pushWide() {
-    ensureAnalysed();
     return pushWide;
-  }
-
-  /**
-   * The PUSH tables are only read by the EVM v2 loop, so the standard interpreter never builds
-   * them; when the loop asks, the jump destinations come out of the same pass.
-   */
-  private void ensureAnalysed() {
-    if (pushValues == null) {
-      final long[] mask = scan(true);
-      if (jumpDestBitMask == null) {
-        jumpDestBitMask = mask;
-      }
-    }
   }
 
   /**

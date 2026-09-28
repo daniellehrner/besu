@@ -14,10 +14,12 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.result;
+import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.JUMPDEST_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+import static org.hyperledger.besu.evm.v2.operation.Arms.result;
 
-import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -49,6 +51,14 @@ public class JumpDestOperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    return result(frame, V2LoopArms.jumpdest(ANY_GAS), 0, 0);
+    return result(frame, jumpdest(ANY_GAS), 0, 0);
+  }
+
+  @Arm(rank = 5, opcodes = 0x5b)
+  static long jumpdest(final long gas) {
+    if (gas >= JUMPDEST_GAS) {
+      return done(JUMPDEST_GAS, 1, 0);
+    }
+    return FALLBACK;
   }
 }

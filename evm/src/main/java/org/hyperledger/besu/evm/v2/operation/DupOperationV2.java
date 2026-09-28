@@ -14,11 +14,13 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.next;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.result;
+import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+import static org.hyperledger.besu.evm.v2.operation.Arms.next;
+import static org.hyperledger.besu.evm.v2.operation.Arms.result;
 
-import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -69,7 +71,21 @@ public class DupOperationV2 extends AbstractFixedCostOperationV2 {
   public static OperationResult staticOperation(
       final MessageFrame frame, final long[] s, final int index) {
     final int sp = frame.stackTopV2();
-    return result(
-        frame, V2LoopArms.dup(s, sp, next(sp), DUP_BASE + index, ANY_GAS), index, index + 1);
+    return result(frame, dup(s, sp, next(sp), DUP_BASE + index, ANY_GAS), index, index + 1);
+  }
+
+  @Arm(rank = 3, first = 0x80, last = 0x8f)
+  static long dup(final long[] s, final int sp, final int next, final int opcode, final long gas) {
+    final int depth = opcode - 0x7f;
+    if (sp >= depth && (sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
+      final int from = next - (depth << 2);
+      final int to = next;
+      s[to] = s[from];
+      s[to + 1] = s[from + 1];
+      s[to + 2] = s[from + 2];
+      s[to + 3] = s[from + 3];
+      return done(VERY_LOW_TIER_GAS, 1, 1);
+    }
+    return FALLBACK;
   }
 }

@@ -14,11 +14,10 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.result;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.top;
+import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.result;
+import static org.hyperledger.besu.evm.v2.operation.Arms.top;
 
-import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -49,6 +48,6 @@ public class GtOperationV2 extends AbstractFixedCostOperationV2 {
    */
   public static OperationResult staticOperation(final MessageFrame frame, final long[] stack) {
     final int sp = frame.stackTopV2();
-    return result(frame, V2LoopArms.compare(stack, sp, top(sp), 0x11, ANY_GAS), 2, 1);
+    return result(frame, LtOperationV2.compare(stack, sp, top(sp), 0x11, ANY_GAS), 2, 1);
   }
 }

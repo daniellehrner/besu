@@ -14,11 +14,13 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.result;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.top;
+import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+import static org.hyperledger.besu.evm.v2.operation.Arms.result;
+import static org.hyperledger.besu.evm.v2.operation.Arms.top;
 
-import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -49,6 +51,19 @@ public class OrOperationV2 extends AbstractFixedCostOperationV2 {
    */
   public static OperationResult staticOperation(final MessageFrame frame, final long[] stack) {
     final int sp = frame.stackTopV2();
-    return result(frame, V2LoopArms.or(stack, sp, top(sp), ANY_GAS), 2, 1);
+    return result(frame, or(stack, sp, top(sp), ANY_GAS), 2, 1);
+  }
+
+  @Arm(rank = 23, opcodes = 0x17)
+  static long or(final long[] s, final int sp, final int top, final long gas) {
+    if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+      final int a = top;
+      s[a - 4] |= s[a];
+      s[a - 3] |= s[a + 1];
+      s[a - 2] |= s[a + 2];
+      s[a - 1] |= s[a + 3];
+      return done(VERY_LOW_TIER_GAS, 1, -1);
+    }
+    return FALLBACK;
   }
 }

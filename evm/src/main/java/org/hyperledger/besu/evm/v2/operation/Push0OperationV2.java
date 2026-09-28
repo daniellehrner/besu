@@ -14,11 +14,13 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.next;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.result;
+import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.BASE_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+import static org.hyperledger.besu.evm.v2.operation.Arms.next;
+import static org.hyperledger.besu.evm.v2.operation.Arms.result;
 
-import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -54,6 +56,21 @@ public class Push0OperationV2 extends AbstractFixedCostOperationV2 {
    */
   public static OperationResult staticOperation(final MessageFrame frame, final long[] s) {
     final int sp = frame.stackTopV2();
-    return result(frame, V2LoopArms.push0(s, sp, next(sp), /* shanghai= */ true, ANY_GAS), 0, 1);
+    return result(frame, push0(s, sp, next(sp), /* shanghai= */ true, ANY_GAS), 0, 1);
+  }
+
+  /** PUSH0, Shanghai onwards. */
+  @Arm(rank = 19, opcodes = 0x5f)
+  static long push0(
+      final long[] s, final int sp, final int next, final boolean shanghai, final long gas) {
+    if (shanghai && (sp << 2) < s.length && gas >= BASE_TIER_GAS) {
+      final int dst = next;
+      s[dst] = 0;
+      s[dst + 1] = 0;
+      s[dst + 2] = 0;
+      s[dst + 3] = 0;
+      return done(BASE_TIER_GAS, 1, 1);
+    }
+    return FALLBACK;
   }
 }

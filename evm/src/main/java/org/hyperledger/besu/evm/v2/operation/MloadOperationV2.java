@@ -14,6 +14,11 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.LONG_BE;
+import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -61,5 +66,53 @@ public class MloadOperationV2 extends AbstractOperationV2 {
 
     frame.readMemoryWord(location, stack, top, 0);
     return new OperationResult(cost, null);
+  }
+
+  /**
+   * MLOAD and CALLDATALOAD, which both read a word from an array into the top item: MLOAD from
+   * memory already expanded, CALLDATALOAD from the input data unless the word straddles its end.
+   * They share an arm because each read inlines a chain of VarHandle methods into the loop.
+   */
+  @Arm(
+      rank = 14,
+      opcodes = {0x51, 0x35})
+  static long loadWord(
+      final long[] s,
+      final int sp,
+      final int top,
+      final int opcode,
+      final MessageFrame frame,
+      final long gas) {
+    if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
+      final int a = top;
+      final long location = s[a + 3];
+      final boolean small = (s[a] | s[a + 1] | s[a + 2]) == 0 && location >= 0;
+      final byte[] source;
+      final boolean readable;
+      if (opcode == 0x51) {
+        source = frame.memoryArrayV2();
+        readable = small && location <= frame.memoryByteSize() - 32;
+      } else {
+        source = frame.inputDataArrayIfPresent();
+        if (source != null && (!small || location >= source.length)) {
+          // past the end of the input
+          s[a] = 0;
+          s[a + 1] = 0;
+          s[a + 2] = 0;
+          s[a + 3] = 0;
+          return done(VERY_LOW_TIER_GAS, 1, 0);
+        }
+        readable = source != null && source.length - location >= 32;
+      }
+      if (readable) {
+        final int i = (int) location;
+        s[a] = (long) LONG_BE.get(source, i);
+        s[a + 1] = (long) LONG_BE.get(source, i + 8);
+        s[a + 2] = (long) LONG_BE.get(source, i + 16);
+        s[a + 3] = (long) LONG_BE.get(source, i + 24);
+        return done(VERY_LOW_TIER_GAS, 1, 0);
+      }
+    }
+    return FALLBACK;
   }
 }

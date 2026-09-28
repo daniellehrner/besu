@@ -14,11 +14,13 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.result;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.top;
+import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+import static org.hyperledger.besu.evm.v2.operation.Arms.result;
+import static org.hyperledger.besu.evm.v2.operation.Arms.top;
 
-import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -49,6 +51,33 @@ public class LtOperationV2 extends AbstractFixedCostOperationV2 {
    */
   public static OperationResult staticOperation(final MessageFrame frame, final long[] stack) {
     final int sp = frame.stackTopV2();
-    return result(frame, V2LoopArms.compare(stack, sp, top(sp), 0x10, ANY_GAS), 2, 1);
+    return result(frame, compare(stack, sp, top(sp), 0x10, ANY_GAS), 2, 1);
+  }
+
+  /** LT, GT, SLT and SGT. */
+  @Arm(rank = 17, first = 0x10, last = 0x13)
+  static long compare(
+      final long[] s, final int sp, final int top, final int opcode, final long gas) {
+    if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+      final int a = top;
+      final int b = a - 4;
+      // the most significant limb in which the two differ, or the least significant one
+      final int i = s[a] != s[b] ? 0 : s[a + 1] != s[b + 1] ? 1 : s[a + 2] != s[b + 2] ? 2 : 3;
+      long x = s[a + i];
+      long y = s[b + i];
+      if (i == 0 && opcode >= 0x12) {
+        // signed: flipping the sign bits makes the unsigned comparison a signed one
+        x ^= Long.MIN_VALUE;
+        y ^= Long.MIN_VALUE;
+      }
+      final int comparison = Long.compareUnsigned(x, y);
+      s[b] = 0;
+      s[b + 1] = 0;
+      s[b + 2] = 0;
+      // LT and SLT are the even opcodes, GT and SGT the odd ones
+      s[b + 3] = ((opcode & 1) == 0 ? comparison < 0 : comparison > 0) ? 1L : 0L;
+      return done(VERY_LOW_TIER_GAS, 1, -1);
+    }
+    return FALLBACK;
   }
 }

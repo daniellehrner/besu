@@ -12,10 +12,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package org.hyperledger.besu.evm;
+package org.hyperledger.besu.evm.v2.operation;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -31,7 +31,7 @@ import org.junit.jupiter.api.Test;
  * Checks the arms of the untraced v2 loop against BigInteger. The loop runs these methods' bodies
  * and the operation classes call the methods, so this covers both.
  */
-class V2LoopArmsTest {
+class ArmsTest {
 
   private static final BigInteger MOD = BigInteger.ONE.shiftLeft(256);
   private static final BigInteger MAX = MOD.subtract(BigInteger.ONE);
@@ -79,52 +79,52 @@ class V2LoopArmsTest {
 
   private static final List<Binary> BINARY =
       List.of(
-          new Binary("add", V2LoopArms::add, 3, (a, b) -> a.add(b).mod(MOD)),
-          new Binary("sub", V2LoopArms::sub, 3, (a, b) -> a.subtract(b).mod(MOD)),
-          new Binary("and", V2LoopArms::and, 3, BigInteger::and),
-          new Binary("or", V2LoopArms::or, 3, BigInteger::or),
-          new Binary("xor", V2LoopArms::xor, 3, BigInteger::xor),
-          new Binary("eq", V2LoopArms::eq, 3, (a, b) -> bit(a.equals(b))),
+          new Binary("add", AddOperationV2::add, 3, (a, b) -> a.add(b).mod(MOD)),
+          new Binary("sub", SubOperationV2::sub, 3, (a, b) -> a.subtract(b).mod(MOD)),
+          new Binary("and", AndOperationV2::and, 3, BigInteger::and),
+          new Binary("or", OrOperationV2::or, 3, BigInteger::or),
+          new Binary("xor", XorOperationV2::xor, 3, BigInteger::xor),
+          new Binary("eq", EqOperationV2::eq, 3, (a, b) -> bit(a.equals(b))),
           new Binary(
               "lt",
-              (s, sp, top, gas) -> V2LoopArms.compare(s, sp, top, 0x10, gas),
+              (s, sp, top, gas) -> LtOperationV2.compare(s, sp, top, 0x10, gas),
               3,
               (a, b) -> bit(a.compareTo(b) < 0)),
           new Binary(
               "gt",
-              (s, sp, top, gas) -> V2LoopArms.compare(s, sp, top, 0x11, gas),
+              (s, sp, top, gas) -> LtOperationV2.compare(s, sp, top, 0x11, gas),
               3,
               (a, b) -> bit(a.compareTo(b) > 0)),
           new Binary(
               "slt",
-              (s, sp, top, gas) -> V2LoopArms.compare(s, sp, top, 0x12, gas),
+              (s, sp, top, gas) -> LtOperationV2.compare(s, sp, top, 0x12, gas),
               3,
               (a, b) -> bit(signed(a).compareTo(signed(b)) < 0)),
           new Binary(
               "sgt",
-              (s, sp, top, gas) -> V2LoopArms.compare(s, sp, top, 0x13, gas),
+              (s, sp, top, gas) -> LtOperationV2.compare(s, sp, top, 0x13, gas),
               3,
               (a, b) -> bit(signed(a).compareTo(signed(b)) > 0)),
           new Binary(
               "shl",
-              (s, sp, top, gas) -> V2LoopArms.shift(s, sp, top, 0x1b, true, gas),
+              (s, sp, top, gas) -> ShlOperationV2.shift(s, sp, top, 0x1b, true, gas),
               3,
               (a, b) ->
                   a.compareTo(B256) >= 0 ? BigInteger.ZERO : b.shiftLeft(a.intValue()).mod(MOD)),
           new Binary(
               "shr",
-              (s, sp, top, gas) -> V2LoopArms.shift(s, sp, top, 0x1c, true, gas),
+              (s, sp, top, gas) -> ShlOperationV2.shift(s, sp, top, 0x1c, true, gas),
               3,
               (a, b) -> a.compareTo(B256) >= 0 ? BigInteger.ZERO : b.shiftRight(a.intValue())),
           new Binary(
               "sar",
-              (s, sp, top, gas) -> V2LoopArms.shift(s, sp, top, 0x1d, true, gas),
+              (s, sp, top, gas) -> ShlOperationV2.shift(s, sp, top, 0x1d, true, gas),
               3,
               (a, b) ->
                   unsigned(signed(b).shiftRight(a.compareTo(B256) >= 0 ? 256 : a.intValue()))),
           new Binary(
               "signextend",
-              V2LoopArms::signextend,
+              SignExtendOperationV2::signextend,
               5,
               (a, b) -> {
                 if (a.compareTo(BigInteger.valueOf(31)) >= 0) {
@@ -136,27 +136,27 @@ class V2LoopArmsTest {
               }),
           new Binary(
               "mul",
-              V2LoopArms::mul,
+              MulOperationV2::mul,
               5,
               (a, b) -> a.multiply(b).mod(MOD),
               (a, b) -> a.compareTo(WORD) >= 0 && b.compareTo(WORD) >= 0),
           new Binary(
               "div",
-              (s, sp, top, gas) -> V2LoopArms.divMod(s, sp, top, 0x04, gas),
+              (s, sp, top, gas) -> DivOperationV2.divMod(s, sp, top, 0x04, gas),
               5,
               (a, b) -> b.signum() == 0 ? BigInteger.ZERO : a.divide(b),
               (a, b) -> a.compareTo(WORD) >= 0 || b.compareTo(WORD) >= 0),
           new Binary(
               "mod",
-              (s, sp, top, gas) -> V2LoopArms.divMod(s, sp, top, 0x06, gas),
+              (s, sp, top, gas) -> DivOperationV2.divMod(s, sp, top, 0x06, gas),
               5,
               (a, b) -> b.signum() == 0 ? BigInteger.ZERO : a.mod(b),
               (a, b) -> a.compareTo(WORD) >= 0 || b.compareTo(WORD) >= 0));
 
   private static final List<Unary> UNARY =
       List.of(
-          new Unary("iszero", V2LoopArms::iszero, 3, a -> bit(a.signum() == 0)),
-          new Unary("not", V2LoopArms::not, 3, a -> a.xor(MAX)));
+          new Unary("iszero", IsZeroOperationV2::iszero, 3, a -> bit(a.signum() == 0)),
+          new Unary("not", NotOperationV2::not, 3, a -> a.xor(MAX)));
 
   private static final BigInteger[] EDGES = {
     BigInteger.ZERO,
@@ -221,9 +221,9 @@ class V2LoopArmsTest {
             continue;
           }
           assertThat(outcome).as(what).isNotEqualTo(FALLBACK);
-          assertThat(V2LoopArms.cost(outcome)).as(what).isEqualTo(op.cost());
-          assertThat(V2LoopArms.step(outcome)).as(what).isEqualTo(1);
-          assertThat(V2LoopArms.delta(outcome)).as(what).isEqualTo(-1);
+          assertThat(Arms.cost(outcome)).as(what).isEqualTo(op.cost());
+          assertThat(Arms.step(outcome)).as(what).isEqualTo(1);
+          assertThat(Arms.delta(outcome)).as(what).isEqualTo(-1);
           assertThat(get(s, 0)).as(what).isEqualTo(op.reference().apply(a, b));
         }
       }
@@ -239,8 +239,8 @@ class V2LoopArmsTest {
         final long outcome = op.arm().run(s, 1, 0, op.cost());
         final String what = op.name() + "(" + a.toString(16) + ")";
         assertThat(outcome).as(what).isNotEqualTo(FALLBACK);
-        assertThat(V2LoopArms.cost(outcome)).as(what).isEqualTo(op.cost());
-        assertThat(V2LoopArms.delta(outcome)).as(what).isZero();
+        assertThat(Arms.cost(outcome)).as(what).isEqualTo(op.cost());
+        assertThat(Arms.delta(outcome)).as(what).isZero();
         assertThat(get(s, 0)).as(what).isEqualTo(op.reference().apply(a));
       }
     }
@@ -272,12 +272,12 @@ class V2LoopArmsTest {
       for (int slot = 0; slot < 17; slot++) {
         put(s, slot, BigInteger.valueOf(slot + 100));
       }
-      final long dup = V2LoopArms.dup(s, 17, 17 << 2, 0x7f + depth, 3);
-      assertThat(V2LoopArms.delta(dup)).isEqualTo(1);
+      final long dup = DupOperationV2.dup(s, 17, 17 << 2, 0x7f + depth, 3);
+      assertThat(Arms.delta(dup)).isEqualTo(1);
       assertThat(get(s, 17)).as("DUP%d", depth).isEqualTo(BigInteger.valueOf(117 - depth));
 
-      final long swap = V2LoopArms.swap(s, 17, 16 << 2, 0x8f + depth, 3);
-      assertThat(V2LoopArms.delta(swap)).isZero();
+      final long swap = SwapOperationV2.swap(s, 17, 16 << 2, 0x8f + depth, 3);
+      assertThat(Arms.delta(swap)).isZero();
       assertThat(get(s, 16)).as("SWAP%d", depth).isEqualTo(BigInteger.valueOf(116 - depth));
       assertThat(get(s, 16 - depth)).as("SWAP%d", depth).isEqualTo(BigInteger.valueOf(116));
     }
@@ -285,10 +285,10 @@ class V2LoopArmsTest {
 
   @Test
   void outcomesCarryNegativeStepsAndDeltas() {
-    final long outcome = V2LoopArms.done(14, -70_000, -2);
-    assertThat(V2LoopArms.cost(outcome)).isEqualTo(14);
-    assertThat(V2LoopArms.step(outcome)).isEqualTo(-70_000);
-    assertThat(V2LoopArms.delta(outcome)).isEqualTo(-2);
+    final long outcome = Arms.done(14, -70_000, -2);
+    assertThat(Arms.cost(outcome)).isEqualTo(14);
+    assertThat(Arms.step(outcome)).isEqualTo(-70_000);
+    assertThat(Arms.delta(outcome)).isEqualTo(-2);
     assertThat(outcome).isNotEqualTo(FALLBACK);
   }
 }
