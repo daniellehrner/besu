@@ -83,3 +83,45 @@ publishing {
     }
   }
 }
+
+// The inline arms of the EVM v2 interpreter loop are generated into EVM.java from
+// V2LoopArms.java, and every build checks them against the rules that keep the loop fast.
+sourceSets {
+  loopgen
+}
+
+dependencies {
+  loopgenAnnotationProcessor(platform(project(':platform')))
+}
+
+def evmV2LoopFiles = [
+  'src/main/java/org/hyperledger/besu/evm/V2LoopArms.java',
+  'src/main/java/org/hyperledger/besu/evm/EVM.java'
+]
+
+tasks.register('generateEvmV2Loop', JavaExec) {
+  group = 'build'
+  description = 'Regenerates the inline arms of the EVM v2 interpreter loop in EVM.java from V2LoopArms.java'
+  classpath = sourceSets.loopgen.runtimeClasspath
+  mainClass = 'org.hyperledger.besu.evm.loopgen.EvmV2LoopGenerator'
+  workingDir = projectDir
+  args(['write'] + evmV2LoopFiles)
+  finalizedBy 'spotlessApply'
+}
+
+def checkEvmV2Loop = tasks.register('checkEvmV2Loop', JavaExec) {
+  group = 'verification'
+  description = 'Checks the EVM v2 loop arms against their rules, and that EVM.java holds what they generate'
+  classpath = sourceSets.loopgen.runtimeClasspath
+  mainClass = 'org.hyperledger.besu.evm.loopgen.EvmV2LoopGenerator'
+  workingDir = projectDir
+  def marker = layout.buildDirectory.file('evmV2Loop/checked')
+  inputs.files(evmV2LoopFiles)
+  inputs.files(sourceSets.loopgen.runtimeClasspath)
+  outputs.file(marker)
+  args(['check'] + evmV2LoopFiles + [marker.get().asFile.path])
+}
+
+tasks.named('compileJava') {
+  dependsOn checkEvmV2Loop
+}
