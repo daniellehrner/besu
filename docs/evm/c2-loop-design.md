@@ -3,6 +3,9 @@
 Status: design note, nothing implemented. Written 2026-09-16 against branch
 `perf/evm-v2-poc` at `cf7077b`.
 
+The loop has since been built; `v2-loop-arms.md` describes it as it is and how
+to change it.
+
 Companion to `v2-table-loop-plan.md`, which records the three dispatch designs
 that were built and reverted. This note starts from why they all measured the
 same, and proposes changing what surrounds the dispatch instead.

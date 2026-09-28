@@ -77,7 +77,9 @@ import java.lang.annotation.Target;
  * counter as a code index, {@code code}, {@code codeObject}, {@code opcode}, {@code gas} the gas
  * left, {@code frame}, and the fork flags {@code constantinople} and {@code shanghai}. The methods
  * appear in the loop in the order they appear here, which is how often mainnet executes their
- * operations: C2 inlines in that order and stops when the loop reaches its size budget.
+ * operations: C2 inlines in that order and stops when the loop reaches its size budget. A new arm
+ * also belongs in the program of {@code EvmV2LoopCompilationTest}, which checks what C2 inlines
+ * only in the arms its program reaches; docs/evm/v2-loop-arms.md has the rest of the workflow.
  */
 public final class V2LoopArms {
 
