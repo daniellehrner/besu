@@ -63,7 +63,8 @@ public class RlpBlockImporter implements Closeable {
   private long segmentGas;
   private final Stopwatch cumulativeTimer = Stopwatch.createUnstarted();
   private final Stopwatch segmentTimer = Stopwatch.createUnstarted();
-  private static final long SEGMENT_SIZE = 1000;
+  // Finer segments make an offline replay usable as a per-block-range benchmark.
+  private static final long SEGMENT_SIZE = Long.getLong("besu.import.segment", 1000);
 
   /** Default Constructor. */
   public RlpBlockImporter() {}
