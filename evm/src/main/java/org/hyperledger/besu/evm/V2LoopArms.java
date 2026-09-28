@@ -42,9 +42,9 @@ import java.lang.annotation.Target;
  *
  * <ul>
  *   <li>No call other than the few that always inline: {@code Long} and {@code Math} intrinsics,
- *       {@code LONG_BE}, the frame's memory and input accessors and {@code isJumpDestination}. One
- *       call C2 does not inline, in any arm, makes it keep all of the loop's locals in memory for
- *       the whole loop; one allocating arm took JUMPDEST from 0.45 to about 2 ns.
+ *       {@code LONG_BE}, the frame's memory and input accessors and {@code isJumpDestination}.
+ *       One call C2 does not inline, in any arm, makes it keep all of the loop's locals in memory
+ *       for the whole loop; one allocating arm took JUMPDEST from 0.45 to about 2 ns.
  *   <li>No allocation, lambda, string, exception or synchronization, for the same reason.
  *   <li>No loop, not even over the four limbs of a word. Every loop head is an on-stack replacement
  *       entry point, and which compilation a JVM then ends up with depends on where it happened to
@@ -65,6 +65,12 @@ import java.lang.annotation.Target;
  * returns {@code FALLBACK}, charging nothing, and the loop runs the operation through its
  * implementation, which owns every halt.
  *
+ * <p>Where an arm runs every case in which its operation succeeds, the operation's class calls the
+ * arm as well, giving it all the gas it wants since the class's callers charge the gas, so that the
+ * loop and the class share one implementation. The other classes keep their own: PUSH2, JUMP and
+ * JUMPI also run the operation after them, which a tracer has to see on its own, and MUL, DIV, MOD,
+ * MSTORE, MLOAD, CALLDATALOAD and CALLDATASIZE run only their common cases here.
+ *
  * <p>The methods take their parameters by name from the loop, and may declare only the ones they
  * use: {@code s} the stack, {@code sp} the number of items on it, {@code top} the index of the top
  * item's first limb and {@code next} that of the slot above it, {@code pc}, {@code at} the program
@@ -73,7 +79,7 @@ import java.lang.annotation.Target;
  * appear in the loop in the order they appear here, which is how often mainnet executes their
  * operations: C2 inlines in that order and stops when the loop reaches its size budget.
  */
-final class V2LoopArms {
+public final class V2LoopArms {
 
   /** The opcodes an arm runs, as a list, a range or both. */
   @Retention(RetentionPolicy.SOURCE)
@@ -87,7 +93,7 @@ final class V2LoopArms {
   }
 
   /** What an arm returns when it leaves the operation to its implementation. */
-  static final long FALLBACK = -1L;
+  public static final long FALLBACK = -1L;
 
   private V2LoopArms() {}
 
@@ -103,8 +109,49 @@ final class V2LoopArms {
     return cost << 32 | (step & 0xffffffL) << 8 | (delta & 0xffL);
   }
 
+  /**
+   * The gas charged by an arm that ran its operation.
+   *
+   * @param outcome what the arm returned, other than {@link #FALLBACK}
+   * @return the gas
+   */
+  public static long cost(final long outcome) {
+    return outcome >>> 32;
+  }
+
+  /**
+   * How far an arm that ran its operation moves the program counter.
+   *
+   * @param outcome what the arm returned, other than {@link #FALLBACK}
+   * @return the distance, negative for a jump backwards
+   */
+  public static int step(final long outcome) {
+    return (int) outcome >> 8;
+  }
+
+  /**
+   * How many items an arm that ran its operation adds to the stack.
+   *
+   * @param outcome what the arm returned, other than {@link #FALLBACK}
+   * @return the number, negative for items removed
+   */
+  public static int delta(final long outcome) {
+    return (byte) outcome;
+  }
+
+  /**
+   * PUSH1.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param next the index of the first limb of the slot above the top item
+   * @param at the program counter as an index into the code
+   * @param code the code
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x60)
-  static long push1(
+  public static long push1(
       final long[] s,
       final int sp,
       final int next,
@@ -123,9 +170,21 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
-  /** PUSH3-32; the immediate was decoded when the code was analysed. */
+  /**
+   * PUSH1-32, although the loop runs PUSH1 and PUSH2 through arms of their own; the immediate was
+   * decoded when the code was analysed.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param next the index of the first limb of the slot above the top item
+   * @param pc the program counter
+   * @param opcode the opcode
+   * @param codeObject the analysed code
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(first = 0x62, last = 0x7f)
-  static long push(
+  public static long push(
       final long[] s,
       final int sp,
       final int next,
@@ -159,8 +218,19 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
+  /**
+   * DUP1-16.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param next the index of the first limb of the slot above the top item
+   * @param opcode the opcode
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(first = 0x80, last = 0x8f)
-  static long dup(final long[] s, final int sp, final int next, final int opcode, final long gas) {
+  public static long dup(
+      final long[] s, final int sp, final int next, final int opcode, final long gas) {
     final int depth = opcode - 0x7f;
     if (sp >= depth && (sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
       final int from = next - (depth << 2);
@@ -174,8 +244,19 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
+  /**
+   * SWAP1-16.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param opcode the opcode
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(first = 0x90, last = 0x9f)
-  static long swap(final long[] s, final int sp, final int top, final int opcode, final long gas) {
+  public static long swap(
+      final long[] s, final int sp, final int top, final int opcode, final long gas) {
     final int depth = opcode - 0x8f;
     if (sp > depth && gas >= VERY_LOW_TIER_GAS) {
       final int a = top;
@@ -197,25 +278,51 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
+  /**
+   * JUMPDEST.
+   *
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x5b)
-  static long jumpdest(final long gas) {
+  public static long jumpdest(final long gas) {
     if (gas >= JUMPDEST_GAS) {
       return done(JUMPDEST_GAS, 1, 0);
     }
     return FALLBACK;
   }
 
+  /**
+   * POP.
+   *
+   * @param sp the number of items on the stack
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x50)
-  static long pop(final int sp, final long gas) {
+  public static long pop(final int sp, final long gas) {
     if (sp >= 1 && gas >= BASE_TIER_GAS) {
       return done(BASE_TIER_GAS, 1, -1);
     }
     return FALLBACK;
   }
 
-  /** PUSH2, and the PUSH2 JUMP and PUSH2 JUMPI that follow it. */
+  /**
+   * PUSH2, and the PUSH2 JUMP and PUSH2 JUMPI that follow it.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param next the index of the first limb of the slot above the top item
+   * @param pc the program counter
+   * @param at the program counter as an index into the code
+   * @param code the code
+   * @param codeObject the analysed code
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x61)
-  static long push2(
+  public static long push2(
       final long[] s,
       final int sp,
       final int top,
@@ -257,9 +364,20 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
-  /** JUMPI, and the JUMPDEST it lands on. */
+  /**
+   * JUMPI, and the JUMPDEST it lands on.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param pc the program counter
+   * @param code the code
+   * @param codeObject the analysed code
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x57)
-  static long jumpi(
+  public static long jumpi(
       final long[] s,
       final int sp,
       final int top,
@@ -283,9 +401,20 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
-  /** JUMP, and the JUMPDEST it lands on. */
+  /**
+   * JUMP, and the JUMPDEST it lands on.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param pc the program counter
+   * @param code the code
+   * @param codeObject the analysed code
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x56)
-  static long jump(
+  public static long jump(
       final long[] s,
       final int sp,
       final int top,
@@ -304,8 +433,17 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
+  /**
+   * ADD.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x01)
-  static long add(final long[] s, final int sp, final int top, final long gas) {
+  public static long add(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
       final int a = top;
       final int b = a - 4;
@@ -330,9 +468,18 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
-  /** MSTORE within the memory already expanded. */
+  /**
+   * MSTORE within the memory already expanded.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param frame the frame
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x52)
-  static long mstore(
+  public static long mstore(
       final long[] s, final int sp, final int top, final MessageFrame frame, final long gas) {
     if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
       final int a = top;
@@ -352,8 +499,17 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
+  /**
+   * ISZERO.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x15)
-  static long iszero(final long[] s, final int sp, final int top, final long gas) {
+  public static long iszero(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
       final int a = top;
       final long zero = (s[a] | s[a + 1] | s[a + 2] | s[a + 3]) == 0 ? 1L : 0L;
@@ -366,8 +522,17 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
+  /**
+   * AND.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x16)
-  static long and(final long[] s, final int sp, final int top, final long gas) {
+  public static long and(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
       final int a = top;
       s[a - 4] &= s[a];
@@ -383,9 +548,17 @@ final class V2LoopArms {
    * MLOAD and CALLDATALOAD, which both read a word from an array into the top item: MLOAD from
    * memory already expanded, CALLDATALOAD from the input data unless the word straddles its end.
    * They share an arm because each read inlines a chain of VarHandle methods into the loop.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param opcode the opcode
+   * @param frame the frame
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
    */
   @Arm(opcodes = {0x51, 0x35})
-  static long loadWord(
+  public static long loadWord(
       final long[] s,
       final int sp,
       final int top,
@@ -425,8 +598,17 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
+  /**
+   * SUB.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x03)
-  static long sub(final long[] s, final int sp, final int top, final long gas) {
+  public static long sub(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
       final int a = top;
       final int b = a - 4;
@@ -451,8 +633,17 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
+  /**
+   * EQ.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x14)
-  static long eq(final long[] s, final int sp, final int top, final long gas) {
+  public static long eq(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
       final int a = top;
       final int b = a - 4;
@@ -470,9 +661,18 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
-  /** LT, GT, SLT and SGT. */
+  /**
+   * LT, GT, SLT and SGT.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param opcode the opcode
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(first = 0x10, last = 0x13)
-  static long compare(
+  public static long compare(
       final long[] s, final int sp, final int top, final int opcode, final long gas) {
     if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
       final int a = top;
@@ -497,9 +697,19 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
-  /** SHL, SHR and SAR, Constantinople onwards. */
+  /**
+   * SHL, SHR and SAR, Constantinople onwards.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param opcode the opcode
+   * @param constantinople whether Constantinople is active
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(first = 0x1b, last = 0x1d)
-  static long shift(
+  public static long shift(
       final long[] s,
       final int sp,
       final int top,
@@ -558,9 +768,18 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
-  /** PUSH0, Shanghai onwards. */
+  /**
+   * PUSH0, Shanghai onwards.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param next the index of the first limb of the slot above the top item
+   * @param shanghai whether Shanghai is active
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x5f)
-  static long push0(
+  public static long push0(
       final long[] s, final int sp, final int next, final boolean shanghai, final long gas) {
     if (shanghai && (sp << 2) < s.length && gas >= BASE_TIER_GAS) {
       final int dst = next;
@@ -573,9 +792,17 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
-  /** MUL when either factor fits in 64 bits. */
+  /**
+   * MUL when either factor fits in 64 bits.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x02)
-  static long mul(final long[] s, final int sp, final int top, final long gas) {
+  public static long mul(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 2 && gas >= LOW_TIER_GAS) {
       final int a = top;
       final int b = a - 4;
@@ -611,8 +838,18 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
+  /**
+   * CALLDATASIZE.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param next the index of the first limb of the slot above the top item
+   * @param frame the frame
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x36)
-  static long calldatasize(
+  public static long calldatasize(
       final long[] s, final int sp, final int next, final MessageFrame frame, final long gas) {
     final byte[] data = frame.inputDataArrayIfPresent();
     if (data != null && (sp << 2) < s.length && gas >= BASE_TIER_GAS) {
@@ -626,9 +863,18 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
-  /** DIV and MOD when both operands fit in 64 bits. */
+  /**
+   * DIV and MOD when both operands fit in 64 bits.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param opcode the opcode
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = {0x04, 0x06})
-  static long divMod(
+  public static long divMod(
       final long[] s, final int sp, final int top, final int opcode, final long gas) {
     if (sp >= 2 && gas >= LOW_TIER_GAS) {
       final int a = top;
@@ -644,8 +890,17 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
+  /**
+   * OR.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x17)
-  static long or(final long[] s, final int sp, final int top, final long gas) {
+  public static long or(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
       final int a = top;
       s[a - 4] |= s[a];
@@ -657,8 +912,17 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
+  /**
+   * NOT.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x19)
-  static long not(final long[] s, final int sp, final int top, final long gas) {
+  public static long not(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
       final int a = top;
       s[a] = ~s[a];
@@ -670,9 +934,17 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
-  /** GAS: what is left once GAS itself is paid. */
+  /**
+   * GAS: what is left once GAS itself is paid.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param next the index of the first limb of the slot above the top item
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x5a)
-  static long gasLeft(final long[] s, final int sp, final int next, final long gas) {
+  public static long gasLeft(final long[] s, final int sp, final int next, final long gas) {
     if ((sp << 2) < s.length && gas >= BASE_TIER_GAS) {
       final int dst = next;
       s[dst] = 0;
@@ -684,8 +956,17 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
+  /**
+   * SIGNEXTEND.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x0b)
-  static long signextend(final long[] s, final int sp, final int top, final long gas) {
+  public static long signextend(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 2 && gas >= LOW_TIER_GAS) {
       final int a = top;
       final int v = a - 4;
@@ -713,8 +994,17 @@ final class V2LoopArms {
     return FALLBACK;
   }
 
+  /**
+   * XOR.
+   *
+   * @param s the stack, four limbs per item
+   * @param sp the number of items on the stack
+   * @param top the index of the top item's first limb
+   * @param gas the gas left
+   * @return the outcome, or {@link #FALLBACK}
+   */
   @Arm(opcodes = 0x18)
-  static long xor(final long[] s, final int sp, final int top, final long gas) {
+  public static long xor(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
       final int a = top;
       s[a - 4] ^= s[a];

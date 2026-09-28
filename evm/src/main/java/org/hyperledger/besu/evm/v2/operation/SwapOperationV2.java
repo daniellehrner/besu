@@ -14,10 +14,16 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.halt;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ran;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.top;
+
+import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
-import org.hyperledger.besu.evm.v2.StackArithmetic;
 
 /**
  * EVM v2 SWAP1-16 operation (opcodes 0x90–0x9F).
@@ -29,8 +35,6 @@ public class SwapOperationV2 extends AbstractFixedCostOperationV2 {
 
   /** The SWAP opcode base (SWAP1 = 0x90, so base = 0x8F). */
   public static final int SWAP_BASE = 0x8F;
-
-  static final OperationResult SWAP_SUCCESS = new OperationResult(3, null);
 
   private final int index;
 
@@ -66,8 +70,8 @@ public class SwapOperationV2 extends AbstractFixedCostOperationV2 {
    */
   public static OperationResult staticOperation(
       final MessageFrame frame, final long[] s, final int index) {
-    if (!frame.stackHasItemsV2(index + 1)) return UNDERFLOW_RESPONSE;
-    StackArithmetic.swap(s, frame.stackTopV2(), index);
-    return SWAP_SUCCESS;
+    final int sp = frame.stackTopV2();
+    final long outcome = V2LoopArms.swap(s, sp, top(sp), SWAP_BASE + index, ANY_GAS);
+    return outcome != FALLBACK ? ran(frame, outcome) : halt(frame, index + 1, index + 1);
   }
 }

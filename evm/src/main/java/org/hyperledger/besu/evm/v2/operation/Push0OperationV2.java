@@ -14,10 +14,16 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.halt;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.next;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ran;
+
+import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
-import org.hyperledger.besu.evm.v2.StackArithmetic;
 
 /**
  * EVM v2 PUSH0 operation (0x5F).
@@ -26,8 +32,6 @@ import org.hyperledger.besu.evm.v2.StackArithmetic;
  * tier (2).
  */
 public class Push0OperationV2 extends AbstractFixedCostOperationV2 {
-
-  private static final OperationResult PUSH0_SUCCESS = new OperationResult(2, null);
 
   /**
    * Instantiates a new Push0 operation.
@@ -51,8 +55,8 @@ public class Push0OperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame, final long[] s) {
-    if (!frame.stackHasSpaceV2(1)) return OVERFLOW_RESPONSE;
-    frame.setTopV2(StackArithmetic.pushZero(s, frame.stackTopV2()));
-    return PUSH0_SUCCESS;
+    final int sp = frame.stackTopV2();
+    final long outcome = V2LoopArms.push0(s, sp, next(sp), /* shanghai= */ true, ANY_GAS);
+    return outcome != FALLBACK ? ran(frame, outcome) : halt(frame, 0, 1);
   }
 }

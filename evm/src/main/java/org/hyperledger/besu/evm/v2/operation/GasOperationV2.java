@@ -14,10 +14,14 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.next;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ran;
+
+import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
-import org.hyperledger.besu.evm.v2.StackArithmetic;
 
 /**
  * EVM v2 GAS operation — pushes the amount of available gas remaining (after this instruction's
@@ -36,11 +40,12 @@ public class GasOperationV2 extends AbstractFixedCostOperationV2 {
 
   @Override
   public Operation.OperationResult executeFixedCostOperation(final MessageFrame frame) {
-    if (!frame.stackHasSpaceV2(1)) return OVERFLOW_RESPONSE;
-    // Gas remaining after deducting this instruction's cost
-    frame.setTopV2(
-        StackArithmetic.pushLong(
-            frame.stackDataV2(), frame.stackTopV2(), frame.getRemainingGas() - gasCost));
-    return successResponse;
+    final int sp = frame.stackTopV2();
+    final long outcome =
+        V2LoopArms.gasLeft(frame.stackDataV2(), sp, next(sp), frame.getRemainingGas());
+    if (outcome != FALLBACK) {
+      return ran(frame, outcome);
+    }
+    return frame.stackHasSpaceV2(1) ? outOfGasResponse : OVERFLOW_RESPONSE;
   }
 }

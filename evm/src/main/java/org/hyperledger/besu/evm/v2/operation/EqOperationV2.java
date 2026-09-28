@@ -14,16 +14,19 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.halt;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ran;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.top;
+
+import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
-import org.hyperledger.besu.evm.v2.StackArithmetic;
 
 /** The Eq operation. */
 public class EqOperationV2 extends AbstractFixedCostOperationV2 {
-
-  /** The Eq operation success result. */
-  static final OperationResult eqSuccess = new OperationResult(3, null);
 
   /**
    * Instantiates a new Eq operation.
@@ -47,8 +50,8 @@ public class EqOperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame, final long[] stack) {
-    if (!frame.stackHasItemsV2(2)) return UNDERFLOW_RESPONSE;
-    frame.setTopV2(StackArithmetic.eq(stack, frame.stackTopV2()));
-    return eqSuccess;
+    final int sp = frame.stackTopV2();
+    final long outcome = V2LoopArms.eq(stack, sp, top(sp), ANY_GAS);
+    return outcome != FALLBACK ? ran(frame, outcome) : halt(frame, 2, 1);
   }
 }

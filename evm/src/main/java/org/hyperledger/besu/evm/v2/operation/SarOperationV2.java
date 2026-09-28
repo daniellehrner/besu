@@ -14,16 +14,19 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import org.hyperledger.besu.evm.UInt256;
+import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.halt;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ran;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.top;
+
+import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
 
 /** The Sar operation. */
 public class SarOperationV2 extends AbstractFixedCostOperationV2 {
-
-  /** The Sar operation success result. */
-  static final OperationResult sarSuccess = new OperationResult(3, null);
 
   /**
    * Instantiates a new Sar operation.
@@ -46,30 +49,10 @@ public class SarOperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    if (!frame.stackHasItemsV2(2)) return UNDERFLOW_RESPONSE;
-    long[] stack = frame.stackDataV2();
-    int top = frame.stackTopV2();
-    final int shiftOffset = (--top) << 2;
-    final UInt256 shift =
-        new UInt256(
-            stack[shiftOffset],
-            stack[shiftOffset + 1],
-            stack[shiftOffset + 2],
-            stack[shiftOffset + 3]);
-    final int valueOffset = (--top) << 2;
-    final UInt256 value =
-        new UInt256(
-            stack[valueOffset],
-            stack[valueOffset + 1],
-            stack[valueOffset + 2],
-            stack[valueOffset + 3]);
-    final UInt256 result = value.sar(shift);
-    int resultOffset = top << 2;
-    stack[resultOffset] = result.u3();
-    stack[resultOffset + 1] = result.u2();
-    stack[resultOffset + 2] = result.u1();
-    stack[resultOffset + 3] = result.u0();
-    frame.setTopV2(++top);
-    return sarSuccess;
+    final int sp = frame.stackTopV2();
+    final long outcome =
+        V2LoopArms.shift(
+            frame.stackDataV2(), sp, top(sp), 0x1d, /* constantinople= */ true, ANY_GAS);
+    return outcome != FALLBACK ? ran(frame, outcome) : halt(frame, 2, 1);
   }
 }

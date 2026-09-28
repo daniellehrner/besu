@@ -14,16 +14,19 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.halt;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ran;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.top;
+
+import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
-import org.hyperledger.besu.evm.v2.StackArithmetic;
 
 /** The Not operation. */
 public class NotOperationV2 extends AbstractFixedCostOperationV2 {
-
-  /** The Not operation success result. */
-  static final OperationResult notSuccess = new OperationResult(3, null);
 
   /**
    * Instantiates a new Not operation.
@@ -47,8 +50,8 @@ public class NotOperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame, final long[] stack) {
-    if (!frame.stackHasItemsV2(1)) return UNDERFLOW_RESPONSE;
-    frame.setTopV2(StackArithmetic.not(stack, frame.stackTopV2()));
-    return notSuccess;
+    final int sp = frame.stackTopV2();
+    final long outcome = V2LoopArms.not(stack, sp, top(sp), ANY_GAS);
+    return outcome != FALLBACK ? ran(frame, outcome) : halt(frame, 1, 1);
   }
 }

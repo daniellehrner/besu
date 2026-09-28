@@ -14,23 +14,29 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.halt;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.next;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ran;
+
+import org.hyperledger.besu.evm.Code;
+import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
-import org.hyperledger.besu.evm.v2.StackArithmetic;
 
 /**
  * EVM v2 PUSH1-32 operation (opcodes 0x60–0x7F).
  *
- * <p>Reads {@code length} immediate bytes from bytecode at {@code pc+1} and pushes the resulting
- * value onto the stack. Gas cost is veryLow tier (3). PC increment is {@code 1 + length}.
+ * <p>Pushes the {@code length} immediate bytes after the opcode, which the analysis of the code
+ * decoded once for the whole contract. Gas cost is veryLow tier (3). PC increment is {@code 1 +
+ * length}.
  */
 public class PushOperationV2 extends AbstractFixedCostOperationV2 {
 
   /** The PUSH opcode base (PUSH0 = 0x5F, so PUSH1 = 0x60). */
   public static final int PUSH_BASE = 0x5F;
-
-  private static final OperationResult PUSH_SUCCESS = new OperationResult(3, null);
 
   private final int length;
 
@@ -53,8 +59,7 @@ public class PushOperationV2 extends AbstractFixedCostOperationV2 {
 
   @Override
   public Operation.OperationResult executeFixedCostOperation(final MessageFrame frame) {
-    final byte[] code = frame.getCode().getBytes().toArrayUnsafe();
-    return staticOperation(frame, frame.stackDataV2(), code, frame.getPC(), length);
+    return staticOperation(frame, frame.stackDataV2(), frame.getPC(), length);
   }
 
   /**
@@ -62,20 +67,17 @@ public class PushOperationV2 extends AbstractFixedCostOperationV2 {
    *
    * @param frame the frame
    * @param s the stack data array
-   * @param code the bytecode array
    * @param pc the current program counter
    * @param pushSize the number of bytes to push
    * @return the operation result
    */
   public static OperationResult staticOperation(
-      final MessageFrame frame,
-      final long[] s,
-      final byte[] code,
-      final int pc,
-      final int pushSize) {
-    if (!frame.stackHasSpaceV2(1)) return OVERFLOW_RESPONSE;
-    frame.setTopV2(StackArithmetic.pushFromBytes(s, frame.stackTopV2(), code, pc + 1, pushSize));
-    frame.setPC(pc + pushSize);
-    return PUSH_SUCCESS;
+      final MessageFrame frame, final long[] s, final int pc, final int pushSize) {
+    final Code codeObject = frame.getCode();
+    codeObject.pushBits(); // builds the tables the arm reads
+    final int sp = frame.stackTopV2();
+    final long outcome =
+        V2LoopArms.push(s, sp, next(sp), pc, PUSH_BASE + pushSize, codeObject, ANY_GAS);
+    return outcome != FALLBACK ? ran(frame, outcome) : halt(frame, 0, 1);
   }
 }

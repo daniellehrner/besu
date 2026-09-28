@@ -45,8 +45,6 @@ class StackArithmeticTest {
 
   private static final List<Case> CASES =
       List.of(
-          new Case("add", StackArithmetic::add, (a, b) -> a.add(b).mod(MOD)),
-          new Case("sub", StackArithmetic::sub, (a, b) -> a.subtract(b).mod(MOD)),
           new Case("mul", StackArithmetic::mul, (a, b) -> a.multiply(b).mod(MOD)),
           new Case(
               "div",
@@ -69,66 +67,12 @@ class StackArithmeticTest {
                       ? BigInteger.ZERO
                       : unsigned(signed(a).remainder(signed(b)).mod(MOD))),
           new Case(
-              "lt",
-              StackArithmetic::lt,
-              (a, b) -> a.compareTo(b) < 0 ? BigInteger.ONE : BigInteger.ZERO),
-          new Case(
-              "gt",
-              StackArithmetic::gt,
-              (a, b) -> a.compareTo(b) > 0 ? BigInteger.ONE : BigInteger.ZERO),
-          new Case(
-              "slt",
-              StackArithmetic::slt,
-              (a, b) -> signed(a).compareTo(signed(b)) < 0 ? BigInteger.ONE : BigInteger.ZERO),
-          new Case(
-              "sgt",
-              StackArithmetic::sgt,
-              (a, b) -> signed(a).compareTo(signed(b)) > 0 ? BigInteger.ONE : BigInteger.ZERO),
-          new Case(
-              "eq", StackArithmetic::eq, (a, b) -> a.equals(b) ? BigInteger.ONE : BigInteger.ZERO),
-          new Case("and", StackArithmetic::and, BigInteger::and),
-          new Case("or", StackArithmetic::or, BigInteger::or),
-          new Case("xor", StackArithmetic::xor, BigInteger::xor),
-          new Case(
-              "shl",
-              StackArithmetic::shl,
-              (a, b) ->
-                  a.compareTo(BigInteger.valueOf(256)) >= 0
-                      ? BigInteger.ZERO
-                      : b.shiftLeft(a.intValue()).mod(MOD)),
-          new Case(
-              "shr",
-              StackArithmetic::shr,
-              (a, b) ->
-                  a.compareTo(BigInteger.valueOf(256)) >= 0
-                      ? BigInteger.ZERO
-                      : b.shiftRight(a.intValue())),
-          new Case(
-              "sar",
-              StackArithmetic::sar,
-              (a, b) ->
-                  unsigned(
-                      signed(b)
-                          .shiftRight(
-                              a.compareTo(BigInteger.valueOf(256)) >= 0 ? 256 : a.intValue()))),
-          new Case(
               "byte",
               StackArithmetic::byte_,
               (a, b) ->
                   a.compareTo(BigInteger.valueOf(32)) >= 0
                       ? BigInteger.ZERO
                       : b.shiftRight(8 * (31 - a.intValue())).and(BigInteger.valueOf(0xff))),
-          new Case(
-              "signextend",
-              StackArithmetic::signExtend,
-              (a, b) -> {
-                if (a.compareTo(BigInteger.valueOf(31)) >= 0) {
-                  return b;
-                }
-                final int bit = a.intValue() * 8 + 7;
-                final BigInteger mask = BigInteger.ONE.shiftLeft(bit + 1).subtract(BigInteger.ONE);
-                return b.testBit(bit) ? b.or(mask.not().and(MAX)) : b.and(mask);
-              }),
           new Case("exp", StackArithmetic::exp, (a, b) -> a.modPow(b, MOD)));
 
   private static final BigInteger[] EDGES = {

@@ -17,14 +17,17 @@ package org.hyperledger.besu.evm.v2.operation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.evm.v2.testutils.TestMessageFrameBuilderV2.getV2StackItem;
 
+import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.UInt256;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.operation.Operation.OperationResult;
 import org.hyperledger.besu.evm.v2.testutils.TestMessageFrameBuilderV2;
 
+import java.util.Arrays;
 import java.util.Random;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
 
 class PushOperationV2Test {
@@ -39,10 +42,18 @@ class PushOperationV2Test {
     return UInt256.fromBytesBE(word);
   }
 
-  private static UInt256 push(final byte[] code, final int pc, final int len) {
-    final MessageFrame frame = new TestMessageFrameBuilderV2().build();
+  /**
+   * Runs PUSH{len} at pc over the given code, with the opcode written at pc and single-byte
+   * operations before it, so that the analysis of the code finds the PUSH there.
+   */
+  private static UInt256 push(final byte[] bytes, final int pc, final int len) {
+    final byte[] code = bytes.clone();
+    Arrays.fill(code, 0, pc, (byte) 0x5b);
+    code[pc] = (byte) (PushOperationV2.PUSH_BASE + len);
+    final MessageFrame frame =
+        new TestMessageFrameBuilderV2().code(new Code(Bytes.wrap(code))).pc(pc).build();
     final OperationResult result =
-        PushOperationV2.staticOperation(frame, frame.stackDataV2(), code, pc, len);
+        PushOperationV2.staticOperation(frame, frame.stackDataV2(), pc, len);
     assertThat(result.getHaltReason()).isNull();
     assertThat(frame.stackTopV2()).isEqualTo(1);
     assertThat(frame.getPC()).isEqualTo(pc + len);
@@ -82,13 +93,15 @@ class PushOperationV2Test {
 
   @Test
   void haltsWhenTheStackIsFull() {
-    final MessageFrame frame = new TestMessageFrameBuilderV2().build();
     final byte[] code = new byte[40];
+    code[0] = 0x60;
+    final MessageFrame frame =
+        new TestMessageFrameBuilderV2().code(new Code(Bytes.wrap(code))).build();
     while (frame.stackHasSpaceV2(1)) {
       frame.setTopV2(frame.stackTopV2() + 1);
     }
     final OperationResult result =
-        PushOperationV2.staticOperation(frame, frame.stackDataV2(), code, 0, 1);
+        PushOperationV2.staticOperation(frame, frame.stackDataV2(), 0, 1);
     assertThat(result.getHaltReason()).isEqualTo(ExceptionalHaltReason.TOO_MANY_STACK_ITEMS);
   }
 }

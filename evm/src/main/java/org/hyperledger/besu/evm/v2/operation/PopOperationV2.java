@@ -14,6 +14,12 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.halt;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ran;
+
+import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -24,8 +30,6 @@ import org.hyperledger.besu.evm.operation.Operation;
  * <p>Discards the top stack item by decrementing the stack pointer. Gas cost is base tier (2).
  */
 public class PopOperationV2 extends AbstractFixedCostOperationV2 {
-
-  private static final OperationResult POP_SUCCESS = new OperationResult(2, null);
 
   /**
    * Instantiates a new Pop operation.
@@ -48,8 +52,8 @@ public class PopOperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    if (!frame.stackHasItemsV2(1)) return UNDERFLOW_RESPONSE;
-    frame.setTopV2(frame.stackTopV2() - 1);
-    return POP_SUCCESS;
+    final int sp = frame.stackTopV2();
+    final long outcome = V2LoopArms.pop(sp, ANY_GAS);
+    return outcome != FALLBACK ? ran(frame, outcome) : halt(frame, 1, 0);
   }
 }

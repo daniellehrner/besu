@@ -14,10 +14,16 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.halt;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.next;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ran;
+
+import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
-import org.hyperledger.besu.evm.v2.StackArithmetic;
 
 /**
  * EVM v2 DUP1-16 operation (opcodes 0x80–0x8F).
@@ -29,8 +35,6 @@ public class DupOperationV2 extends AbstractFixedCostOperationV2 {
 
   /** The DUP opcode base (DUP1 = 0x80, so base = 0x7F). */
   public static final int DUP_BASE = 0x7F;
-
-  static final OperationResult DUP_SUCCESS = new OperationResult(3, null);
 
   private final int index;
 
@@ -66,9 +70,8 @@ public class DupOperationV2 extends AbstractFixedCostOperationV2 {
    */
   public static OperationResult staticOperation(
       final MessageFrame frame, final long[] s, final int index) {
-    if (!frame.stackHasItemsV2(index)) return UNDERFLOW_RESPONSE;
-    if (!frame.stackHasSpaceV2(1)) return OVERFLOW_RESPONSE;
-    frame.setTopV2(StackArithmetic.dup(s, frame.stackTopV2(), index));
-    return DUP_SUCCESS;
+    final int sp = frame.stackTopV2();
+    final long outcome = V2LoopArms.dup(s, sp, next(sp), DUP_BASE + index, ANY_GAS);
+    return outcome != FALLBACK ? ran(frame, outcome) : halt(frame, index, index + 1);
   }
 }

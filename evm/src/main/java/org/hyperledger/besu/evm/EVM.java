@@ -1927,7 +1927,7 @@ public class EVM {
             0x7e,
             0x7f ->
             PushOperationV2.staticOperation(
-                frame, frame.stackDataV2(), code, pc, opcode - PushOperationV2.PUSH_BASE);
+                frame, frame.stackDataV2(), pc, opcode - PushOperationV2.PUSH_BASE);
         default -> coldOperation(frame, opcode, code, pc);
       };
     } catch (final OverflowException oe) {

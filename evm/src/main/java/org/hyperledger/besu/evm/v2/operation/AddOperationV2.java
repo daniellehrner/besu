@@ -14,7 +14,13 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import org.hyperledger.besu.evm.UInt256;
+import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.halt;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.ran;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.top;
+
+import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -27,9 +33,6 @@ import org.hyperledger.besu.evm.operation.Operation;
  * word, with overflow silently truncated (mod 2^256).
  */
 public class AddOperationV2 extends AbstractFixedCostOperationV2 {
-
-  private static final Operation.OperationResult ADD_SUCCESS =
-      new Operation.OperationResult(3, null);
 
   /**
    * Instantiates a new Add operation.
@@ -54,25 +57,8 @@ public class AddOperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static Operation.OperationResult staticOperation(final MessageFrame frame) {
-    if (!frame.stackHasItemsV2(2)) return UNDERFLOW_RESPONSE;
-    long[] stack = frame.stackDataV2();
-    int top = frame.stackTopV2();
-    final int aOffset = (top - 1) << 2;
-    final int bOffset = (top - 2) << 2;
-
-    final UInt256 valueA =
-        new UInt256(stack[aOffset], stack[aOffset + 1], stack[aOffset + 2], stack[aOffset + 3]);
-    final UInt256 valueB =
-        new UInt256(stack[bOffset], stack[bOffset + 1], stack[bOffset + 2], stack[bOffset + 3]);
-
-    final UInt256 r = valueA.add(valueB);
-
-    stack[bOffset] = r.u3();
-    stack[bOffset + 1] = r.u2();
-    stack[bOffset + 2] = r.u1();
-    stack[bOffset + 3] = r.u0();
-
-    frame.setTopV2(top - 1);
-    return ADD_SUCCESS;
+    final int sp = frame.stackTopV2();
+    final long outcome = V2LoopArms.add(frame.stackDataV2(), sp, top(sp), ANY_GAS);
+    return outcome != FALLBACK ? ran(frame, outcome) : halt(frame, 2, 1);
   }
 }
