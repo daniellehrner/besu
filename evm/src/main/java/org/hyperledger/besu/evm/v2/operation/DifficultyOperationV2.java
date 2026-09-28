@@ -19,6 +19,8 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
 
+import org.apache.tuweni.bytes.Bytes;
+
 /**
  * EVM v2 DIFFICULTY operation — pushes the block difficulty value onto the stack (pre-Paris forks).
  */
@@ -49,9 +51,15 @@ public class DifficultyOperationV2 extends AbstractFixedCostOperationV2 {
    */
   public static OperationResult staticOperation(final MessageFrame frame, final long[] stack) {
     if (!frame.stackHasSpaceV2(1)) return OVERFLOW_RESPONSE;
-    final byte[] diffBytes = frame.getBlockValues().getDifficultyBytes().toArrayUnsafe();
-    frame.setTopV2(
-        StackArithmetic.pushFromBytes(stack, frame.stackTopV2(), diffBytes, 0, diffBytes.length));
+    final Bytes difficulty = frame.getBlockValues().getDifficultyBytes();
+    // BlockValues without a block header, as the fluent EVM uses, have no value; push zero then
+    if (difficulty == null) {
+      frame.setTopV2(StackArithmetic.pushZero(stack, frame.stackTopV2()));
+    } else {
+      final byte[] diffBytes = difficulty.toArrayUnsafe();
+      frame.setTopV2(
+          StackArithmetic.pushFromBytes(stack, frame.stackTopV2(), diffBytes, 0, diffBytes.length));
+    }
     return difficultySuccess;
   }
 }

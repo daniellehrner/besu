@@ -19,6 +19,8 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
 
+import org.apache.tuweni.bytes.Bytes32;
+
 /**
  * EVM v2 PREVRANDAO (DIFFICULTY) operation — pushes the mix hash / prev randao value onto the
  * stack.
@@ -50,8 +52,14 @@ public class PrevRandaoOperationV2 extends AbstractFixedCostOperationV2 {
    */
   public static OperationResult staticOperation(final MessageFrame frame, final long[] stack) {
     if (!frame.stackHasSpaceV2(1)) return OVERFLOW_RESPONSE;
-    final byte[] randao = frame.getBlockValues().getMixHashOrPrevRandao().toArrayUnsafe();
-    frame.setTopV2(StackArithmetic.pushFromBytes(stack, frame.stackTopV2(), randao, 0, 32));
+    final Bytes32 randao = frame.getBlockValues().getMixHashOrPrevRandao();
+    // BlockValues without a block header, as the fluent EVM uses, have no value; push zero then
+    if (randao == null) {
+      frame.setTopV2(StackArithmetic.pushZero(stack, frame.stackTopV2()));
+    } else {
+      frame.setTopV2(
+          StackArithmetic.pushFromBytes(stack, frame.stackTopV2(), randao.toArrayUnsafe(), 0, 32));
+    }
     return prevRandaoSuccess;
   }
 }
