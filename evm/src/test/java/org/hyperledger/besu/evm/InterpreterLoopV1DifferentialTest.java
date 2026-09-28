@@ -49,12 +49,11 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Runs the same programs through the untraced EVM v2 interpreter loop, which keeps its state in
- * locals and executes the cheap operations inline, and through the traced loop, which executes
- * every operation through its implementation, and requires the two to end in exactly the same
- * state.
+ * Runs the same programs through the untraced interpreter loop, which keeps its state in locals and
+ * executes the frequent operations inline, and through the traced loop, which executes every
+ * operation through its implementation, and requires the two to end in exactly the same state.
  */
-class InterpreterLoopDifferentialTest {
+class InterpreterLoopV1DifferentialTest {
 
   private static final Address CONTRACT = TestMessageFrameBuilder.DEFAULT_ADDRESS;
   private static final Address CALLEE = Address.fromHexString("0xca11ee");
@@ -94,42 +93,8 @@ class InterpreterLoopDifferentialTest {
         }
       };
 
-  /**
-   * Records the outermost frame's stack as the frame completes, which is the last moment it can be
-   * read: a v2 frame hands its stack back to the pool right after. Enabled, it sends execution
-   * through the traced loop; disabled, through the untraced one, as for block import.
-   */
-  private static final class StackCapture implements OperationTracer {
-    private final boolean enabled;
-    private List<String> stack = List.of();
-
-    StackCapture(final boolean enabled) {
-      this.enabled = enabled;
-    }
-
-    @Override
-    public boolean isEnabled() {
-      return enabled;
-    }
-
-    @Override
-    public void traceContextExit(final MessageFrame frame) {
-      if (frame.getDepth() == 0) {
-        final List<String> items = new ArrayList<>();
-        final long[] s = frame.stackDataV2();
-        for (int i = 0; i < frame.stackTopV2(); i++) {
-          items.add(
-              String.format(
-                  "%016x%016x%016x%016x",
-                  s[i << 2], s[(i << 2) + 1], s[(i << 2) + 2], s[(i << 2) + 3]));
-        }
-        stack = items;
-      }
-    }
-  }
-
-  private static final boolean TRACED = true;
-  private static final boolean UNTRACED = false;
+  /** An enabled tracer that does nothing, so that execution takes the traced loop. */
+  private static final OperationTracer TRACED = new OperationTracer() {};
 
   private record Fork(String name, Function<EvmConfiguration, EVM> factory) {
     @Override
@@ -164,8 +129,7 @@ class InterpreterLoopDifferentialTest {
                                         new EvmConfiguration(
                                             32_000L,
                                             EvmConfiguration.WorldUpdaterMode.STACKED,
-                                            optimized,
-                                            true)))));
+                                            optimized)))));
   }
 
   /** Programs aimed at the edges of the inline operations: stack limits, jumps, code end, gas. */
@@ -251,12 +215,12 @@ class InterpreterLoopDifferentialTest {
   void edgeProgramsAtEveryGasLimit(final Fork fork, final boolean optimized, final EVM evm) {
     for (final Map.Entry<String, String> program : EDGE_PROGRAMS.entrySet()) {
       final Bytes code = Bytes.fromHexString(program.getValue());
-      final Outcome unlimited = run(evm, code, 10_000_000L, UNTRACED);
+      final Outcome unlimited = run(evm, code, 10_000_000L, OperationTracer.NO_TRACING);
       assertThat(run(evm, code, 10_000_000L, TRACED)).as(program.getKey()).isEqualTo(unlimited);
       final long used = 10_000_000L - unlimited.remainingGas();
       final long step = Math.max(1, used / 400);
       for (long gas = 0; gas <= used + 1; gas += step) {
-        assertThat(run(evm, code, gas, UNTRACED))
+        assertThat(run(evm, code, gas, OperationTracer.NO_TRACING))
             .as("%s with %d gas", program.getKey(), gas)
             .isEqualTo(run(evm, code, gas, TRACED));
       }
@@ -274,7 +238,7 @@ class InterpreterLoopDifferentialTest {
       final Outcome untraced;
       try {
         traced = run(evm, code, gas, TRACED);
-        untraced = run(evm, code, gas, UNTRACED);
+        untraced = run(evm, code, gas, OperationTracer.NO_TRACING);
       } catch (final RuntimeException e) {
         throw new AssertionError("program " + code.toHexString() + " with " + gas + " gas", e);
       }
@@ -321,7 +285,7 @@ class InterpreterLoopDifferentialTest {
             + "5b600060ff57" // JUMPDEST, JUMPI not taken
             + "00";
     final Bytes code = Bytes.fromHexString(arithmetic + stack);
-    final Outcome unlimited = run(evm, code, 1_000_000L, UNTRACED);
+    final Outcome unlimited = run(evm, code, 1_000_000L, OperationTracer.NO_TRACING);
     if (atLeast(evm, EvmSpecVersion.CONSTANTINOPLE)) {
       assertThat(unlimited.haltReason()).isEmpty();
       assertThat(unlimited.state()).isEqualTo(MessageFrame.State.COMPLETED_SUCCESS);
@@ -332,7 +296,7 @@ class InterpreterLoopDifferentialTest {
     assertThat(unlimited).isEqualTo(run(evm, code, 1_000_000L, TRACED));
     final long used = 1_000_000L - unlimited.remainingGas();
     for (long gas = 0; gas <= used; gas++) {
-      assertThat(run(evm, code, gas, UNTRACED))
+      assertThat(run(evm, code, gas, OperationTracer.NO_TRACING))
           .as("%d gas", gas)
           .isEqualTo(run(evm, code, gas, TRACED));
     }
@@ -352,57 +316,31 @@ class InterpreterLoopDifferentialTest {
         for (int b = 0; b < size; b++) {
           out.write(random.nextInt(3) == 0 ? 0 : random.nextInt(256));
         }
-      } else if (kind < 37) {
+      } else if (kind < 40) {
         out.write(0x80 + random.nextInt(random.nextBoolean() ? 3 : 16));
-      } else if (kind < 45) {
-        out.write(0x90 + random.nextInt(random.nextBoolean() ? 3 : 16));
       } else if (kind < 50) {
+        out.write(0x90 + random.nextInt(random.nextBoolean() ? 3 : 16));
+      } else if (kind < 57) {
         out.write(0x50);
-      } else if (kind < 56) {
+      } else if (kind < 64) {
         jumpTargets.add(out.size());
         out.write(0x5b);
-      } else if (kind < 63) {
+      } else if (kind < 72) {
         // PUSH2 destination, patched below, then JUMP or JUMPI
         jumpSites.add(out.size());
         out.write(0x61);
         out.write(0);
         out.write(0);
         out.write(random.nextBoolean() ? 0x56 : 0x57);
-      } else if (kind < 66) {
+      } else if (kind < 75) {
         out.write(random.nextBoolean() ? 0x56 : 0x57);
-      } else if (kind < 80) {
+      } else if (kind < 93) {
         final int[] arithmetic = {
           0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x10, 0x11, 0x12,
           0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x51, 0x52,
           0x53, 0x58, 0x59, 0x5a, 0x35, 0x36
         };
         out.write(arithmetic[random.nextInt(arithmetic.length)]);
-      } else if (kind < 84) {
-        // a small operand first, so that shifts, BYTE and SIGNEXTEND see in-range arguments
-        out.write(0x60);
-        out.write(random.nextInt(random.nextBoolean() ? 40 : 300) & 0xff);
-        final int[] small = {0x0b, 0x1a, 0x1b, 0x1c, 0x1d, 0x04, 0x06, 0x02, 0x05, 0x07};
-        out.write(small[random.nextInt(small.length)]);
-      } else if (kind < 89) {
-        final int[] environment = {
-          0x30, 0x32, 0x33, 0x34, 0x35, 0x36, 0x38, 0x3a, 0x3d, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46,
-          0x47, 0x48, 0x4a, 0x4b, 0x58, 0x59, 0x5a
-        };
-        out.write(environment[random.nextInt(environment.length)]);
-      } else if (kind < 94) {
-        // memory at small offsets, so that most accesses need no expansion
-        final int op = new int[] {0x51, 0x52, 0x53}[random.nextInt(3)];
-        if (op != 0x51) {
-          out.write(0x60);
-          out.write(random.nextInt(256));
-        }
-        out.write(0x60);
-        out.write(random.nextInt(100));
-        out.write(op);
-      } else if (kind < 96) {
-        // DUPN, SWAPN, EXCHANGE and their immediate
-        out.write(0xe6 + random.nextInt(3));
-        out.write(random.nextInt(256));
       } else {
         out.write(random.nextInt(256));
       }
@@ -428,8 +366,7 @@ class InterpreterLoopDifferentialTest {
   }
 
   private static Outcome run(
-      final EVM evm, final Bytes code, final long gas, final boolean traced) {
-    final StackCapture tracer = new StackCapture(traced);
+      final EVM evm, final Bytes code, final long gas, final OperationTracer tracer) {
     final ToyWorld world = new ToyWorld();
     final WorldUpdater setup = world.updater();
     setup.getOrCreate(CONTRACT).setBalance(Wei.of(1_000_000));
@@ -451,6 +388,10 @@ class InterpreterLoopDifferentialTest {
     while (!frames.isEmpty()) {
       processor.process(frames.peekFirst(), tracer);
     }
+    final List<String> stack = new ArrayList<>();
+    for (int i = frame.stackSize() - 1; i >= 0; i--) {
+      stack.add(frame.getStackItem(i).toHexString());
+    }
     return new Outcome(
         frame.getState(),
         frame
@@ -459,7 +400,7 @@ class InterpreterLoopDifferentialTest {
             .orElse(""),
         frame.getRemainingGas(),
         frame.getPC(),
-        tracer.stack,
+        stack,
         frame.shadowReadMemory(0, frame.memoryByteSize()).toHexString(),
         frame.getOutputData().toHexString(),
         frame.getReturnData().toHexString(),
