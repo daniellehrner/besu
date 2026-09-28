@@ -113,7 +113,7 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
       this.worldStateUpdater = worldStateUpdater;
       this.addressHasher = addressHasher;
       this.sink = bonsai.isStorageFrozen() ? new FrozenSink() : new PersistingSink(writes);
-      this.committedNodes = new CommittedNodeBatch();
+      this.committedNodes = bonsai.newCommittedNodeBatch();
     }
 
     Hash executeInto(final List<StateRootComputations.UpdaterWrite> writeSink) {

@@ -43,6 +43,11 @@ public class NoOpBonsaiCachedMerkleTrieLoader extends BonsaiCachedMerkleTrieLoad
   }
 
   @Override
+  public CommittedNodeBatch newCommittedNodeBatch() {
+    return CommittedNodeBatch.DISABLED;
+  }
+
+  @Override
   public void cacheCommittedNodes(final CommittedNodeBatch batch) {
     // noop
   }

@@ -30,17 +30,33 @@ import org.apache.tuweni.bytes.Bytes32;
  * concurrently and would contend on the cache's segment locks.
  */
 public class CommittedNodeBatch {
+  /** Handed out by a disabled loader, so nothing is collected that would be dropped anyway. */
+  static final CommittedNodeBatch DISABLED = new CommittedNodeBatch(false);
+
+  private final boolean enabled;
   private final ConcurrentLinkedQueue<Map.Entry<Bytes32, Bytes>> accountNodes =
       new ConcurrentLinkedQueue<>();
   private final ConcurrentLinkedQueue<Map.Entry<Bytes32, Bytes>> storageNodes =
       new ConcurrentLinkedQueue<>();
 
+  CommittedNodeBatch() {
+    this(true);
+  }
+
+  private CommittedNodeBatch(final boolean enabled) {
+    this.enabled = enabled;
+  }
+
   public void addAccountNode(final Bytes32 nodeHash, final Bytes node) {
-    accountNodes.add(Map.entry(nodeHash, node));
+    if (enabled) {
+      accountNodes.add(Map.entry(nodeHash, node));
+    }
   }
 
   public void addStorageNode(final Bytes32 nodeHash, final Bytes node) {
-    storageNodes.add(Map.entry(nodeHash, node));
+    if (enabled) {
+      storageNodes.add(Map.entry(nodeHash, node));
+    }
   }
 
   boolean isEmpty() {

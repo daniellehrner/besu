@@ -88,7 +88,8 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
               (location, hash) -> {
                 Optional<Bytes> node =
                     getAccountStateTrieNode(worldStateKeyValueStorage, location, hash);
-                node.ifPresent(bytes -> accountNodes.put(hash, bytes));
+                // hash is a slice of the parent node's RLP; copy it so the key doesn't pin that
+                node.ifPresent(bytes -> accountNodes.put(hash.copy(), bytes));
                 return node;
               },
               Bytes32.wrap(worldStateRootHash.getBytes()),
@@ -129,7 +130,7 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
                             Optional<Bytes> node =
                                 getAccountStorageTrieNode(
                                     worldStateKeyValueStorage, accountHash, location, hash);
-                            node.ifPresent(bytes -> storageNodes.put(hash, bytes));
+                            node.ifPresent(bytes -> storageNodes.put(hash.copy(), bytes));
                             return node;
                           },
                           Bytes32.wrap(Hash.hash(storageRoot).getBytes()),
@@ -143,6 +144,11 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
     } finally {
       worldStateKeyValueStorage.unSubscribe(storageSubscriberId);
     }
+  }
+
+  /** Returns a batch for collecting the nodes committed by one state root computation. */
+  public CommittedNodeBatch newCommittedNodeBatch() {
+    return new CommittedNodeBatch();
   }
 
   /** Adds the batch to the node cache on a background thread. */

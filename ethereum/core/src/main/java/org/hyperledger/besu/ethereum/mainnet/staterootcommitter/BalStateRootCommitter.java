@@ -245,7 +245,7 @@ public final class BalStateRootCommitter implements StateRootCommitter {
       this.worldState = worldState;
       this.accountLookup = accountLookup;
       this.sink = storageFrozen ? new FrozenSink() : new PersistingSink(writes);
-      this.committedNodes = new CommittedNodeBatch();
+      this.committedNodes = worldState.newCommittedNodeBatch();
     }
 
     /**

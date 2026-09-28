@@ -101,7 +101,7 @@ class BonsaiCachedMerkleTrieLoaderTest {
     final Bytes storageNode = Bytes.fromHexString("0xc58320bbbb02");
     final Bytes32 accountNodeHash = Bytes32.wrap(Hash.hash(accountNode).getBytes());
     final Bytes32 storageNodeHash = Bytes32.wrap(Hash.hash(storageNode).getBytes());
-    final CommittedNodeBatch batch = new CommittedNodeBatch();
+    final CommittedNodeBatch batch = merkleTrieLoader.newCommittedNodeBatch();
     batch.addAccountNode(accountNodeHash, accountNode);
     batch.addStorageNode(storageNodeHash, storageNode);
     merkleTrieLoader.cacheCommittedNodesNow(batch);
@@ -118,6 +118,16 @@ class BonsaiCachedMerkleTrieLoaderTest {
             merkleTrieLoader.getAccountStorageTrieNode(
                 emptyStorage, accounts.get(0).addressHash(), Bytes.EMPTY, storageNodeHash))
         .contains(storageNode);
+  }
+
+  @Test
+  void disabledLoaderShouldNotCollectCommittedNodes() {
+    final CommittedNodeBatch batch = new NoOpBonsaiCachedMerkleTrieLoader().newCommittedNodeBatch();
+    final Bytes node = Bytes.fromHexString("0xc58320aaaa01");
+    batch.addAccountNode(Bytes32.wrap(Hash.hash(node).getBytes()), node);
+    batch.addStorageNode(Bytes32.wrap(Hash.hash(node).getBytes()), node);
+
+    assertThat(batch.isEmpty()).isTrue();
   }
 
   @Test

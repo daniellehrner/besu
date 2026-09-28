@@ -223,6 +223,15 @@ public class BonsaiWorldState extends PathBasedWorldState {
     this.bonsaiCachedMerkleTrieLoader = new NoOpBonsaiCachedMerkleTrieLoader();
   }
 
+  /**
+   * Returns a batch for the trie nodes a state root computation commits. If the loader is disabled
+   * (the BAL committer's parent world state, and the head world state from Amsterdam on) the batch
+   * collects nothing, so committed nodes only reach the node cache before Amsterdam.
+   */
+  public CommittedNodeBatch newCommittedNodeBatch() {
+    return bonsaiCachedMerkleTrieLoader.newCommittedNodeBatch();
+  }
+
   /** Hands trie nodes produced by a state root computation to the node cache, if there is one. */
   public void cacheCommittedNodes(final CommittedNodeBatch batch) {
     if (bonsaiCachedMerkleTrieLoader != null) {
