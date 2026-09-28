@@ -2588,9 +2588,7 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
                     besuPluginContext.stopPlugins();
                     runner.close();
                     // Only once nothing imports blocks any more: a clean close trims the code log.
-                    if (mmapCodeStoragePlugin != null) {
-                      mmapCodeStoragePlugin.stop();
-                    }
+                    stopMmapCodeStorage();
                     LogConfigurator.shutdown();
                   } catch (final Exception e) {
                     logger.error("Failed to stop Besu");
@@ -2732,6 +2730,13 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
    */
   public Path dataDir() {
     return dataPath.toAbsolutePath();
+  }
+
+  /** Closes the mmap code store, if one is open. Subcommands call this once their work is done. */
+  public void stopMmapCodeStorage() {
+    if (mmapCodeStoragePlugin != null) {
+      mmapCodeStoragePlugin.stop();
+    }
   }
 
   private SecurityModule securityModule() {

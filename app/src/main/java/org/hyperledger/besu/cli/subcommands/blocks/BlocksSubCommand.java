@@ -253,6 +253,7 @@ public class BlocksSubCommand implements Runnable {
           parentCommand.parentCommand.run();
         }
       } finally {
+        parentCommand.parentCommand.stopMmapCodeStorage();
         metricsService.ifPresent(MetricsService::stop);
       }
     }
@@ -389,6 +390,7 @@ public class BlocksSubCommand implements Runnable {
         throw new ExecutionException(
             spec.commandLine(), "An error occurred while exporting blocks.", e);
       } finally {
+        parentCommand.parentCommand.stopMmapCodeStorage();
         metricsService.ifPresent(MetricsService::stop);
       }
     }
