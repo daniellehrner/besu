@@ -1786,10 +1786,11 @@ public class EVM {
     }
   }
 
+  // Called from the untraced loop's arms, so it has to stay within C2's MaxInlineSize of 35 bytes
+  // of bytecode; one unsigned comparison is the range check 0 <= destination < codeSize.
   static boolean isJumpDestination(
       final long[] jumpDestBitMask, final long destination, final int codeSize) {
-    return destination >= 0
-        && destination < codeSize
+    return Long.compareUnsigned(destination, codeSize) < 0
         && (jumpDestBitMask[(int) (destination >>> 6)] & 1L << destination) != 0L;
   }
 
