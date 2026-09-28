@@ -504,6 +504,16 @@ public class MessageFrame {
     return stack;
   }
 
+  /**
+   * Returns the operand stack itself, for the interpreter loop to work on its entries in place.
+   * Everything else goes through the stack accessors of the frame.
+   *
+   * @return the operand stack
+   */
+  public OperandStack operandStack() {
+    return stack();
+  }
+
   // region --- EVM v2 long[] stack operations ---
   // ---------------------------------------------------------------------------
 

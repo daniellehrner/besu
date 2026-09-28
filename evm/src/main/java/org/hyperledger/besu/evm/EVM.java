@@ -25,6 +25,7 @@ import org.hyperledger.besu.evm.frame.MessageFrame.State;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.evm.internal.JumpDestOnlyCodeCache;
+import org.hyperledger.besu.evm.internal.OperandStack;
 import org.hyperledger.besu.evm.internal.OverflowException;
 import org.hyperledger.besu.evm.internal.UnderflowException;
 import org.hyperledger.besu.evm.log.EIP7708TransferLogEmitter;
@@ -42,6 +43,7 @@ import org.hyperledger.besu.evm.operation.DivOperation;
 import org.hyperledger.besu.evm.operation.DivOperationOptimized;
 import org.hyperledger.besu.evm.operation.DupNOperation;
 import org.hyperledger.besu.evm.operation.DupOperation;
+import org.hyperledger.besu.evm.operation.EqOperation;
 import org.hyperledger.besu.evm.operation.ExchangeOperation;
 import org.hyperledger.besu.evm.operation.ExpOperation;
 import org.hyperledger.besu.evm.operation.GtOperation;
@@ -204,9 +206,9 @@ public class EVM {
   protected static final OperationResult UNDERFLOW_RESPONSE =
       new OperationResult(0L, ExceptionalHaltReason.INSUFFICIENT_STACK_ITEMS);
 
-  // The costs the untraced v2 loop charges for the operations it runs inline, the same numbers the
-  // v2 operations' results carry. Constants rather than fields of the gas calculator: as fields
-  // they are loads C2 hoists to the loop's dispatch, where they run for every operation.
+  // The costs the untraced loops charge for the operations they run inline, the same numbers the
+  // operations' results carry. Constants rather than fields of the gas calculator: as fields they
+  // are loads C2 hoists to the loop's dispatch, where they run for every operation.
   private static final long BASE_TIER_GAS = 2L;
   private static final long VERY_LOW_TIER_GAS = 3L;
   private static final long LOW_TIER_GAS = 5L;
@@ -217,6 +219,34 @@ public class EVM {
   // Reads and writes a big-endian word of a byte array, as memory and input data hold them.
   private static final VarHandle LONG_BE =
       MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
+
+  // The values PUSH1 and PUSH2 put on the stack, shared by all code so that the loop pushes them
+  // without allocating. PUSH2 values are added as they are first executed.
+  private static final Bytes[] PUSH1_VALUES = new Bytes[256];
+  private static final Bytes[] PUSH2_VALUES = new Bytes[1 << 16];
+  private static final Bytes ONE;
+
+  // The classes Bytes.wrap gives an array of 32 bytes and of any other length, which is what PUSH
+  // and the comparison operations leave on the stack. An item known to be exactly one of them is
+  // read without calling through the Bytes interface.
+  private static final Class<?> WRAPPED_BYTES;
+  private static final Class<?> WRAPPED_BYTES_32;
+
+  // What EQ leaves on the stack, the instances EqOperation uses.
+  private static final Bytes EQUAL = org.apache.tuweni.units.bigints.UInt256.ONE;
+  private static final Bytes NOT_EQUAL = org.apache.tuweni.units.bigints.UInt256.ZERO;
+
+  // What compare returns for items it cannot read.
+  private static final int INCOMPARABLE = Integer.MIN_VALUE;
+
+  static {
+    for (int i = 0; i < PUSH1_VALUES.length; i++) {
+      PUSH1_VALUES[i] = Bytes.wrap(new byte[] {(byte) i});
+    }
+    ONE = PUSH1_VALUES[1];
+    WRAPPED_BYTES = ONE.getClass();
+    WRAPPED_BYTES_32 = Bytes.wrap(new byte[32]).getClass();
+  }
 
   private final OperationRegistry operations;
   private final GasCalculator gasCalculator;
@@ -378,13 +408,287 @@ public class EVM {
     }
     evmSpecVersion.maybeWarnVersion();
 
-    byte[] code = frame.getCode().getBytes().toArrayUnsafe();
-    Operation[] operationArray = operations.getOperations();
-    frame.setRecordUpdatesForTracer(operationTracer.isEnabled());
-    while (frame.getState() == MessageFrame.State.CODE_EXECUTING) {
-      Operation currentOperation;
-      int opcode;
-      int pc = frame.getPC();
+    final boolean traced = operationTracer.isEnabled();
+    frame.setRecordUpdatesForTracer(traced);
+    if (traced) {
+      runToHaltTraced(frame, operationTracer);
+    } else {
+      runToHaltUntraced(frame);
+    }
+  }
+
+  /**
+   * The interpreter loop for untraced execution, which is every block import. It keeps the program
+   * counter, the remaining gas and the operand stack in locals and executes the most frequent
+   * operations inline, about three quarters of all operations executed on mainnet. Everything else,
+   * and every inline operation that would halt, goes through {@link #executeOperation} with the
+   * state handed back to the frame, so halting behaviour is defined in one place for both loops.
+   *
+   * <p>The inline operations neither allocate nor call anything C2 does not inline, because one
+   * allocation or call in them is enough for C2 to keep all of the loop's locals in memory rather
+   * than in registers, which costs more than the dispatch itself.
+   */
+  private void runToHaltUntraced(final MessageFrame frame) {
+    final Code codeObject = frame.getCode();
+    final byte[] code = codeObject.getBytes().toArrayUnsafe();
+    final long[] jumpDestinations = codeObject.jumpDestinations();
+    final Operation[] operationArray = operations.getOperations();
+    final OperandStack stack = frame.operandStack();
+    final boolean shanghai = enableShanghai;
+    // EQ is taken from the registry, so it runs inline only while the registry holds the standard
+    // operation; otherwise its cost is one no frame can pay.
+    final long eqGas =
+        operationArray[0x14] instanceof EqOperation eq && eq.getClass() == EqOperation.class
+            ? eq.getGasCost()
+            : Long.MAX_VALUE;
+    Object[] s = stack.entries();
+    int top = stack.top();
+    int pc = frame.getPC();
+    long gas = frame.getRemainingGas();
+
+    while (true) {
+      final int opcode = pc < code.length ? code[pc] & 0xff : 0;
+      switch (opcode) {
+        case 0x60 -> { // PUSH1
+          if (pc + 1 < code.length && top + 1 < s.length && gas >= VERY_LOW_TIER_GAS) {
+            s[++top] = PUSH1_VALUES[code[pc + 1] & 0xff];
+            gas -= VERY_LOW_TIER_GAS;
+            pc += 2;
+            continue;
+          }
+        }
+        case 0x80, // DUP1-16
+            0x81,
+            0x82,
+            0x83,
+            0x84,
+            0x85,
+            0x86,
+            0x87,
+            0x88,
+            0x89,
+            0x8a,
+            0x8b,
+            0x8c,
+            0x8d,
+            0x8e,
+            0x8f -> {
+          final int from = top - (opcode - DupOperation.DUP_BASE) + 1;
+          if (from >= 0 && top + 1 < s.length && gas >= VERY_LOW_TIER_GAS) {
+            s[top + 1] = s[from];
+            top++;
+            gas -= VERY_LOW_TIER_GAS;
+            pc++;
+            continue;
+          }
+        }
+        case 0x90, // SWAP1-16
+            0x91,
+            0x92,
+            0x93,
+            0x94,
+            0x95,
+            0x96,
+            0x97,
+            0x98,
+            0x99,
+            0x9a,
+            0x9b,
+            0x9c,
+            0x9d,
+            0x9e,
+            0x9f -> {
+          final int other = top - (opcode - SWAP_BASE);
+          if (other >= 0 && gas >= VERY_LOW_TIER_GAS) {
+            final Object value = s[top];
+            s[top] = s[other];
+            s[other] = value;
+            gas -= VERY_LOW_TIER_GAS;
+            pc++;
+            continue;
+          }
+        }
+        case 0x61 -> { // PUSH2, and the PUSH2 JUMP and PUSH2 JUMPI that follow it
+          if (pc + 2 < code.length && top + 1 < s.length && gas >= VERY_LOW_TIER_GAS) {
+            final int immediate = (code[pc + 1] & 0xff) << 8 | (code[pc + 2] & 0xff);
+            final int next = pc + 3 < code.length ? code[pc + 3] & 0xff : 0;
+            if (next == 0x56
+                && gas >= VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS
+                && isJumpDestination(jumpDestinations, immediate, code.length)) {
+              // PUSH2 JUMP JUMPDEST, without the destination going through the stack
+              gas -= VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS;
+              pc = immediate + 1;
+              continue;
+            }
+            if (next == 0x57 && top >= 0 && gas >= VERY_LOW_TIER_GAS + HIGH_TIER_GAS) {
+              final int condition = truth(s[top]);
+              if (condition == 0) {
+                // PUSH2 JUMPI, not taken
+                s[top--] = null;
+                gas -= VERY_LOW_TIER_GAS + HIGH_TIER_GAS;
+                pc += 4;
+                continue;
+              }
+              if (condition > 0
+                  && gas >= VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS
+                  && isJumpDestination(jumpDestinations, immediate, code.length)) {
+                // PUSH2 JUMPI JUMPDEST, taken
+                s[top--] = null;
+                gas -= VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS;
+                pc = immediate + 1;
+                continue;
+              }
+            }
+            final Bytes value = PUSH2_VALUES[immediate];
+            if (value != null) {
+              s[++top] = value;
+              gas -= VERY_LOW_TIER_GAS;
+              pc += 3;
+              continue;
+            }
+          }
+        }
+        case 0x5b -> { // JUMPDEST
+          if (gas >= JUMPDEST_GAS) {
+            gas -= JUMPDEST_GAS;
+            pc++;
+            continue;
+          }
+        }
+        case 0x50 -> { // POP
+          if (top >= 0 && gas >= BASE_TIER_GAS) {
+            s[top--] = null;
+            gas -= BASE_TIER_GAS;
+            pc++;
+            continue;
+          }
+        }
+        case 0x57 -> { // JUMPI
+          if (top >= 1 && gas >= HIGH_TIER_GAS) {
+            final int condition = truth(s[top - 1]);
+            if (condition == 0) {
+              s[top--] = null;
+              s[top--] = null;
+              gas -= HIGH_TIER_GAS;
+              pc++;
+              continue;
+            }
+            final int destination = jumpDestination(s[top]);
+            if (condition > 0
+                && gas >= HIGH_TIER_GAS + JUMPDEST_GAS
+                && isJumpDestination(jumpDestinations, destination, code.length)) {
+              // and the JUMPDEST it lands on
+              s[top--] = null;
+              s[top--] = null;
+              gas -= HIGH_TIER_GAS + JUMPDEST_GAS;
+              pc = destination + 1;
+              continue;
+            }
+          }
+        }
+        case 0x56 -> { // JUMP, and the JUMPDEST it lands on
+          if (top >= 0 && gas >= MID_TIER_GAS + JUMPDEST_GAS) {
+            final int destination = jumpDestination(s[top]);
+            if (isJumpDestination(jumpDestinations, destination, code.length)) {
+              s[top--] = null;
+              gas -= MID_TIER_GAS + JUMPDEST_GAS;
+              pc = destination + 1;
+              continue;
+            }
+          }
+        }
+        case 0x14 -> { // EQ
+          if (top >= 1 && gas >= eqGas) {
+            final int comparison = compare(s[top], s[top - 1]);
+            if (comparison != INCOMPARABLE) {
+              s[top--] = null;
+              s[top] = comparison == 0 ? EQUAL : NOT_EQUAL;
+              gas -= eqGas;
+              pc++;
+              continue;
+            }
+          }
+        }
+        case 0x10 -> { // LT
+          if (top >= 1 && gas >= VERY_LOW_TIER_GAS) {
+            final int comparison = compare(s[top], s[top - 1]);
+            if (comparison != INCOMPARABLE) {
+              s[top--] = null;
+              s[top] = comparison < 0 ? ONE : Bytes.EMPTY;
+              gas -= VERY_LOW_TIER_GAS;
+              pc++;
+              continue;
+            }
+          }
+        }
+        case 0x11 -> { // GT
+          if (top >= 1 && gas >= VERY_LOW_TIER_GAS) {
+            final int comparison = compare(s[top], s[top - 1]);
+            if (comparison != INCOMPARABLE) {
+              s[top--] = null;
+              s[top] = comparison > 0 ? ONE : Bytes.EMPTY;
+              gas -= VERY_LOW_TIER_GAS;
+              pc++;
+              continue;
+            }
+          }
+        }
+        case 0x15 -> { // ISZERO
+          if (top >= 0 && gas >= VERY_LOW_TIER_GAS) {
+            final int value = truth(s[top]);
+            if (value >= 0) {
+              s[top] = value == 0 ? ONE : Bytes.EMPTY;
+              gas -= VERY_LOW_TIER_GAS;
+              pc++;
+              continue;
+            }
+          }
+        }
+        case 0x5f -> { // PUSH0
+          if (shanghai && top + 1 < s.length && gas >= BASE_TIER_GAS) {
+            s[++top] = Bytes.EMPTY;
+            gas -= BASE_TIER_GAS;
+            pc++;
+            continue;
+          }
+        }
+        default -> {
+          // everything else goes through executeOperation below
+        }
+      }
+
+      stack.setTop(top);
+      frame.setPC(pc);
+      frame.setGasRemaining(gas);
+      final Operation currentOperation =
+          pc < code.length ? operationArray[opcode] : endOfScriptStop;
+      completeOperation(frame, executeOperation(frame, code, pc, opcode, currentOperation));
+      if (frame.getState() != State.CODE_EXECUTING) {
+        return;
+      }
+      if (opcode == 0x61) {
+        // A PUSH2 missing from the table. Its position comes from the frame, and the locals are
+        // loaded below, so that none of them is live across a call.
+        cachePush2(code, frame.getPC() - 3);
+      }
+      s = stack.entries();
+      top = stack.top();
+      pc = frame.getPC();
+      gas = frame.getRemainingGas();
+    }
+  }
+
+  /**
+   * The interpreter loop for traced execution, which calls the tracer around every operation and
+   * therefore keeps all state in the frame, where the tracer reads it.
+   */
+  private void runToHaltTraced(final MessageFrame frame, final OperationTracer operationTracer) {
+    final byte[] code = frame.getCode().getBytes().toArrayUnsafe();
+    final Operation[] operationArray = operations.getOperations();
+    while (frame.getState() == State.CODE_EXECUTING) {
+      final int pc = frame.getPC();
+      final int opcode;
+      final Operation currentOperation;
       if (pc < code.length) {
         opcode = code[pc] & 0xff;
         currentOperation = operationArray[opcode];
@@ -394,211 +698,348 @@ public class EVM {
       }
       frame.setCurrentOperation(currentOperation);
       operationTracer.tracePreExecution(frame);
-
-      OperationResult result;
-      try {
-        result =
-            switch (opcode) {
-              case 0x00 -> StopOperation.staticOperation(frame);
-              case 0x01 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? AddOperationOptimized.staticOperation(frame)
-                      : AddOperation.staticOperation(frame);
-              case 0x02 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? MulOperationOptimized.staticOperation(frame)
-                      : MulOperation.staticOperation(frame);
-              case 0x03 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? SubOperationOptimized.staticOperation(frame)
-                      : SubOperation.staticOperation(frame);
-              case 0x04 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? DivOperationOptimized.staticOperation(frame)
-                      : DivOperation.staticOperation(frame);
-              case 0x05 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? SDivOperationOptimized.staticOperation(frame)
-                      : SDivOperation.staticOperation(frame);
-              case 0x06 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? ModOperationOptimized.staticOperation(frame)
-                      : ModOperation.staticOperation(frame);
-              case 0x07 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? SModOperationOptimized.staticOperation(frame)
-                      : SModOperation.staticOperation(frame);
-              case 0x08 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? AddModOperationOptimized.staticOperation(frame)
-                      : AddModOperation.staticOperation(frame);
-              case 0x09 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? MulModOperationOptimized.staticOperation(frame)
-                      : MulModOperation.staticOperation(frame);
-              case 0x0a -> ExpOperation.staticOperation(frame, gasCalculator);
-              case 0x0b -> SignExtendOperation.staticOperation(frame);
-              case 0x0c, 0x0d, 0x0e, 0x0f -> InvalidOperation.invalidOperationResult(opcode);
-              case 0x10 -> LtOperation.staticOperation(frame);
-              case 0x11 -> GtOperation.staticOperation(frame);
-              case 0x12 -> SLtOperation.staticOperation(frame);
-              case 0x13 -> SGtOperation.staticOperation(frame);
-              case 0x15 -> IsZeroOperation.staticOperation(frame);
-              case 0x16 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? AndOperationOptimized.staticOperation(frame)
-                      : AndOperation.staticOperation(frame);
-              case 0x17 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? OrOperationOptimized.staticOperation(frame)
-                      : OrOperation.staticOperation(frame);
-              case 0x18 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? XorOperationOptimized.staticOperation(frame)
-                      : XorOperation.staticOperation(frame);
-              case 0x19 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? NotOperationOptimized.staticOperation(frame)
-                      : NotOperation.staticOperation(frame);
-              case 0x1a -> ByteOperation.staticOperation(frame);
-              case 0x1b ->
-                  enableConstantinople
-                      ? shiftOperation(
-                          frame,
-                          ShlOperation::staticOperation,
-                          ShlOperationOptimized::staticOperation)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x1c ->
-                  enableConstantinople
-                      ? shiftOperation(
-                          frame,
-                          ShrOperation::staticOperation,
-                          ShrOperationOptimized::staticOperation)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x1d ->
-                  enableConstantinople
-                      ? shiftOperation(
-                          frame,
-                          SarOperation::staticOperation,
-                          SarOperationOptimized::staticOperation)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x1e ->
-                  enableOsaka
-                      ? CountLeadingZerosOperation.staticOperation(frame)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x50 -> PopOperation.staticOperation(frame);
-              case 0x56 -> JumpOperation.staticOperation(frame);
-              case 0x57 -> JumpiOperation.staticOperation(frame);
-              case 0x5b -> JumpDestOperation.JUMPDEST_SUCCESS;
-              case 0x5f ->
-                  enableShanghai
-                      ? Push0Operation.staticOperation(frame)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x60, // PUSH1-32
-                  0x61,
-                  0x62,
-                  0x63,
-                  0x64,
-                  0x65,
-                  0x66,
-                  0x67,
-                  0x68,
-                  0x69,
-                  0x6a,
-                  0x6b,
-                  0x6c,
-                  0x6d,
-                  0x6e,
-                  0x6f,
-                  0x70,
-                  0x71,
-                  0x72,
-                  0x73,
-                  0x74,
-                  0x75,
-                  0x76,
-                  0x77,
-                  0x78,
-                  0x79,
-                  0x7a,
-                  0x7b,
-                  0x7c,
-                  0x7d,
-                  0x7e,
-                  0x7f ->
-                  PushOperation.staticOperation(frame, code, pc, opcode - PUSH_BASE);
-              case 0x80, // DUP1-16
-                  0x81,
-                  0x82,
-                  0x83,
-                  0x84,
-                  0x85,
-                  0x86,
-                  0x87,
-                  0x88,
-                  0x89,
-                  0x8a,
-                  0x8b,
-                  0x8c,
-                  0x8d,
-                  0x8e,
-                  0x8f ->
-                  DupOperation.staticOperation(frame, opcode - DupOperation.DUP_BASE);
-              case 0x90, // SWAP1-16
-                  0x91,
-                  0x92,
-                  0x93,
-                  0x94,
-                  0x95,
-                  0x96,
-                  0x97,
-                  0x98,
-                  0x99,
-                  0x9a,
-                  0x9b,
-                  0x9c,
-                  0x9d,
-                  0x9e,
-                  0x9f ->
-                  SwapOperation.staticOperation(frame, opcode - SWAP_BASE);
-              case 0xe6 -> // DUPN (EIP-8024)
-                  enableAmsterdam
-                      ? DupNOperation.staticOperation(frame, code, pc)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0xe7 -> // SWAPN (EIP-8024)
-                  enableAmsterdam
-                      ? SwapNOperation.staticOperation(frame, code, pc)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0xe8 -> // EXCHANGE (EIP-8024)
-                  enableAmsterdam
-                      ? ExchangeOperation.staticOperation(frame, code, pc)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              default -> { // unoptimized operations
-                frame.setCurrentOperation(currentOperation);
-                yield currentOperation.execute(frame, this);
-              }
-            };
-      } catch (final OverflowException oe) {
-        result = OVERFLOW_RESPONSE;
-      } catch (final UnderflowException ue) {
-        result = UNDERFLOW_RESPONSE;
-      }
-      final ExceptionalHaltReason haltReason = result.getHaltReason();
-      if (haltReason != null) {
-        LOG.trace("MessageFrame evaluation halted because of {}", haltReason);
-        frame.setExceptionalHaltReason(Optional.of(haltReason));
-        frame.setState(State.EXCEPTIONAL_HALT);
-      } else if (frame.decrementRemainingGas(result.getGasCost()) < 0) {
-        frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
-        frame.setState(State.EXCEPTIONAL_HALT);
-      }
-      if (frame.getState() == State.CODE_EXECUTING) {
-        final int currentPC = frame.getPC();
-        final int opSize = result.getPcIncrement();
-        frame.setPC(currentPC + opSize);
-      }
+      final OperationResult result = executeOperation(frame, code, pc, opcode, currentOperation);
+      completeOperation(frame, result);
       operationTracer.tracePostExecution(frame, result);
     }
+  }
+
+  /**
+   * Executes one operation against the state held in the frame.
+   *
+   * @param frame the frame
+   * @param code the code being executed
+   * @param pc the program counter
+   * @param opcode the operation code, 0 past the end of the code
+   * @param currentOperation the operation registered for the code, or the implicit STOP past its
+   *     end
+   * @return the result of the operation
+   */
+  private OperationResult executeOperation(
+      final MessageFrame frame,
+      final byte[] code,
+      final int pc,
+      final int opcode,
+      final Operation currentOperation) {
+    try {
+      return switch (opcode) {
+        case 0x00 -> StopOperation.staticOperation(frame);
+        case 0x01 ->
+            evmConfiguration.enableOptimizedOpcodes()
+                ? AddOperationOptimized.staticOperation(frame)
+                : AddOperation.staticOperation(frame);
+        case 0x02 ->
+            evmConfiguration.enableOptimizedOpcodes()
+                ? MulOperationOptimized.staticOperation(frame)
+                : MulOperation.staticOperation(frame);
+        case 0x03 ->
+            evmConfiguration.enableOptimizedOpcodes()
+                ? SubOperationOptimized.staticOperation(frame)
+                : SubOperation.staticOperation(frame);
+        case 0x04 ->
+            evmConfiguration.enableOptimizedOpcodes()
+                ? DivOperationOptimized.staticOperation(frame)
+                : DivOperation.staticOperation(frame);
+        case 0x05 ->
+            evmConfiguration.enableOptimizedOpcodes()
+                ? SDivOperationOptimized.staticOperation(frame)
+                : SDivOperation.staticOperation(frame);
+        case 0x06 ->
+            evmConfiguration.enableOptimizedOpcodes()
+                ? ModOperationOptimized.staticOperation(frame)
+                : ModOperation.staticOperation(frame);
+        case 0x07 ->
+            evmConfiguration.enableOptimizedOpcodes()
+                ? SModOperationOptimized.staticOperation(frame)
+                : SModOperation.staticOperation(frame);
+        case 0x08 ->
+            evmConfiguration.enableOptimizedOpcodes()
+                ? AddModOperationOptimized.staticOperation(frame)
+                : AddModOperation.staticOperation(frame);
+        case 0x09 ->
+            evmConfiguration.enableOptimizedOpcodes()
+                ? MulModOperationOptimized.staticOperation(frame)
+                : MulModOperation.staticOperation(frame);
+        case 0x0a -> ExpOperation.staticOperation(frame, gasCalculator);
+        case 0x0b -> SignExtendOperation.staticOperation(frame);
+        case 0x0c, 0x0d, 0x0e, 0x0f -> InvalidOperation.invalidOperationResult(opcode);
+        case 0x10 -> LtOperation.staticOperation(frame);
+        case 0x11 -> GtOperation.staticOperation(frame);
+        case 0x12 -> SLtOperation.staticOperation(frame);
+        case 0x13 -> SGtOperation.staticOperation(frame);
+        case 0x15 -> IsZeroOperation.staticOperation(frame);
+        case 0x16 ->
+            evmConfiguration.enableOptimizedOpcodes()
+                ? AndOperationOptimized.staticOperation(frame)
+                : AndOperation.staticOperation(frame);
+        case 0x17 ->
+            evmConfiguration.enableOptimizedOpcodes()
+                ? OrOperationOptimized.staticOperation(frame)
+                : OrOperation.staticOperation(frame);
+        case 0x18 ->
+            evmConfiguration.enableOptimizedOpcodes()
+                ? XorOperationOptimized.staticOperation(frame)
+                : XorOperation.staticOperation(frame);
+        case 0x19 ->
+            evmConfiguration.enableOptimizedOpcodes()
+                ? NotOperationOptimized.staticOperation(frame)
+                : NotOperation.staticOperation(frame);
+        case 0x1a -> ByteOperation.staticOperation(frame);
+        case 0x1b ->
+            enableConstantinople
+                ? shiftOperation(
+                    frame, ShlOperation::staticOperation, ShlOperationOptimized::staticOperation)
+                : InvalidOperation.invalidOperationResult(opcode);
+        case 0x1c ->
+            enableConstantinople
+                ? shiftOperation(
+                    frame, ShrOperation::staticOperation, ShrOperationOptimized::staticOperation)
+                : InvalidOperation.invalidOperationResult(opcode);
+        case 0x1d ->
+            enableConstantinople
+                ? shiftOperation(
+                    frame, SarOperation::staticOperation, SarOperationOptimized::staticOperation)
+                : InvalidOperation.invalidOperationResult(opcode);
+        case 0x1e ->
+            enableOsaka
+                ? CountLeadingZerosOperation.staticOperation(frame)
+                : InvalidOperation.invalidOperationResult(opcode);
+        case 0x50 -> PopOperation.staticOperation(frame);
+        case 0x56 -> JumpOperation.staticOperation(frame);
+        case 0x57 -> JumpiOperation.staticOperation(frame);
+        case 0x5b -> JumpDestOperation.JUMPDEST_SUCCESS;
+        case 0x5f ->
+            enableShanghai
+                ? Push0Operation.staticOperation(frame)
+                : InvalidOperation.invalidOperationResult(opcode);
+        case 0x60, // PUSH1-32
+            0x61,
+            0x62,
+            0x63,
+            0x64,
+            0x65,
+            0x66,
+            0x67,
+            0x68,
+            0x69,
+            0x6a,
+            0x6b,
+            0x6c,
+            0x6d,
+            0x6e,
+            0x6f,
+            0x70,
+            0x71,
+            0x72,
+            0x73,
+            0x74,
+            0x75,
+            0x76,
+            0x77,
+            0x78,
+            0x79,
+            0x7a,
+            0x7b,
+            0x7c,
+            0x7d,
+            0x7e,
+            0x7f ->
+            PushOperation.staticOperation(frame, code, pc, opcode - PUSH_BASE);
+        case 0x80, // DUP1-16
+            0x81,
+            0x82,
+            0x83,
+            0x84,
+            0x85,
+            0x86,
+            0x87,
+            0x88,
+            0x89,
+            0x8a,
+            0x8b,
+            0x8c,
+            0x8d,
+            0x8e,
+            0x8f ->
+            DupOperation.staticOperation(frame, opcode - DupOperation.DUP_BASE);
+        case 0x90, // SWAP1-16
+            0x91,
+            0x92,
+            0x93,
+            0x94,
+            0x95,
+            0x96,
+            0x97,
+            0x98,
+            0x99,
+            0x9a,
+            0x9b,
+            0x9c,
+            0x9d,
+            0x9e,
+            0x9f ->
+            SwapOperation.staticOperation(frame, opcode - SWAP_BASE);
+        case 0xe6 -> // DUPN (EIP-8024)
+            enableAmsterdam
+                ? DupNOperation.staticOperation(frame, code, pc)
+                : InvalidOperation.invalidOperationResult(opcode);
+        case 0xe7 -> // SWAPN (EIP-8024)
+            enableAmsterdam
+                ? SwapNOperation.staticOperation(frame, code, pc)
+                : InvalidOperation.invalidOperationResult(opcode);
+        case 0xe8 -> // EXCHANGE (EIP-8024)
+            enableAmsterdam
+                ? ExchangeOperation.staticOperation(frame, code, pc)
+                : InvalidOperation.invalidOperationResult(opcode);
+        default -> { // unoptimized operations
+          frame.setCurrentOperation(currentOperation);
+          yield currentOperation.execute(frame, this);
+        }
+      };
+    } catch (final OverflowException oe) {
+      return OVERFLOW_RESPONSE;
+    } catch (final UnderflowException ue) {
+      return UNDERFLOW_RESPONSE;
+    }
+  }
+
+  /**
+   * Charges the gas of an executed operation and advances the program counter, or halts the frame.
+   *
+   * @param frame the frame
+   * @param result the result of the operation
+   */
+  private static void completeOperation(final MessageFrame frame, final OperationResult result) {
+    final ExceptionalHaltReason haltReason = result.getHaltReason();
+    if (haltReason != null) {
+      LOG.trace("MessageFrame evaluation halted because of {}", haltReason);
+      frame.setExceptionalHaltReason(Optional.of(haltReason));
+      frame.setState(State.EXCEPTIONAL_HALT);
+    } else if (frame.decrementRemainingGas(result.getGasCost()) < 0) {
+      frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
+      frame.setState(State.EXCEPTIONAL_HALT);
+    }
+    if (frame.getState() == State.CODE_EXECUTING) {
+      frame.setPC(frame.getPC() + result.getPcIncrement());
+    }
+  }
+
+  /**
+   * Remembers the value of a PUSH2 the loop could not take from {@link #PUSH2_VALUES}, as its own
+   * two bytes rather than a view into the code, which the table must not keep alive.
+   *
+   * @param code the code
+   * @param pc the program counter of the PUSH2 that was executed
+   */
+  private static void cachePush2(final byte[] code, final int pc) {
+    if (pc + 2 < code.length) {
+      final int value = (code[pc + 1] & 0xff) << 8 | (code[pc + 2] & 0xff);
+      PUSH2_VALUES[value] = Bytes.wrap(new byte[] {code[pc + 1], code[pc + 2]});
+    }
+  }
+
+  /**
+   * Compares two stack items as unsigned integers, for the kinds of item PUSH and the arithmetic
+   * operations leave on the stack, without calling through the {@link Bytes} interface.
+   *
+   * @param a the first item
+   * @param b the second item
+   * @return a negative number, zero or a positive number as the first item is less than, equal to
+   *     or greater than the second; {@link #INCOMPARABLE} if either is of another kind
+   */
+  private static int compare(final Object a, final Object b) {
+    final Class<?> typeA = a.getClass();
+    final Class<?> typeB = b.getClass();
+    if ((typeA != WRAPPED_BYTES && typeA != WRAPPED_BYTES_32)
+        || (typeB != WRAPPED_BYTES && typeB != WRAPPED_BYTES_32)) {
+      return INCOMPARABLE;
+    }
+    final Bytes x = (Bytes) a;
+    final Bytes y = (Bytes) b;
+    final int sizeX = x.size();
+    final int sizeY = y.size();
+    int i = 0;
+    while (i < sizeX && x.get(i) == 0) {
+      i++;
+    }
+    int j = 0;
+    while (j < sizeY && y.get(j) == 0) {
+      j++;
+    }
+    if (sizeX - i != sizeY - j) {
+      return (sizeX - i) - (sizeY - j);
+    }
+    for (; i < sizeX; i++, j++) {
+      final int difference = (x.get(i) & 0xff) - (y.get(j) & 0xff);
+      if (difference != 0) {
+        return difference;
+      }
+    }
+    return 0;
+  }
+
+  /**
+   * Tells whether a stack item is zero, for the kinds of item the comparison operations and PUSH
+   * leave on the stack, without calling through the {@link Bytes} interface.
+   *
+   * @param item the stack item
+   * @return 1 if it is not zero, 0 if it is zero, -1 if it is of another kind
+   */
+  private static int truth(final Object item) {
+    final Class<?> type = item.getClass();
+    if (type == WRAPPED_BYTES || type == WRAPPED_BYTES_32) {
+      final Bytes bytes = (Bytes) item;
+      for (int i = bytes.size() - 1; i >= 0; i--) {
+        if (bytes.get(i) != 0) {
+          return 1;
+        }
+      }
+      return 0;
+    }
+    if (item == EQUAL) {
+      return 1;
+    }
+    if (item == NOT_EQUAL) {
+      return 0;
+    }
+    return -1;
+  }
+
+  /**
+   * Reads a jump destination of up to three bytes the way PUSH1 to PUSH3 leave it on the stack,
+   * without calling through the {@link Bytes} interface.
+   *
+   * @param item the stack item
+   * @return the destination, or -1 for any other item, which the jump operations then decide
+   */
+  private static int jumpDestination(final Object item) {
+    if (item.getClass() == WRAPPED_BYTES) {
+      final Bytes bytes = (Bytes) item;
+      final int size = bytes.size();
+      if (size <= 3) {
+        int destination = 0;
+        for (int i = 0; i < size; i++) {
+          destination = destination << 8 | (bytes.get(i) & 0xff);
+        }
+        return destination;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Tells whether a destination is a JUMPDEST, as {@link Code#isJumpDestInvalid} does.
+   *
+   * @param jumpDestinations the code's jump destination bitmask
+   * @param destination the destination, negative if unknown
+   * @param codeSize the size of the code
+   * @return true if the destination is a valid jump destination
+   */
+  private static boolean isJumpDestination(
+      final long[] jumpDestinations, final int destination, final int codeSize) {
+    return destination >= 0
+        && destination < codeSize
+        && (jumpDestinations[destination >>> 6] & 1L << destination) != 0L;
   }
 
   /**
