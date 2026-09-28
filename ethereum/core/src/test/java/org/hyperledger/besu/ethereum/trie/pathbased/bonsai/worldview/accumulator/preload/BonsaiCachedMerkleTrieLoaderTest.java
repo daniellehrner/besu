@@ -101,8 +101,7 @@ class BonsaiCachedMerkleTrieLoaderTest {
     final Bytes storageNode = Bytes.fromHexString("0xc58320bbbb02");
     final Bytes32 accountNodeHash = Bytes32.wrap(Hash.hash(accountNode).getBytes());
     final Bytes32 storageNodeHash = Bytes32.wrap(Hash.hash(storageNode).getBytes());
-    final BonsaiCachedMerkleTrieLoader.CommittedNodeBatch batch =
-        new BonsaiCachedMerkleTrieLoader.CommittedNodeBatch();
+    final CommittedNodeBatch batch = new CommittedNodeBatch();
     batch.addAccountNode(accountNodeHash, accountNode);
     batch.addStorageNode(storageNodeHash, storageNode);
     merkleTrieLoader.cacheCommittedNodesNow(batch);

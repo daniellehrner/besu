@@ -30,6 +30,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldSt
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.CommittedNodeBatch;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.NoOpBonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.bal.BonsaiBalWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.cache.PathBasedWorldStateCacheManager;
@@ -223,7 +224,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
   }
 
   /** Hands trie nodes produced by a state root computation to the node cache, if there is one. */
-  public void cacheCommittedNodes(final BonsaiCachedMerkleTrieLoader.CommittedNodeBatch batch) {
+  public void cacheCommittedNodes(final CommittedNodeBatch batch) {
     if (bonsaiCachedMerkleTrieLoader != null) {
       bonsaiCachedMerkleTrieLoader.cacheCommittedNodes(batch);
     }

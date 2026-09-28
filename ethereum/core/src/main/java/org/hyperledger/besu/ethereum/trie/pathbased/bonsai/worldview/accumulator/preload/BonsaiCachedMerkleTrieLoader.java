@@ -26,10 +26,8 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.StorageSubscr
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.metrics.ObservableMetricsSystem;
 
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
@@ -147,33 +145,9 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
     }
   }
 
-  /**
-   * Trie nodes produced by one state root computation, to be added to the node cache. Every node on
-   * a modified path gets a new hash, so without this the next block's walk down that path misses at
-   * each level and reads back what was just written. The cache is keyed by hash, so an entry stays
-   * valid even if the block that produced it is never persisted.
-   *
-   * <p>Nodes are collected here rather than cached one by one because the trie pools commit
-   * concurrently and would contend on the cache's segment locks.
-   */
-  public static class CommittedNodeBatch {
-    private final ConcurrentLinkedQueue<Map.Entry<Bytes32, Bytes>> accountNodes =
-        new ConcurrentLinkedQueue<>();
-    private final ConcurrentLinkedQueue<Map.Entry<Bytes32, Bytes>> storageNodes =
-        new ConcurrentLinkedQueue<>();
-
-    public void addAccountNode(final Bytes32 nodeHash, final Bytes node) {
-      accountNodes.add(Map.entry(nodeHash, node));
-    }
-
-    public void addStorageNode(final Bytes32 nodeHash, final Bytes node) {
-      storageNodes.add(Map.entry(nodeHash, node));
-    }
-  }
-
   /** Adds the batch to the node cache on a background thread. */
   public void cacheCommittedNodes(final CommittedNodeBatch batch) {
-    if (batch.accountNodes.isEmpty() && batch.storageNodes.isEmpty()) {
+    if (batch.isEmpty()) {
       return;
     }
     VIRTUAL_POOL.execute(() -> cacheCommittedNodesNow(batch));
@@ -181,8 +155,8 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
 
   @VisibleForTesting
   void cacheCommittedNodesNow(final CommittedNodeBatch batch) {
-    batch.accountNodes.forEach(node -> accountNodes.put(node.getKey(), node.getValue()));
-    batch.storageNodes.forEach(node -> storageNodes.put(node.getKey(), node.getValue()));
+    batch.accountNodes().forEach(node -> accountNodes.put(node.getKey(), node.getValue()));
+    batch.storageNodes().forEach(node -> storageNodes.put(node.getKey(), node.getValue()));
   }
 
   public Optional<Bytes> getAccountStateTrieNode(

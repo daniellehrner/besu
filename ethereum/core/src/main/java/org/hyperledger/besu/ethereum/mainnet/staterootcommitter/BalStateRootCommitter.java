@@ -29,7 +29,7 @@ import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiWorldStateUpdateAccumulator;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.CommittedNodeBatch;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateQueryParams;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.plugin.data.BlockHeader;
@@ -227,7 +227,7 @@ public final class BalStateRootCommitter implements StateRootCommitter {
         new ConcurrentLinkedQueue<>();
 
     /** Committed trie nodes, handed to the node cache once the computation is done. */
-    private final BonsaiCachedMerkleTrieLoader.CommittedNodeBatch committedNodes;
+    private final CommittedNodeBatch committedNodes;
 
     /** Populated during account resolution once storage futures complete. */
     private final Map<Address, Hash> storageRoots = new ConcurrentHashMap<>();
@@ -245,7 +245,7 @@ public final class BalStateRootCommitter implements StateRootCommitter {
       this.worldState = worldState;
       this.accountLookup = accountLookup;
       this.sink = storageFrozen ? new FrozenSink() : new PersistingSink(writes);
-      this.committedNodes = new BonsaiCachedMerkleTrieLoader.CommittedNodeBatch();
+      this.committedNodes = new CommittedNodeBatch();
     }
 
     /**

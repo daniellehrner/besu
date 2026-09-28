@@ -28,7 +28,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorld
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.CommittedNodeBatch;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.StorageConsumingMap;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.plugin.data.BlockHeader;
@@ -103,7 +103,7 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
     private final WriteSink sink;
 
     /** Committed trie nodes, handed to the node cache once the computation is done. */
-    private final BonsaiCachedMerkleTrieLoader.CommittedNodeBatch committedNodes;
+    private final CommittedNodeBatch committedNodes;
 
     DefaultComputation(
         final BonsaiWorldState bonsai,
@@ -113,7 +113,7 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
       this.worldStateUpdater = worldStateUpdater;
       this.addressHasher = addressHasher;
       this.sink = bonsai.isStorageFrozen() ? new FrozenSink() : new PersistingSink(writes);
-      this.committedNodes = new BonsaiCachedMerkleTrieLoader.CommittedNodeBatch();
+      this.committedNodes = new CommittedNodeBatch();
     }
 
     Hash executeInto(final List<StateRootComputations.UpdaterWrite> writeSink) {
