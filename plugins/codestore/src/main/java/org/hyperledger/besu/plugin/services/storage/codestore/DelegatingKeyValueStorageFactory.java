@@ -22,6 +22,7 @@ import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorageFactory;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.storage.codestore.CodeRoutingKeyValueStorage.DelegateCodeMode;
 import org.hyperledger.besu.services.kvstore.SegmentedKeyValueStorageAdapter;
 import org.hyperledger.besu.util.BesuVersionUtils;
@@ -228,7 +229,14 @@ public class DelegatingKeyValueStorageFactory implements KeyValueStorageFactory 
       Durable.create(marker);
     }
     if (drop) {
+      final List<Pair<byte[], byte[]>> markers = markersIn(delegateStorage);
       delegateStorage.clear(KeyValueSegmentIdentifier.CODE_STORAGE);
+      if (!markers.isEmpty()) {
+        final SegmentedKeyValueStorageTransaction tx = delegateStorage.startTransaction();
+        markers.forEach(
+            m -> tx.put(KeyValueSegmentIdentifier.CODE_STORAGE, m.getKey(), m.getValue()));
+        tx.commit();
+      }
       LOG.info(
           "Dropped {} code rows from {}, all of them present in the mmap code store",
           rows,
@@ -242,7 +250,10 @@ public class DelegatingKeyValueStorageFactory implements KeyValueStorageFactory 
       final long[] rows = new long[1];
       keys.forEach(
           key -> {
-            if (key.length != CodeStore.HASH_SIZE || !store.contains(key)) {
+            if (key.length != CodeStore.HASH_SIZE) {
+              return;
+            }
+            if (!store.contains(key)) {
               throw new StorageException(
                   String.format(
                       "Not dropping the code held by %s: its row %s is not in the mmap code"
@@ -255,10 +266,17 @@ public class DelegatingKeyValueStorageFactory implements KeyValueStorageFactory 
     }
   }
 
+  // Bonsai's strategy marker lives in the same segment under a short key and is not code.
+  private static List<Pair<byte[], byte[]>> markersIn(final SegmentedKeyValueStorage storage) {
+    try (Stream<Pair<byte[], byte[]>> entries =
+        storage.stream(KeyValueSegmentIdentifier.CODE_STORAGE)) {
+      return entries.filter(e -> e.getKey().length != CodeStore.HASH_SIZE).toList();
+    }
+  }
+
   private static boolean hasCode(final SegmentedKeyValueStorage delegateStorage) {
-    try (Stream<Pair<byte[], byte[]>> code =
-        delegateStorage.stream(KeyValueSegmentIdentifier.CODE_STORAGE)) {
-      return code.findFirst().isPresent();
+    try (Stream<byte[]> keys = delegateStorage.streamKeys(KeyValueSegmentIdentifier.CODE_STORAGE)) {
+      return keys.anyMatch(key -> key.length == CodeStore.HASH_SIZE);
     }
   }
 

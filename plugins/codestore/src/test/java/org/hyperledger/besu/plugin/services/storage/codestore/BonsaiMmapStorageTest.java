@@ -27,9 +27,11 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStorageProvider;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStorageProviderBuilder;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiSnapshotWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.code.JumpDestCodeStorageStrategy;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.ImmutableDataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.ImmutableExtraStorageConfiguration;
+import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.BesuConfiguration;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
@@ -148,6 +150,14 @@ class BonsaiMmapStorageTest {
     }
   }
 
+  private static Optional<Bytes> codeOf(final BonsaiWorldStateKeyValueStorage bonsai) {
+    return bonsai.getCode(CODE_HASH, ACCOUNT).map(Code::getBytes);
+  }
+
+  private static Optional<Bytes> codeOf(final BonsaiSnapshotWorldStateKeyValueStorage snapshot) {
+    return snapshot.getCode(CODE_HASH, ACCOUNT).map(Code::getBytes);
+  }
+
   private static void deployCode(final BonsaiWorldStateKeyValueStorage bonsai) {
     final BonsaiWorldStateKeyValueStorage.Updater updater = bonsai.updater();
     updater.putCode(ACCOUNT, CODE_HASH, CODE);
@@ -159,14 +169,14 @@ class BonsaiMmapStorageTest {
     final BonsaiWorldStateKeyValueStorage bonsai = start(DelegateCodeMode.IGNORE).bonsai();
     deployCode(bonsai);
 
-    assertThat(bonsai.getCode(CODE_HASH, ACCOUNT)).contains(CODE);
+    assertThat(codeOf(bonsai)).contains(CODE);
     assertThat(node.codeInRocksDb()).isEmpty();
     assertThat(Files.size(dataDir.resolve("code-store").resolve(CodeLog.FILE_NAME)))
         .isGreaterThan(CodeLog.HEADER_SIZE);
 
     // Survives a restart, and Bonsai's keying sniff reads the mmap store.
     final BonsaiWorldStateKeyValueStorage restarted = start(DelegateCodeMode.IGNORE).bonsai();
-    assertThat(restarted.getCode(CODE_HASH, ACCOUNT)).contains(CODE);
+    assertThat(codeOf(restarted)).contains(CODE);
     assertThat(restarted.getFlatDbStrategy().isCodeByCodeHash()).isTrue();
   }
 
@@ -193,7 +203,8 @@ class BonsaiMmapStorageTest {
 
     assertThat(node.rocksDbStorage().get(ACCOUNT_INFO_STATE, ACCOUNT.getBytes().toArrayUnsafe()))
         .isEmpty();
-    assertThat(node.rocksDbStorage().stream(CODE_STORAGE)).isEmpty();
+    assertThat(node.rocksDbStorage().streamKeys(CODE_STORAGE).filter(k -> k.length == 32))
+        .isEmpty();
   }
 
   @Test
@@ -203,7 +214,7 @@ class BonsaiMmapStorageTest {
     final BonsaiWorldStateKeyValueStorage.Updater updater = bonsai.updater();
     updater.removeCode(ACCOUNT, CODE_HASH);
     updater.commit();
-    assertThat(bonsai.getCode(CODE_HASH, ACCOUNT)).contains(CODE);
+    assertThat(codeOf(bonsai)).contains(CODE);
   }
 
   @Test
@@ -212,7 +223,7 @@ class BonsaiMmapStorageTest {
     deployCode(bonsai);
     try (BonsaiSnapshotWorldStateKeyValueStorage snapshot =
         new BonsaiSnapshotWorldStateKeyValueStorage(bonsai)) {
-      assertThat(snapshot.getCode(CODE_HASH, ACCOUNT)).contains(CODE);
+      assertThat(codeOf(snapshot)).contains(CODE);
 
       // A snapshot's writes stay in the snapshot.
       final Bytes other = Bytes.fromHexString("0x00");
@@ -228,24 +239,24 @@ class BonsaiMmapStorageTest {
     final BonsaiWorldStateKeyValueStorage bonsai = start(DelegateCodeMode.MIRROR).bonsai();
     deployCode(bonsai);
     bonsai.clear();
-    assertThat(bonsai.getCode(CODE_HASH, ACCOUNT)).isEmpty();
+    assertThat(codeOf(bonsai)).isEmpty();
     assertThat(node.codeInRocksDb()).isEmpty();
     deployCode(bonsai);
-    assertThat(bonsai.getCode(CODE_HASH, ACCOUNT)).contains(CODE);
+    assertThat(codeOf(bonsai)).contains(CODE);
   }
 
   @Test
   void mirroringMakesFallingBackToRocksDbAOneFlagChange() throws Exception {
     deployCode(start(DelegateCodeMode.MIRROR).bonsai());
-    assertThat(node.codeInRocksDb()).contains(CODE.toArrayUnsafe());
+    assertThat(node.codeInRocksDb()).contains(JumpDestCodeStorageStrategy.encode(CODE));
 
-    assertThat(start(null).bonsai().getCode(CODE_HASH, ACCOUNT)).contains(CODE);
+    assertThat(codeOf(start(null).bonsai())).contains(CODE);
   }
 
   @Test
   void withoutMirroringRocksDbStillStartsCleanlyButLacksTheCode() throws Exception {
     deployCode(start(DelegateCodeMode.IGNORE).bonsai());
-    assertThat(start(null).bonsai().getCode(CODE_HASH, ACCOUNT)).isEmpty();
+    assertThat(codeOf(start(null).bonsai())).isEmpty();
   }
 
   @Test
@@ -277,7 +288,7 @@ class BonsaiMmapStorageTest {
     final BonsaiWorldStateKeyValueStorage bonsai = start(DelegateCodeMode.IGNORE, true).bonsai();
 
     assertThat(node.codeInRocksDb()).isEmpty();
-    assertThat(bonsai.getCode(CODE_HASH, ACCOUNT)).contains(CODE);
+    assertThat(codeOf(bonsai)).contains(CODE);
   }
 
   @Test
@@ -291,7 +302,7 @@ class BonsaiMmapStorageTest {
     assertThatThrownBy(start(DelegateCodeMode.IGNORE, true)::bonsai)
         .isInstanceOf(StorageException.class)
         .hasMessageContaining("Not dropping the code");
-    assertThat(start(null).bonsai().getCode(CODE_HASH, ACCOUNT)).contains(CODE);
+    assertThat(codeOf(start(null).bonsai())).contains(CODE);
   }
 
   @Test
@@ -307,7 +318,7 @@ class BonsaiMmapStorageTest {
   void verifyModeFailsOnADifferentialReadMismatch() throws Exception {
     final BonsaiWorldStateKeyValueStorage bonsai = start(DelegateCodeMode.VERIFY).bonsai();
     deployCode(bonsai);
-    assertThat(bonsai.getCode(CODE_HASH, ACCOUNT)).contains(CODE);
+    assertThat(codeOf(bonsai)).contains(CODE);
 
     final SegmentedKeyValueStorageTransaction tamper = node.rocksDbStorage().startTransaction();
     tamper.put(CODE_STORAGE, CODE_HASH.getBytes().toArrayUnsafe(), new byte[] {1, 2, 3});
@@ -316,6 +327,31 @@ class BonsaiMmapStorageTest {
     assertThatThrownBy(() -> bonsai.getCode(CODE_HASH, ACCOUNT))
         .isInstanceOf(StorageException.class)
         .hasMessageContaining("Differential read mismatch");
+  }
+
+  @Test
+  void storesAnalysedCodeAndKeepsTheStrategyMarkerInRocksDb() throws Exception {
+    final Node node = start(DelegateCodeMode.IGNORE);
+    final BonsaiWorldStateKeyValueStorage bonsai = node.bonsai();
+    deployCode(bonsai);
+
+    assertThat(node.rocksDbStorage().get(CODE_STORAGE, JumpDestCodeStorageStrategy.MARKER_KEY))
+        .contains(JumpDestCodeStorageStrategy.MARKER);
+    assertThat(node.codeInRocksDb()).isEmpty();
+    final Code code = bonsai.getCode(CODE_HASH, ACCOUNT).orElseThrow();
+    assertThat(code.getBytes()).isEqualTo(CODE);
+    assertThat(code.getJumpDestBitMask()).isNotNull();
+  }
+
+  @Test
+  void aStoreHoldingBareCodeCannotBeMigratedInPlace() throws Exception {
+    final Node node = start(DelegateCodeMode.IGNORE);
+    try (CodeStore store = CodeStore.open(dataDir.resolve("code-store"))) {
+      store.put(CODE_HASH.getBytes().toArrayUnsafe(), CODE.toArrayUnsafe());
+    }
+    assertThatThrownBy(node::bonsai)
+        .isInstanceOf(StorageException.class)
+        .hasMessageContaining("cannot be rewritten");
   }
 
   private static DataStorageConfiguration accountHashKeying() {

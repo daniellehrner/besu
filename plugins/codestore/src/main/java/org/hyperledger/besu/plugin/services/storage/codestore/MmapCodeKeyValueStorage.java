@@ -22,6 +22,7 @@ import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
 import java.io.IOException;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -155,6 +156,21 @@ public class MmapCodeKeyValueStorage implements KeyValueStorage {
     closed.set(true);
   }
 
+  /**
+   * The code inside a stored value. Bonsai stores either the bare code or, with its jump
+   * destination analysis, {@code length u32 | code | bitmask} with one bit per code byte.
+   */
+  static Bytes codeIn(final byte[] value) {
+    if (value.length >= Integer.BYTES) {
+      final int length = ByteBuffer.wrap(value).getInt();
+      if (length >= 0
+          && value.length == Integer.BYTES + length + ((length >> 6) + 1) * Long.BYTES) {
+        return Bytes.wrap(value, Integer.BYTES, length);
+      }
+    }
+    return Bytes.wrap(value);
+  }
+
   static StorageException removalUnsupported() {
     return new StorageException(
         "The mmap code store is content-addressed and never removes code. A removal means Bonsai"
@@ -191,8 +207,8 @@ public class MmapCodeKeyValueStorage implements KeyValueStorage {
         return;
       }
       puts.forEach(
-          (key, code) -> {
-            if (!Hash.keccak256(Bytes.wrap(code)).equals(key)) {
+          (key, value) -> {
+            if (!Hash.keccak256(codeIn(value)).equals(key)) {
               throw new StorageException(
                   "Refusing to store code under key "
                       + key.toHexString()

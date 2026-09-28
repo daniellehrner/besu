@@ -26,8 +26,10 @@ import org.hyperledger.besu.plugin.services.storage.SnappedKeyValueStorage;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
@@ -83,10 +85,16 @@ public class CodeRoutingKeyValueStorage implements SnappableKeyValueStorage {
     return KeyValueSegmentIdentifier.CODE_STORAGE.getName().equals(segment.getName());
   }
 
+  // The code segment also carries Bonsai's strategy marker under a short key; that stays with the
+  // delegate, the store only ever holds code under its hash.
+  static boolean isCode(final SegmentIdentifier segment, final byte[] key) {
+    return isCode(segment) && key.length == CodeStore.HASH_SIZE;
+  }
+
   @Override
   public Optional<byte[]> get(final SegmentIdentifier segment, final byte[] key)
       throws StorageException {
-    if (!isCode(segment)) {
+    if (!isCode(segment, key)) {
       return delegate.get(segment, key);
     }
     final Optional<byte[]> value = code.get(key);
@@ -110,7 +118,7 @@ public class CodeRoutingKeyValueStorage implements SnappableKeyValueStorage {
   @Override
   public boolean containsKey(final SegmentIdentifier segment, final byte[] key)
       throws StorageException {
-    return isCode(segment) ? code.containsKey(key) : delegate.containsKey(segment, key);
+    return isCode(segment, key) ? code.containsKey(key) : delegate.containsKey(segment, key);
   }
 
   @Override
@@ -162,7 +170,7 @@ public class CodeRoutingKeyValueStorage implements SnappableKeyValueStorage {
   @Override
   public boolean tryDelete(final SegmentIdentifier segment, final byte[] key)
       throws StorageException {
-    return isCode(segment) ? code.tryDelete(key) : delegate.tryDelete(segment, key);
+    return isCode(segment, key) ? code.tryDelete(key) : delegate.tryDelete(segment, key);
   }
 
   @Override
@@ -179,6 +187,33 @@ public class CodeRoutingKeyValueStorage implements SnappableKeyValueStorage {
     return isCode(segment)
         ? code.getAllValuesFromKeysThat(returnCondition)
         : delegate.getAllValuesFromKeysThat(segment, returnCondition);
+  }
+
+  /**
+   * {@inheritDoc}
+   *
+   * <p>Code records are immutable, so a rewrite of the code segment is only possible while the
+   * store is empty, which is when Bonsai marks a new database with its code format.
+   */
+  @Override
+  public void rewrite(
+      final SegmentIdentifier segment,
+      final BiFunction<byte[], byte[], byte[]> transform,
+      final List<Pair<byte[], byte[]>> additions) {
+    if (!isCode(segment)) {
+      delegate.rewrite(segment, transform, additions);
+      return;
+    }
+    final boolean empty;
+    try (Stream<Pair<byte[], byte[]>> entries = code.stream()) {
+      empty = entries.findAny().isEmpty();
+    }
+    if (!empty) {
+      throw new StorageException(
+          "The mmap code store holds code in a format this Besu version no longer writes, and"
+              + " code records cannot be rewritten. Sync it again, or start the previous version.");
+    }
+    SnappableKeyValueStorage.super.rewrite(segment, transform, additions);
   }
 
   @Override
@@ -232,7 +267,7 @@ public class CodeRoutingKeyValueStorage implements SnappableKeyValueStorage {
 
     @Override
     public void put(final SegmentIdentifier segment, final byte[] key, final byte[] value) {
-      if (!isCode(segment)) {
+      if (!isCode(segment, key)) {
         delegateTransaction.put(segment, key, value);
         return;
       }
@@ -244,7 +279,7 @@ public class CodeRoutingKeyValueStorage implements SnappableKeyValueStorage {
 
     @Override
     public void remove(final SegmentIdentifier segment, final byte[] key) {
-      if (isCode(segment)) {
+      if (isCode(segment, key)) {
         codeTransaction.remove(key);
       } else {
         delegateTransaction.remove(segment, key);
@@ -293,7 +328,7 @@ public class CodeRoutingKeyValueStorage implements SnappableKeyValueStorage {
     @Override
     public Optional<byte[]> get(final SegmentIdentifier segment, final byte[] key)
         throws StorageException {
-      if (!isCode(segment)) {
+      if (!isCode(segment, key)) {
         return snapshot.get(segment, key);
       }
       final Optional<byte[]> value = liveCode.get(key);
