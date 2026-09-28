@@ -119,8 +119,8 @@ public class EvmLoopBenchmark {
   @Param({"false"})
   public boolean traced;
 
-  /** Whether to run the EVM v2 interpreter. */
-  @Param({"true"})
+  /** Whether to run the EVM v2 interpreter rather than the standard one. */
+  @Param({"false", "true"})
   public boolean v2;
 
   private EVMExecutor executor;
