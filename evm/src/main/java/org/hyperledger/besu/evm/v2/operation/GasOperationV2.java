@@ -14,9 +14,8 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
 import static org.hyperledger.besu.evm.v2.operation.ArmCall.next;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.ran;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.result;
 
 import org.hyperledger.besu.evm.V2LoopArms;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -40,12 +39,17 @@ public class GasOperationV2 extends AbstractFixedCostOperationV2 {
 
   @Override
   public Operation.OperationResult executeFixedCostOperation(final MessageFrame frame) {
+    final long gas = frame.getRemainingGas();
+    return gas < gasCost ? outOfGas(frame) : result(frame, gasLeft(frame, gas), 0, 1);
+  }
+
+  // the arm pushes the gas left once GAS is paid, so unlike the other arms it needs the real gas
+  private static long gasLeft(final MessageFrame frame, final long gas) {
     final int sp = frame.stackTopV2();
-    final long outcome =
-        V2LoopArms.gasLeft(frame.stackDataV2(), sp, next(sp), frame.getRemainingGas());
-    if (outcome != FALLBACK) {
-      return ran(frame, outcome);
-    }
+    return V2LoopArms.gasLeft(frame.stackDataV2(), sp, next(sp), gas);
+  }
+
+  private OperationResult outOfGas(final MessageFrame frame) {
     return frame.stackHasSpaceV2(1) ? outOfGasResponse : OVERFLOW_RESPONSE;
   }
 }

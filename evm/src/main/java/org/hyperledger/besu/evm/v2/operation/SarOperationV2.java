@@ -14,10 +14,8 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
 import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.halt;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.ran;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.result;
 import static org.hyperledger.besu.evm.v2.operation.ArmCall.top;
 
 import org.hyperledger.besu.evm.V2LoopArms;
@@ -50,9 +48,11 @@ public class SarOperationV2 extends AbstractFixedCostOperationV2 {
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
     final int sp = frame.stackTopV2();
-    final long outcome =
+    return result(
+        frame,
         V2LoopArms.shift(
-            frame.stackDataV2(), sp, top(sp), 0x1d, /* constantinople= */ true, ANY_GAS);
-    return outcome != FALLBACK ? ran(frame, outcome) : halt(frame, 2, 1);
+            frame.stackDataV2(), sp, top(sp), 0x1d, /* constantinople= */ true, ANY_GAS),
+        2,
+        1);
   }
 }

@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 
 import org.junit.jupiter.api.Test;
 
@@ -117,6 +118,55 @@ class EvmLoopMethodSizeTest {
             "the untraced v2 loop may only call what C2 inlines at any call site; a call it does "
                 + "not inline makes it keep the loop's locals in memory, see V2LoopArms")
         .isEmpty();
+  }
+
+  /**
+   * The traced loop, and the untraced loop's general path, reach an operation's class through a
+   * switch in which C2 counts no case as hot, since each is a small share of the calls. There C2
+   * inlines a callee only up to MaxInlineSize. An operation that runs through its arm has little
+   * else to do, and has to fit, or the traced loop pays for a call per operation.
+   */
+  @Test
+  void operationsRunThroughTheirArmFitMaxInlineSize() {
+    final List<String> problems = new ArrayList<>();
+    final Set<String> checked = new TreeSet<>();
+    for (final String general : List.of("executeOperationV2", "coldOperation")) {
+      final CodeModel code = method(EVM.class, general, null).orElseThrow().code().orElseThrow();
+      for (final CodeElement element : code) {
+        if (!(element instanceof InvokeInstruction invoke)
+            || !invoke.owner().asInternalName().startsWith(OPERATIONS)) {
+          continue;
+        }
+        final String owner = invoke.owner().asInternalName();
+        final MethodModel callee =
+            method(owner, invoke.name().stringValue(), invoke.type().stringValue()).orElseThrow();
+        if (!callsArmResult(callee)) {
+          continue;
+        }
+        final String name =
+            owner.substring(owner.lastIndexOf('/') + 1) + "." + invoke.name().stringValue();
+        final int size = callee.findAttribute(Attributes.code()).orElseThrow().codeLength();
+        checked.add(name + " " + size);
+        if (size > MAX_INLINE_SIZE) {
+          problems.add(name + ": " + size + " bytes, above MaxInlineSize=" + MAX_INLINE_SIZE);
+        }
+      }
+    }
+    assertThat(checked).as("operations that run through their arm").hasSizeGreaterThan(20);
+    assertThat(problems).as("checked %s", checked).isEmpty();
+  }
+
+  private static final String OPERATIONS = "org/hyperledger/besu/evm/v2/operation/";
+
+  private static boolean callsArmResult(final MethodModel method) {
+    for (final CodeElement element : method.code().orElseThrow()) {
+      if (element instanceof InvokeInstruction invoke
+          && invoke.owner().asInternalName().equals(OPERATIONS + "ArmCall")
+          && invoke.name().equalsString("result")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private void checkCalls(

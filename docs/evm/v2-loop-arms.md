@@ -78,7 +78,10 @@ The other classes keep an implementation of their own:
 2. Run `./gradlew :evm:generateEvmV2Loop`. It rewrites the generated regions of
    `EVM.java` and formats them.
 3. If the arm runs every successful case of its operation, make the operation's
-   class call it through `ArmCall`, as `AddOperationV2` does.
+   class call it through `ArmCall.result`, as `AddOperationV2` does.
+   - Keep that method within 35 bytes of bytecode. The traced loop reaches it
+     from a switch where C2 inlines nothing larger, and a call per operation
+     there cost DUP- and PUSH-heavy code 10 percent.
 4. Add the operation to `EvmV2LoopCompilationTest.Workload.program()`. C2 compiles
    an arm the workload never reaches as a trap, and reports nothing about the
    calls inside it.
@@ -91,7 +94,7 @@ Never edit the generated regions by hand. The build rejects that too.
 | Check | Runs | Catches |
 |---|---|---|
 | `checkEvmV2Loop`, the generator in check mode | Before every compile of `evm` | An arm breaking a rule; a hand edit of a generated region; an overload in `EVM` of a helper the arms call, which Java would resolve differently in the loop than in `V2LoopArms` |
-| `EvmLoopMethodSizeTest` | `:evm:test` | The loop's bytecode size; any call within three levels that is above `MaxInlineSize` (35 bytes) |
+| `EvmLoopMethodSizeTest` | `:evm:test` | The loop's bytecode size; any call within three levels that is above `MaxInlineSize` (35 bytes); an operation class that runs through its arm but has grown past 35 bytes itself |
 | `EvmV2LoopCompilationTest` | `:evm:test`, about 3 s | What C2 actually inlined into the loop, read from C2's own report in a child JVM. This includes the 8000-byte budget the bytecode checks cannot see. If the loop outgrows `HugeMethodLimit`, C2 does not compile it and the report is empty |
 | `V2LoopArmsTest` | `:evm:test` | Every arithmetic arm against `BigInteger`, over edge-case and random operands |
 | `InterpreterLoopV2DifferentialTest` | `:evm:test` | The untraced loop against the traced loop, over edge-case and random programs, for eight forks |

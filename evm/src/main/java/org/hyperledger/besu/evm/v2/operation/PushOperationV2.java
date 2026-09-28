@@ -14,11 +14,9 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.V2LoopArms.FALLBACK;
 import static org.hyperledger.besu.evm.v2.operation.ArmCall.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.halt;
 import static org.hyperledger.besu.evm.v2.operation.ArmCall.next;
-import static org.hyperledger.besu.evm.v2.operation.ArmCall.ran;
+import static org.hyperledger.besu.evm.v2.operation.ArmCall.result;
 
 import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.V2LoopArms;
@@ -73,11 +71,14 @@ public class PushOperationV2 extends AbstractFixedCostOperationV2 {
    */
   public static OperationResult staticOperation(
       final MessageFrame frame, final long[] s, final int pc, final int pushSize) {
+    return result(frame, push(frame, s, pc, PUSH_BASE + pushSize), 0, 1);
+  }
+
+  private static long push(
+      final MessageFrame frame, final long[] s, final int pc, final int opcode) {
     final Code codeObject = frame.getCode();
     codeObject.pushBits(); // builds the tables the arm reads
     final int sp = frame.stackTopV2();
-    final long outcome =
-        V2LoopArms.push(s, sp, next(sp), pc, PUSH_BASE + pushSize, codeObject, ANY_GAS);
-    return outcome != FALLBACK ? ran(frame, outcome) : halt(frame, 0, 1);
+    return V2LoopArms.push(s, sp, next(sp), pc, opcode, codeObject, ANY_GAS);
   }
 }

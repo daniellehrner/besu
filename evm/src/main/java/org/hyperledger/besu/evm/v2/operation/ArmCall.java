@@ -66,13 +66,23 @@ final class ArmCall {
   }
 
   /**
-   * Moves the stack and the program counter as an arm that ran its operation says.
+   * The result of an operation that called its arm. It is a method of its own so that the
+   * operations' own methods stay within C2's MaxInlineSize of 35 bytes: the general path's switch
+   * calls them, and C2 counts no case of a switch that large as hot.
    *
    * @param frame the frame
    * @param outcome what the arm returned
+   * @param consumed the items the operation takes from the stack
+   * @param produced the items it leaves there
    * @return the operation's result
    */
-  static OperationResult ran(final MessageFrame frame, final long outcome) {
+  static OperationResult result(
+      final MessageFrame frame, final long outcome, final int consumed, final int produced) {
+    return outcome != V2LoopArms.FALLBACK ? ran(frame, outcome) : halt(frame, consumed, produced);
+  }
+
+  /** Moves the stack and the program counter as an arm that ran its operation says. */
+  private static OperationResult ran(final MessageFrame frame, final long outcome) {
     frame.setTopV2(frame.stackTopV2() + V2LoopArms.delta(outcome));
     final int step = V2LoopArms.step(outcome);
     if (step != 1) {
@@ -85,13 +95,9 @@ final class ArmCall {
   /**
    * The halt of an operation whose arm did not run it. Given all the gas it wants, an arm stops
    * only for a stack it cannot use.
-   *
-   * @param frame the frame
-   * @param consumed the items the operation takes from the stack
-   * @param produced the items it leaves there
-   * @return the halt
    */
-  static OperationResult halt(final MessageFrame frame, final int consumed, final int produced) {
+  private static OperationResult halt(
+      final MessageFrame frame, final int consumed, final int produced) {
     if (!frame.stackHasItemsV2(consumed)) {
       return UNDERFLOW_RESPONSE;
     }
