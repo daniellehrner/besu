@@ -1292,7 +1292,7 @@ public class EVM {
             final int following = i + 3 < code.length ? code[i + 3] & 0xff : 0;
             if (following == 0x56) {
               if (gas >= VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS
-                  && isJumpDestination(codeObject.jumpDestBitMask, immediate, code.length)) {
+                  && isJumpDestinationV2(codeObject.jumpDestBitMask, immediate, code.length)) {
                 // PUSH2 JUMP JUMPDEST, without the destination going through the stack
                 cost = VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS;
                 step = immediate + 1 - pc;
@@ -1309,7 +1309,7 @@ public class EVM {
                 break;
               }
               if (gas >= VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS
-                  && isJumpDestination(codeObject.jumpDestBitMask, immediate, code.length)) {
+                  && isJumpDestinationV2(codeObject.jumpDestBitMask, immediate, code.length)) {
                 // PUSH2 JUMPI JUMPDEST, taken
                 cost = VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS;
                 step = immediate + 1 - pc;
@@ -1340,7 +1340,7 @@ public class EVM {
             final long destination = s[d + 3];
             if ((s[d] | s[d + 1] | s[d + 2]) == 0
                 && gas >= HIGH_TIER_GAS + JUMPDEST_GAS
-                && isJumpDestination(codeObject.jumpDestBitMask, destination, code.length)) {
+                && isJumpDestinationV2(codeObject.jumpDestBitMask, destination, code.length)) {
               cost = HIGH_TIER_GAS + JUMPDEST_GAS;
               step = (int) destination + 1 - pc;
               delta = -2;
@@ -1352,7 +1352,7 @@ public class EVM {
             final int d = base + (ARM_JUMP << 4) - 4;
             final long destination = s[d + 3];
             if ((s[d] | s[d + 1] | s[d + 2]) == 0
-                && isJumpDestination(codeObject.jumpDestBitMask, destination, code.length)) {
+                && isJumpDestinationV2(codeObject.jumpDestBitMask, destination, code.length)) {
               cost = MID_TIER_GAS + JUMPDEST_GAS;
               step = (int) destination + 1 - pc;
               delta = -1;
@@ -1788,7 +1788,7 @@ public class EVM {
 
   // Called from the untraced loop's arms, so it has to stay within C2's MaxInlineSize of 35 bytes
   // of bytecode; one unsigned comparison is the range check 0 <= destination < codeSize.
-  static boolean isJumpDestination(
+  static boolean isJumpDestinationV2(
       final long[] jumpDestBitMask, final long destination, final int codeSize) {
     return Long.compareUnsigned(destination, codeSize) < 0
         && (jumpDestBitMask[(int) (destination >>> 6)] & 1L << destination) != 0L;

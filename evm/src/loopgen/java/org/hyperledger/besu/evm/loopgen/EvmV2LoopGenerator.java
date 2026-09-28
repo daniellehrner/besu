@@ -149,7 +149,7 @@ public final class EvmV2LoopGenerator {
   private static final Set<String> CALLS =
       Set.of(
           "done",
-          "isJumpDestination",
+          "isJumpDestinationV2",
           "Long.bitCount",
           "Long.compareUnsigned",
           "Long.divideUnsigned",
@@ -196,6 +196,7 @@ public final class EvmV2LoopGenerator {
     final Path evmFile = Path.of(args[2]);
     final List<String> errors = new ArrayList<>();
     final List<Arm> arms = parse(armsFile, errors);
+    checkNoOverloads(evmFile, errors);
     if (!errors.isEmpty()) {
       System.err.println(
           "The EVM v2 loop arms in " + armsFile + " break the rules documented on V2LoopArms:");
@@ -285,6 +286,47 @@ public final class EvmV2LoopGenerator {
       errors.add("no @Arm methods found in " + armsFile);
     }
     return arms;
+  }
+
+  /**
+   * The arms call EVM's helpers without a qualifier, in V2LoopArms and, once generated, inside EVM.
+   * Java chooses among overloads by where the call is, so an overload in EVM could run in the loop
+   * where the arm calls another.
+   */
+  private static void checkNoOverloads(final Path evmFile, final List<String> errors)
+      throws IOException {
+    final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+    final Map<String, Integer> declared = new HashMap<>();
+    try (StandardJavaFileManager files = compiler.getStandardFileManager(null, null, UTF_8)) {
+      final JavacTask task =
+          (JavacTask)
+              compiler.getTask(
+                  null,
+                  files,
+                  null,
+                  List.of("-proc:none"),
+                  null,
+                  files.getJavaFileObjects(evmFile));
+      for (final Tree type : task.parse().iterator().next().getTypeDecls()) {
+        if (type instanceof ClassTree classTree) {
+          for (final Tree member : classTree.getMembers()) {
+            if (member instanceof MethodTree method) {
+              declared.merge(method.getName().toString(), 1, Integer::sum);
+            }
+          }
+        }
+      }
+    }
+    for (final String call : CALLS) {
+      if (!call.contains(".") && declared.getOrDefault(call, 0) > 1) {
+        errors.add(
+            evmFile
+                + " overloads "
+                + call
+                + ", so the loop may call another overload than the arms do; give the one the"
+                + " arms call a name of its own");
+      }
+    }
   }
 
   private static AnnotationTree armAnnotation(final MethodTree method) {

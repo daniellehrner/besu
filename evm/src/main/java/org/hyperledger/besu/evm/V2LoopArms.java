@@ -21,7 +21,7 @@ import static org.hyperledger.besu.evm.EVM.LONG_BE;
 import static org.hyperledger.besu.evm.EVM.LOW_TIER_GAS;
 import static org.hyperledger.besu.evm.EVM.MID_TIER_GAS;
 import static org.hyperledger.besu.evm.EVM.VERY_LOW_TIER_GAS;
-import static org.hyperledger.besu.evm.EVM.isJumpDestination;
+import static org.hyperledger.besu.evm.EVM.isJumpDestinationV2;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 
@@ -42,7 +42,7 @@ import java.lang.annotation.Target;
  *
  * <ul>
  *   <li>No call other than the few that always inline: {@code Long} and {@code Math} intrinsics,
- *       {@code LONG_BE}, the frame's memory and input accessors and {@code isJumpDestination}.
+ *       {@code LONG_BE}, the frame's memory and input accessors and {@code isJumpDestinationV2}.
  *       One call C2 does not inline, in any arm, makes it keep all of the loop's locals in memory
  *       for the whole loop; one allocating arm took JUMPDEST from 0.45 to about 2 ns.
  *   <li>No allocation, lambda, string, exception or synchronization, for the same reason.
@@ -338,7 +338,7 @@ public final class V2LoopArms {
       final int following = i + 3 < code.length ? code[i + 3] & 0xff : 0;
       if (following == 0x56) {
         if (gas >= VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS
-            && isJumpDestination(codeObject.jumpDestBitMask, immediate, code.length)) {
+            && isJumpDestinationV2(codeObject.jumpDestBitMask, immediate, code.length)) {
           // PUSH2 JUMP JUMPDEST, without the destination going through the stack
           return done(VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS, immediate + 1 - pc, 0);
         }
@@ -349,7 +349,7 @@ public final class V2LoopArms {
           return done(VERY_LOW_TIER_GAS + HIGH_TIER_GAS, 4, -1);
         }
         if (gas >= VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS
-            && isJumpDestination(codeObject.jumpDestBitMask, immediate, code.length)) {
+            && isJumpDestinationV2(codeObject.jumpDestBitMask, immediate, code.length)) {
           // PUSH2 JUMPI JUMPDEST, taken
           return done(VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS, immediate + 1 - pc, -1);
         }
@@ -394,7 +394,7 @@ public final class V2LoopArms {
       final long destination = s[d + 3];
       if ((s[d] | s[d + 1] | s[d + 2]) == 0
           && gas >= HIGH_TIER_GAS + JUMPDEST_GAS
-          && isJumpDestination(codeObject.jumpDestBitMask, destination, code.length)) {
+          && isJumpDestinationV2(codeObject.jumpDestBitMask, destination, code.length)) {
         return done(HIGH_TIER_GAS + JUMPDEST_GAS, (int) destination + 1 - pc, -2);
       }
     }
@@ -426,7 +426,7 @@ public final class V2LoopArms {
       final int d = top;
       final long destination = s[d + 3];
       if ((s[d] | s[d + 1] | s[d + 2]) == 0
-          && isJumpDestination(codeObject.jumpDestBitMask, destination, code.length)) {
+          && isJumpDestinationV2(codeObject.jumpDestBitMask, destination, code.length)) {
         return done(MID_TIER_GAS + JUMPDEST_GAS, (int) destination + 1 - pc, -1);
       }
     }
