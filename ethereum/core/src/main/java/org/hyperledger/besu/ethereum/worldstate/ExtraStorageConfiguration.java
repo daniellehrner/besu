@@ -92,11 +92,11 @@ public interface ExtraStorageConfiguration {
     boolean DEFAULT_BONSAI_ARCHIVE_STATE_PROOFS_ENABLED = false;
     int DEFAULT_BONSAI_ARCHIVE_SHALLOW_CHECKPOINT_INTERVAL = 32;
     int DEFAULT_BONSAI_ARCHIVE_DEEP_CHECKPOINT_INTERVAL = 16;
-    boolean DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_ENABLED = true;
+    boolean DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_ENABLED = false;
     int DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_PRUNE_AFTER_BLOCKS =
         ImmutableTreeCacheConfig.DEFAULT_PRUNE_AFTER_BLOCKS;
-    long DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_MAX_NODES =
-        ImmutableTreeCacheConfig.DEFAULT_MAX_CACHED_NODES;
+    long DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_MAX_CAPACITY =
+        ImmutableTreeCacheConfig.DEFAULT_MAX_CACHED_BYTES;
 
     @Value.Default
     default boolean getFullFlatDbEnabled() {
@@ -150,10 +150,10 @@ public interface ExtraStorageConfiguration {
       return DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_PRUNE_AFTER_BLOCKS;
     }
 
-    // Loaded trie nodes and placeholders the cache is pruned down to
+    // Estimated heap, in bytes, the cache is pruned down to
     @Value.Default
-    default long getBonsaiImmutableTreeCacheMaxNodes() {
-      return DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_MAX_NODES;
+    default long getBonsaiImmutableTreeCacheMaxCapacity() {
+      return DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_MAX_CAPACITY;
     }
   }
 }

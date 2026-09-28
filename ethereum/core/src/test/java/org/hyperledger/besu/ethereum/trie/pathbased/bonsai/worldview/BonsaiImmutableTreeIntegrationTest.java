@@ -108,18 +108,18 @@ class BonsaiImmutableTreeIntegrationTest {
             BlockBody.empty());
     blockchain = InMemoryKeyValueStorageProvider.createInMemoryBlockchain(genesis);
     chainHead = genesis.getHeader();
-    cached = participant(cacheConfig(true, 512, 1_000_000));
-    reference = participant(cacheConfig(false, 512, 1_000_000));
+    cached = participant(cacheConfig(true, 512, 64 << 20));
+    reference = participant(cacheConfig(false, 512, 64 << 20));
   }
 
   private static ExtraStorageConfiguration cacheConfig(
-      final boolean enabled, final int pruneAfterBlocks, final long maxNodes) {
+      final boolean enabled, final int pruneAfterBlocks, final long maxBytes) {
     return ImmutableExtraStorageConfiguration.builder()
         .unstable(
             ImmutableExtraStorageConfiguration.Unstable.builder()
                 .bonsaiImmutableTreeCacheEnabled(enabled)
                 .bonsaiImmutableTreeCachePruneAfterBlocks(pruneAfterBlocks)
-                .bonsaiImmutableTreeCacheMaxNodes(maxNodes)
+                .bonsaiImmutableTreeCacheMaxCapacity(maxBytes)
                 .build())
         .build();
   }
@@ -130,6 +130,12 @@ class BonsaiImmutableTreeIntegrationTest {
             new InMemoryKeyValueStorageProvider(),
             new NoOpMetricsSystem(),
             DataStorageConfiguration.DEFAULT_BONSAI_CONFIG);
+    return participant(storage, configuration);
+  }
+
+  private Participant participant(
+      final BonsaiWorldStateKeyValueStorage storage,
+      final ExtraStorageConfiguration configuration) {
     final BonsaiWorldStateProvider provider =
         new BonsaiWorldStateProvider(
             storage,
@@ -242,18 +248,16 @@ class BonsaiImmutableTreeIntegrationTest {
 
   @Test
   void aggressivePruningKeepsRootsAndStorageCorrect() {
-    cached = participant(cacheConfig(true, 1, 40));
+    // a budget nothing fits in: every prune unloads all it can and drops every other root
+    cached = participant(cacheConfig(true, 1, 1));
     long unloaded = 0;
     for (long seed = 100; seed < 130; seed++) {
       importBlock(seed);
       unloaded += cached.cache().prune().unloadedSubtrees();
+      assertThat(cached.cache().stats().storageRoots()).isZero();
     }
     assertThat(unloaded).isPositive();
-    // over budget: the window shrank and idle storage roots were dropped down to the budget
-    final ImmutableTreeCache.PruneStats lastPrune = cached.cache().stats().lastPrune();
-    assertThat(lastPrune.windowBlocks()).isZero();
-    assertThat(lastPrune.materializedNodes() + lastPrune.storedPlaceholders())
-        .isLessThanOrEqualTo(40);
+    assertThat(cached.cache().stats().lastPrune().windowBlocks()).isZero();
     assertDatabasesAgree(chainHead.getStateRoot());
   }
 
@@ -290,16 +294,31 @@ class BonsaiImmutableTreeIntegrationTest {
   }
 
   @Test
-  void frozenRootRecomputeBindsNewPayload() {
+  void frozenRootRecomputeRegistersAFork() {
     importBlock(300);
     try (BonsaiWorldState frozen = cached.frozenAt(chainHead)) {
       applyChanges(frozen, 301);
       final Hash root = frozen.rootHash();
       applyChanges(reference.head(), 301);
       assertThat(root).isEqualTo(computeRoot(reference.head()));
-      assertThat(cached.cache().boundState(TreeRole.NEW_PAYLOAD).map(TreeHandle::rootHash))
-          .contains(Bytes32.wrap(root.getBytes()));
+      // block building candidates and simulations are registered, not bound
+      assertThat(cached.cache().lookup(TreeKind.STATE, Bytes32.wrap(root.getBytes()))).isPresent();
+      assertThat(cached.cache().boundState(TreeRole.NEW_PAYLOAD)).isEmpty();
     }
+  }
+
+  @Test
+  void restartedNodeStartsTheCacheAtItsHeadBlock() {
+    for (long seed = 800; seed < 805; seed++) {
+      importBlock(seed);
+    }
+    final Participant restarted = participant(cached.storage(), cacheConfig(true, 512, 64 << 20));
+    assertThat(restarted.cache().currentBlock()).isEqualTo(chainHead.getNumber());
+    // nothing it loads while computing the next block is taken for stale by the first prune
+    cached = restarted;
+    importBlock(805);
+    assertThat(restarted.cache().prune().unloadedSubtrees()).isZero();
+    assertDatabasesAgree(chainHead.getStateRoot());
   }
 
   @Test

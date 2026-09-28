@@ -21,9 +21,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.IdentityHashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -35,6 +33,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Predicate;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -53,16 +52,18 @@ import org.slf4j.LoggerFactory;
  * <p>Retention is decided by bindings. The state root of the head world state is bound as {@link
  * TreeRole#HEAD}, the one of the latest payload validation as {@link TreeRole#NEW_PAYLOAD}, and the
  * storage roots each of them computed are bound per account. Bound roots stay while they are in
- * use. Other roots - the roots a computation started from, rolled world states, simulations - are
- * forks: they are dropped a few blocks after their last use, so the cache never pins more than a
- * short window of history.
+ * use. Other roots - the roots a computation started from, rolled world states, simulations, block
+ * building - are forks: they are dropped a few blocks after their last use, so the cache never pins
+ * more than a short window of history.
  *
  * <p>Pruning, run in the background as the head advances, drops expired roots and unloads the nodes
  * of the remaining ones that no traversal has touched for {@link
- * ImmutableTreeCacheConfig#pruneAfterBlocks()} blocks, replacing them by {@link StoredTreeNode}
- * placeholders. If more than {@link ImmutableTreeCacheConfig#maxCachedNodes()} nodes and
- * placeholders are left, it halves that window until they fit, and past a window of zero drops the
- * least recently used roots. Roots locked by a running traversal are skipped.
+ * ImmutableTreeCacheConfig#pruneAfterBlocks()} blocks, replacing them by stored children. If the
+ * estimated heap of what is left exceeds {@link ImmutableTreeCacheConfig#maxCachedBytes()}, it
+ * shortens that window until it fits, and past a window of zero drops the least recently used
+ * roots. Roots locked by a running traversal are skipped. Pruning finds what to drop without the
+ * lock that guards bindings, and takes it only for short batches of removals, so the block import
+ * binding its roots does not wait for a scan.
  */
 public final class ImmutableTreeCache {
 
@@ -77,14 +78,23 @@ public final class ImmutableTreeCache {
             return thread;
           });
 
+  // Pruning holds the binding lock for at most this many removals at a time
+  private static final int LOCK_BATCH = 256;
+
   private final ImmutableTreeCacheConfig config;
   private final ConcurrentHashMap<TreeKey, TreeHandle> roots = new ConcurrentHashMap<>();
 
+  // Bindings change under bindingLock. The fields and maps are safe to read without it, which is
+  // how pruning scans them before taking the lock to act.
   private final Object bindingLock = new Object();
-  private TreeHandle head;
-  private TreeHandle newPayload;
-  private final Map<Bytes32, TreeHandle> headStorage = new HashMap<>();
-  private final Map<Bytes32, TreeHandle> newPayloadStorage = new HashMap<>();
+  private volatile TreeHandle head;
+  private volatile TreeHandle newPayload;
+  private final ConcurrentHashMap<Bytes32, TreeHandle> headStorage = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<Bytes32, TreeHandle> newPayloadStorage =
+      new ConcurrentHashMap<>();
+  private final AtomicInteger boundRoots = new AtomicInteger();
+  // Incremented by clear(): handles from before a clear are never bound again
+  private final AtomicInteger generation = new AtomicInteger();
 
   private final AtomicLong currentBlock = new AtomicLong();
   private final AtomicLong lastPruneBlock = new AtomicLong();
@@ -122,6 +132,18 @@ public final class ImmutableTreeCache {
   }
 
   /**
+   * Starts the cache at a block, the head's when the node starts: nodes are stamped with it from
+   * the first block on, and the first prune is due {@link
+   * ImmutableTreeCacheConfig#pruneIntervalBlocks()} blocks later.
+   *
+   * @param blockNumber the block number
+   */
+  public void startAt(final long blockNumber) {
+    currentBlock.accumulateAndGet(blockNumber, Math::max);
+    lastPruneBlock.accumulateAndGet(blockNumber, Math::max);
+  }
+
+  /**
    * Creates a session stamping the nodes it visits with the current block.
    *
    * @param loader loads missing nodes; must be consistent with the roots the session works on
@@ -154,7 +176,7 @@ public final class ImmutableTreeCache {
     }
     final TreeNode root = session.loadRoot(rootHash);
     storedOpens.increment();
-    final TreeHandle opened = new TreeHandle(key, root, block);
+    final TreeHandle opened = new TreeHandle(key, root, block, generation.get());
     final TreeHandle raced = roots.putIfAbsent(key, opened);
     return raced != null ? raced : opened;
   }
@@ -188,9 +210,11 @@ public final class ImmutableTreeCache {
     }
     final TreeKey key = new TreeKey(rootHash, kind);
     final long block = currentBlock.get();
-    final TreeHandle handle = roots.computeIfAbsent(key, k -> new TreeHandle(k, root, block));
+    final int currentGeneration = generation.get();
+    final TreeHandle handle =
+        roots.computeIfAbsent(key, k -> new TreeHandle(k, root, block, currentGeneration));
     handle.touch(block);
-    if (roots.size() > config.maxUnboundRoots()) {
+    if (roots.size() - boundRoots.get() > config.maxUnboundRoots()) {
       // e.g. payload validations or simulations while the head does not move
       schedulePrune();
     }
@@ -205,7 +229,9 @@ public final class ImmutableTreeCache {
   public void setHead(final TreeHandle handle) {
     checkKind(handle, TreeKind.STATE);
     synchronized (bindingLock) {
-      head = rebind(head, handle);
+      final TreeHandle bound = registered(handle);
+      rebind(head, bound);
+      head = bound;
     }
   }
 
@@ -217,7 +243,9 @@ public final class ImmutableTreeCache {
   public void setNewPayload(final TreeHandle handle) {
     checkKind(handle, TreeKind.STATE);
     synchronized (bindingLock) {
-      newPayload = rebind(newPayload, handle);
+      final TreeHandle bound = registered(handle);
+      rebind(newPayload, bound);
+      newPayload = bound;
     }
   }
 
@@ -232,9 +260,10 @@ public final class ImmutableTreeCache {
     checkKind(handle, TreeKind.STORAGE);
     synchronized (bindingLock) {
       final Map<Bytes32, TreeHandle> bindings = storageBindings(role);
+      final TreeHandle bound = registered(handle);
       final TreeHandle previous =
-          handle == null ? bindings.remove(accountHash) : bindings.put(accountHash, handle);
-      rebind(previous, handle);
+          bound == null ? bindings.remove(accountHash) : bindings.put(accountHash, bound);
+      rebind(previous, bound);
     }
   }
 
@@ -245,9 +274,7 @@ public final class ImmutableTreeCache {
    * @return the handle, if bound
    */
   public Optional<TreeHandle> boundState(final TreeRole role) {
-    synchronized (bindingLock) {
-      return Optional.ofNullable(role == TreeRole.HEAD ? head : newPayload);
-    }
+    return Optional.ofNullable(role == TreeRole.HEAD ? head : newPayload);
   }
 
   /**
@@ -258,25 +285,38 @@ public final class ImmutableTreeCache {
    * @return the handle, if bound
    */
   public Optional<TreeHandle> boundStorage(final TreeRole role, final Bytes32 accountHash) {
-    synchronized (bindingLock) {
-      return Optional.ofNullable(storageBindings(role).get(accountHash));
-    }
+    return Optional.ofNullable(storageBindings(role).get(accountHash));
   }
 
-  private Map<Bytes32, TreeHandle> storageBindings(final TreeRole role) {
+  private ConcurrentHashMap<Bytes32, TreeHandle> storageBindings(final TreeRole role) {
     return role == TreeRole.HEAD ? headStorage : newPayloadStorage;
   }
 
-  private static TreeHandle rebind(final TreeHandle previous, final TreeHandle next) {
-    if (previous != next) {
-      if (previous != null) {
-        previous.bindings--;
-      }
-      if (next != null) {
-        next.bindings++;
-      }
+  /**
+   * Returns the registered handle of a root about to be bound, under the binding lock. A root
+   * dropped between its registration and now is registered again, so it stays prunable and can be
+   * opened; if it was registered again in the meantime, that handle is bound instead. Roots from
+   * before a {@link #clear()} are not bound at all.
+   */
+  private TreeHandle registered(final TreeHandle handle) {
+    if (handle == null || handle.generation() != generation.get()) {
+      return null;
     }
-    return next;
+    final TreeHandle existing = roots.putIfAbsent(handle.key(), handle);
+    return existing != null ? existing : handle;
+  }
+
+  /** Moves one binding from {@code previous} to {@code next}, under the binding lock. */
+  private void rebind(final TreeHandle previous, final TreeHandle next) {
+    if (previous == next) {
+      return;
+    }
+    if (previous != null && previous.bindings.decrementAndGet() == 0) {
+      boundRoots.decrementAndGet();
+    }
+    if (next != null && next.bindings.getAndIncrement() == 0) {
+      boundRoots.incrementAndGet();
+    }
   }
 
   private static void checkKind(final TreeHandle handle, final TreeKind kind) {
@@ -317,11 +357,14 @@ public final class ImmutableTreeCache {
   /** Drops every root and binding. */
   public void clear() {
     synchronized (bindingLock) {
+      generation.incrementAndGet();
       head = null;
       newPayload = null;
       headStorage.clear();
       newPayloadStorage.clear();
+      roots.values().forEach(handle -> handle.bindings.set(0));
       roots.clear();
+      boundRoots.set(0);
     }
     LOG.debug("Immutable tree cache cleared");
   }
@@ -341,26 +384,27 @@ public final class ImmutableTreeCache {
         storageRoots++;
       }
     }
-    synchronized (bindingLock) {
-      return new Stats(
-          stateRoots,
-          storageRoots,
-          head == null ? null : head.rootHash(),
-          newPayload == null ? null : newPayload.rootHash(),
-          headStorage.size(),
-          newPayloadStorage.size(),
-          cachedOpens.sum(),
-          storedOpens.sum(),
-          lastPrune);
-    }
+    final TreeHandle headRoot = head;
+    final TreeHandle newPayloadRoot = newPayload;
+    return new Stats(
+        stateRoots,
+        storageRoots,
+        headRoot == null ? null : headRoot.rootHash(),
+        newPayloadRoot == null ? null : newPayloadRoot.rootHash(),
+        headStorage.size(),
+        newPayloadStorage.size(),
+        cachedOpens.sum(),
+        storedOpens.sum(),
+        lastPrune);
   }
 
   // ---------------------------------------------------------------------------------------------
   // Pruning
 
   /**
-   * Drops expired roots and unloads the nodes nothing has used for the prune window. Runs in the
-   * background after head advances; callable directly.
+   * Drops expired roots and unloads the nodes nothing has used for the prune window, or a shorter
+   * one if the cache is over its heap budget. Runs in the background after head advances; callable
+   * directly.
    *
    * @return what the run did
    */
@@ -369,28 +413,37 @@ public final class ImmutableTreeCache {
     final long block = currentBlock.get();
     lastPruneBlock.set(block);
 
-    final int[] dropped = dropExpiredRoots(block);
+    final int droppedBindings = dropIdleStorageBindings(block);
+    int droppedRoots = dropExpiredRoots(block);
+
+    final long budget = config.maxCachedBytes();
     long window = config.pruneAfterBlocks();
-    Walk walk = unloadStale(block - window);
+    Walk walk = unloadStale(block, window);
     long unloaded = walk.unloaded;
-    while (walk.cachedNodes() > config.maxCachedNodes() && window > 0) {
-      window /= 2;
-      walk = unloadStale(block - window);
+    if (walk.estimatedBytes > budget) {
+      // Traversals touch nodes top down, so unloading with a shorter window keeps about the nodes
+      // used within it: pick the longest window whose nodes fit
+      window = walk.longestWindowWithin(budget);
+      walk = unloadStale(block, window);
       unloaded += walk.unloaded;
+      while (walk.estimatedBytes > budget && window > 0) {
+        window /= 2;
+        walk = unloadStale(block, window);
+        unloaded += walk.unloaded;
+      }
     }
-    if (walk.cachedNodes() > config.maxCachedNodes()) {
-      // Only nodes used in the current block are left, and every registered root keeps its root
-      // node loaded: drop the least recently used roots, each worth at least one node
-      dropped[0] += dropLeastRecentlyUsed(walk.cachedNodes() - config.maxCachedNodes());
-      walk = unloadStale(block - window);
+    if (walk.estimatedBytes > budget) {
+      // Only nodes used in the current block are left, and every root keeps its root node loaded
+      droppedRoots += dropLeastRecentlyUsed(walk.estimatedBytes - budget);
+      walk = unloadStale(block, window);
       unloaded += walk.unloaded;
     }
 
     final PruneStats stats =
         new PruneStats(
             block,
-            dropped[0],
-            dropped[1],
+            droppedRoots,
+            droppedBindings,
             unloaded,
             walk.materialized,
             walk.stored,
@@ -404,113 +457,174 @@ public final class ImmutableTreeCache {
     return stats;
   }
 
-  /** Returns {dropped roots, dropped storage bindings}. */
-  private int[] dropExpiredRoots(final long block) {
-    int droppedBindings = 0;
-    int droppedRoots = 0;
-    synchronized (bindingLock) {
-      for (final TreeRole role : TreeRole.values()) {
-        final Iterator<TreeHandle> bindings = storageBindings(role).values().iterator();
-        while (bindings.hasNext()) {
-          final TreeHandle handle = bindings.next();
-          if (!handle.isLocked() && block - handle.lastAccessBlock() > config.pruneAfterBlocks()) {
-            bindings.remove();
-            handle.bindings--;
-            droppedBindings++;
-          }
-        }
-      }
-      final List<TreeHandle> unbound = new ArrayList<>();
-      final Iterator<TreeHandle> handles = roots.values().iterator();
-      while (handles.hasNext()) {
-        final TreeHandle handle = handles.next();
-        if (handle.bindings > 0 || handle.isLocked()) {
-          continue;
-        }
-        if (block - handle.lastAccessBlock() > config.forkRetentionBlocks()) {
-          handles.remove();
-          droppedRoots++;
-        } else {
-          unbound.add(handle);
-        }
-      }
-      if (unbound.size() > config.maxUnboundRoots()) {
-        unbound.sort(Comparator.comparingLong(TreeHandle::lastAccessBlock));
-        for (int i = 0; i < unbound.size() - config.maxUnboundRoots(); i++) {
-          if (roots.remove(unbound.get(i).key(), unbound.get(i))) {
-            droppedRoots++;
-          }
-        }
-      }
+  /** Drops the storage bindings not used for the prune window. */
+  private int dropIdleStorageBindings(final long block) {
+    final Predicate<TreeHandle> idle =
+        handle ->
+            !handle.isLocked() && block - handle.lastAccessBlock() > config.pruneAfterBlocks();
+    int dropped = 0;
+    for (final TreeRole role : TreeRole.values()) {
+      dropped += unbindStorage(storageBindings(role), idle);
     }
-    return new int[] {droppedRoots, droppedBindings};
+    return dropped;
   }
 
   /**
-   * Drops up to {@code count} roots, least recently used first, with their storage bindings. The
-   * head and new payload state roots are kept.
+   * Removes the bindings whose root matches, checking again under the binding lock, which it takes
+   * for a batch of removals at a time.
    */
-  private int dropLeastRecentlyUsed(final long count) {
-    synchronized (bindingLock) {
-      final List<TreeHandle> candidates = new ArrayList<>();
-      for (final TreeHandle handle : roots.values()) {
-        if (!handle.isLocked() && handle != head && handle != newPayload) {
-          candidates.add(handle);
-        }
-      }
-      candidates.sort(Comparator.comparingLong(TreeHandle::lastAccessBlock));
-      final int dropCount = (int) Math.min(count, candidates.size());
-      final Set<TreeHandle> dropping = Collections.newSetFromMap(new IdentityHashMap<>());
-      dropping.addAll(candidates.subList(0, dropCount));
-      for (final TreeRole role : TreeRole.values()) {
-        final Iterator<TreeHandle> bindings = storageBindings(role).values().iterator();
-        while (bindings.hasNext()) {
-          final TreeHandle handle = bindings.next();
-          if (dropping.contains(handle)) {
-            bindings.remove();
-            handle.bindings--;
+  private int unbindStorage(
+      final ConcurrentHashMap<Bytes32, TreeHandle> bindings, final Predicate<TreeHandle> matches) {
+    final List<Map.Entry<Bytes32, TreeHandle>> matching = new ArrayList<>();
+    bindings.forEach(
+        (account, handle) -> {
+          if (matches.test(handle)) {
+            matching.add(Map.entry(account, handle));
+          }
+        });
+    int removed = 0;
+    for (int from = 0; from < matching.size(); from += LOCK_BATCH) {
+      synchronized (bindingLock) {
+        for (final Map.Entry<Bytes32, TreeHandle> binding :
+            matching.subList(from, Math.min(matching.size(), from + LOCK_BATCH))) {
+          final TreeHandle handle = binding.getValue();
+          if (matches.test(handle) && bindings.remove(binding.getKey(), handle)) {
+            rebind(handle, null);
+            removed++;
           }
         }
       }
-      int dropped = 0;
-      for (final TreeHandle handle : dropping) {
-        if (roots.remove(handle.key(), handle)) {
-          dropped++;
+    }
+    return removed;
+  }
+
+  /** Drops unbound roots unused for the fork retention, and the oldest beyond the cap. */
+  private int dropExpiredRoots(final long block) {
+    final List<TreeHandle> dropping = new ArrayList<>();
+    final List<TreeHandle> unbound = new ArrayList<>();
+    for (final TreeHandle handle : roots.values()) {
+      if (handle.bindings.get() > 0 || handle.isLocked()) {
+        continue;
+      }
+      if (block - handle.lastAccessBlock() > config.forkRetentionBlocks()) {
+        dropping.add(handle);
+      } else {
+        unbound.add(handle);
+      }
+    }
+    if (unbound.size() > config.maxUnboundRoots()) {
+      unbound.sort(Comparator.comparingLong(TreeHandle::lastAccessBlock));
+      dropping.addAll(unbound.subList(0, unbound.size() - config.maxUnboundRoots()));
+    }
+    return removeUnbound(dropping);
+  }
+
+  /**
+   * Drops the least recently used roots, with their storage bindings, until the heap the last walk
+   * attributed to them covers {@code excessBytes}. The head and new payload state roots are kept.
+   */
+  private int dropLeastRecentlyUsed(final long excessBytes) {
+    final TreeHandle headRoot = head;
+    final TreeHandle newPayloadRoot = newPayload;
+    final List<TreeHandle> candidates = new ArrayList<>();
+    for (final TreeHandle handle : roots.values()) {
+      if (handle != headRoot && handle != newPayloadRoot && !handle.isLocked()) {
+        candidates.add(handle);
+      }
+    }
+    candidates.sort(Comparator.comparingLong(TreeHandle::lastAccessBlock));
+    final Set<TreeHandle> dropping = Collections.newSetFromMap(new IdentityHashMap<>());
+    long freed = 0;
+    for (final TreeHandle handle : candidates) {
+      if (freed >= excessBytes) {
+        break;
+      }
+      dropping.add(handle);
+      freed += Math.max(handle.walkBytes, 1);
+    }
+    for (final TreeRole role : TreeRole.values()) {
+      unbindStorage(storageBindings(role), dropping::contains);
+    }
+    return removeUnbound(new ArrayList<>(dropping));
+  }
+
+  /**
+   * Removes roots that are still unbound, unlocked and neither head nor new payload, checking under
+   * the binding lock, which it takes for a batch of removals at a time.
+   */
+  private int removeUnbound(final List<TreeHandle> handles) {
+    int removed = 0;
+    for (int from = 0; from < handles.size(); from += LOCK_BATCH) {
+      synchronized (bindingLock) {
+        for (final TreeHandle handle :
+            handles.subList(from, Math.min(handles.size(), from + LOCK_BATCH))) {
+          if (handle.bindings.get() == 0
+              && !handle.isLocked()
+              && handle != head
+              && handle != newPayload
+              && roots.remove(handle.key(), handle)) {
+            removed++;
+          }
         }
       }
-      return dropped;
     }
+    return removed;
   }
 
   private static final class Walk {
+    private final long block;
+    // Estimated heap of what is left, by age in blocks of the node it belongs to
+    private final long[] bytesByAge;
     long materialized;
     long stored;
     long unloaded;
     long estimatedBytes;
     int lockedRoots;
 
-    /** What the budget counts: placeholders cost about as much heap as small nodes. */
-    long cachedNodes() {
-      return materialized + stored;
+    Walk(final long block, final long window) {
+      this.block = block;
+      this.bytesByAge = new long[(int) Math.min(window, Integer.MAX_VALUE - 1) + 1];
+    }
+
+    void add(final int lastAccess, final long bytes) {
+      final long age = Math.max(0, block - lastAccess);
+      bytesByAge[(int) Math.min(age, bytesByAge.length - 1)] += bytes;
+      estimatedBytes += bytes;
+    }
+
+    /** The longest window whose nodes fit in the budget, 0 if not even the newest ones do. */
+    long longestWindowWithin(final long budget) {
+      long total = 0;
+      for (int age = 0; age < bytesByAge.length; age++) {
+        total += bytesByAge[age];
+        if (total > budget) {
+          return Math.max(0L, age - 1L);
+        }
+      }
+      return bytesByAge.length - 1L;
     }
   }
 
   /**
-   * Walks every unlocked root once, unloading loaded children last used before {@code threshold}. A
-   * shared subtree is walked once however many roots reach it.
+   * Walks every unlocked root once, unloading loaded children last used more than {@code window}
+   * blocks ago. A shared subtree is walked once however many roots reach it.
    */
-  private Walk unloadStale(final long threshold) {
-    final Walk walk = new Walk();
+  private Walk unloadStale(final long block, final long window) {
+    final Walk walk = new Walk(block, window);
     final int epoch = walkEpochs.incrementAndGet();
+    final long threshold = block - window;
     final int stampThreshold =
         (int) Math.max(Integer.MIN_VALUE, Math.min(threshold, Integer.MAX_VALUE));
     final PathStack path = new PathStack();
     for (final TreeHandle handle : roots.values()) {
       if (handle.isLocked()) {
         walk.lockedRoots++;
+        handle.walkBytes = 0;
         continue;
       }
+      final long before = walk.estimatedBytes;
       walkNode(handle.root(), path, stampThreshold, epoch, walk);
+      handle.walkBytes = walk.estimatedBytes - before;
     }
     return walk;
   }
@@ -526,7 +640,9 @@ public final class ImmutableTreeCache {
     }
     materialized.visitEpoch = epoch;
     walk.materialized++;
-    walk.estimatedBytes += estimatedSize(materialized);
+    // stored children are accounted to the node holding them
+    final int lastAccess = materialized.lastAccess;
+    walk.add(lastAccess, estimatedSize(materialized));
     if (node instanceof BranchTreeNode branch) {
       Bytes location = null;
       for (int i = 0; i < TreePaths.RADIX; i++) {
@@ -534,7 +650,7 @@ public final class ImmutableTreeCache {
         if (loaded == null) {
           if (branch.isStoredChild(i)) {
             walk.stored++;
-            walk.estimatedBytes += branch.isCompactChild(i) ? COMPACT_SIZE : STORED_SIZE;
+            walk.add(lastAccess, branch.isCompactChild(i) ? COMPACT_SIZE : STORED_SIZE);
           }
         } else if (loaded.lastAccess < threshold && loaded.isReferencedByHash()) {
           if (location == null) {
@@ -544,7 +660,7 @@ public final class ImmutableTreeCache {
               i, loaded, new StoredTreeNode(location, TreePaths.nibble(i), loaded.hash()))) {
             walk.unloaded++;
             walk.stored++;
-            walk.estimatedBytes += branch.isCompactChild(i) ? COMPACT_SIZE : STORED_SIZE;
+            walk.add(lastAccess, branch.isCompactChild(i) ? COMPACT_SIZE : STORED_SIZE);
           }
         } else {
           path.push(i);
@@ -556,14 +672,14 @@ public final class ImmutableTreeCache {
       final TreeNode child = extension.child();
       if (child instanceof StoredTreeNode) {
         walk.stored++;
-        walk.estimatedBytes += STORED_SIZE;
+        walk.add(lastAccess, STORED_SIZE);
       } else if (child instanceof MaterializedTreeNode loaded) {
         if (loaded.lastAccess < threshold && loaded.isReferencedByHash()) {
           if (extension.swapChild(
               loaded, new StoredTreeNode(path.toBytes(), extension.path(), loaded.hash()))) {
             walk.unloaded++;
             walk.stored++;
-            walk.estimatedBytes += STORED_SIZE;
+            walk.add(lastAccess, STORED_SIZE);
           }
         } else {
           path.push(extension.path());
@@ -574,9 +690,10 @@ public final class ImmutableTreeCache {
     }
   }
 
-  // Heap footprint for the logs, from object layouts with compressed pointers: node, hash, slot
-  // array, the shared array of stored hashes (counted per branch, although copies share it) and
-  // the byte payloads. Compact slots live in that array; a placeholder object costs more.
+  // Heap footprint for the budget and the logs, from object layouts with compressed pointers:
+  // node, hash, slot array, the shared array of stored hashes (counted per branch, although copies
+  // share it) and the byte payloads. Compact slots live in that array; a placeholder object costs
+  // more. Calibrated against the measured heap of a cached 300,000 account trie.
   private static final long HASH_SIZE = 72;
   private static final long STORED_SIZE = 32 + HASH_SIZE;
   private static final long COMPACT_SIZE = 0;
@@ -652,11 +769,11 @@ public final class ImmutableTreeCache {
    * @param block the block it ran at
    * @param droppedRoots roots dropped from the registry
    * @param droppedBindings idle storage bindings dropped
-   * @param unloadedSubtrees loaded subtrees replaced by placeholders
+   * @param unloadedSubtrees loaded subtrees replaced by stored children
    * @param materializedNodes loaded nodes left, counted once however many roots share them
-   * @param storedPlaceholders placeholders left
-   * @param estimatedBytes rough heap footprint of what is left
-   * @param windowBlocks the prune window that was applied, after any tightening
+   * @param storedPlaceholders stored children left
+   * @param estimatedBytes estimated heap of what is left, the figure the budget applies to
+   * @param windowBlocks the prune window that was applied, after any shortening
    * @param lockedRoots roots skipped because a traversal held them
    * @param registeredRoots roots left in the registry
    * @param durationMillis how long the run took
@@ -680,7 +797,7 @@ public final class ImmutableTreeCache {
     public String toString() {
       return String.format(
           "block=%d droppedRoots=%d droppedStorageBindings=%d unloadedSubtrees=%d"
-              + " loadedNodes=%d placeholders=%d estimatedMiB=%d window=%d lockedRoots=%d"
+              + " loadedNodes=%d storedChildren=%d estimatedMiB=%d window=%d lockedRoots=%d"
               + " registeredRoots=%d took=%dms",
           block,
           droppedRoots,

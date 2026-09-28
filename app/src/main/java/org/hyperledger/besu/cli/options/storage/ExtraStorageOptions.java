@@ -27,7 +27,7 @@ import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration
 import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_CROSS_BLOCK_CACHE_ENABLED;
 import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_CROSS_BLOCK_CACHE_STORAGE_SIZE;
 import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_ENABLED;
-import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_MAX_NODES;
+import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_MAX_CAPACITY;
 import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_PRUNE_AFTER_BLOCKS;
 import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_CODE_USING_CODE_HASH_ENABLED;
 import static org.hyperledger.besu.ethereum.worldstate.ExtraStorageConfiguration.Unstable.DEFAULT_FULL_FLAT_DB_ENABLED;
@@ -86,9 +86,9 @@ public class ExtraStorageOptions implements CLIOptions<ExtraStorageConfiguration
   public static final String IMMUTABLE_TREE_CACHE_PRUNE_AFTER_BLOCKS =
       "--Xbonsai-immutable-tree-cache-prune-after-blocks";
 
-  /** The immutable tree cache node budget option name. */
-  public static final String IMMUTABLE_TREE_CACHE_MAX_NODES =
-      "--Xbonsai-immutable-tree-cache-max-nodes";
+  /** The immutable tree cache heap budget option name. */
+  public static final String IMMUTABLE_TREE_CACHE_MAX_CAPACITY =
+      "--Xbonsai-immutable-tree-cache-max-capacity";
 
   /** Upper bound for the checkpoint intervals: the diff-chain counter is a single unsigned byte. */
   public static final int MAX_BONSAI_ARCHIVE_CHECKPOINT_INTERVAL =
@@ -218,11 +218,12 @@ public class ExtraStorageOptions implements CLIOptions<ExtraStorageConfiguration
 
     @Option(
         hidden = true,
-        names = {IMMUTABLE_TREE_CACHE_MAX_NODES},
+        names = {IMMUTABLE_TREE_CACHE_MAX_CAPACITY},
         paramLabel = "<LONG>",
         description =
-            "Number of loaded trie nodes the immutable tree cache is pruned down to. (default: ${DEFAULT-VALUE})")
-    private Long bonsaiImmutableTreeCacheMaxNodes = DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_MAX_NODES;
+            "Estimated heap, in bytes, that the immutable tree cache is pruned down to. (default: ${DEFAULT-VALUE})")
+    private Long bonsaiImmutableTreeCacheMaxCapacity =
+        DEFAULT_BONSAI_IMMUTABLE_TREE_CACHE_MAX_CAPACITY;
 
     /** Default Constructor. */
     Unstable() {}
@@ -277,9 +278,9 @@ public class ExtraStorageOptions implements CLIOptions<ExtraStorageConfiguration
       throw new CommandLine.ParameterException(
           commandLine, IMMUTABLE_TREE_CACHE_PRUNE_AFTER_BLOCKS + " must be at least 1");
     }
-    if (unstableOptions.bonsaiImmutableTreeCacheMaxNodes < 1) {
+    if (unstableOptions.bonsaiImmutableTreeCacheMaxCapacity < 1) {
       throw new CommandLine.ParameterException(
-          commandLine, IMMUTABLE_TREE_CACHE_MAX_NODES + " must be at least 1");
+          commandLine, IMMUTABLE_TREE_CACHE_MAX_CAPACITY + " must be at least 1");
     }
     if (DataStorageFormat.X_BONSAI_ARCHIVE == dataStorageFormat) {
       validateCheckpointInterval(
@@ -336,8 +337,8 @@ public class ExtraStorageOptions implements CLIOptions<ExtraStorageConfiguration
         domainObject.getUnstable().getBonsaiImmutableTreeCacheEnabled();
     dataStorageOptions.unstableOptions.bonsaiImmutableTreeCachePruneAfterBlocks =
         domainObject.getUnstable().getBonsaiImmutableTreeCachePruneAfterBlocks();
-    dataStorageOptions.unstableOptions.bonsaiImmutableTreeCacheMaxNodes =
-        domainObject.getUnstable().getBonsaiImmutableTreeCacheMaxNodes();
+    dataStorageOptions.unstableOptions.bonsaiImmutableTreeCacheMaxCapacity =
+        domainObject.getUnstable().getBonsaiImmutableTreeCacheMaxCapacity();
     dataStorageOptions.isParallelTxProcessingEnabled =
         domainObject.getParallelTxProcessingEnabled();
     dataStorageOptions.isParallelStateRootComputationEnabled =
@@ -369,7 +370,8 @@ public class ExtraStorageOptions implements CLIOptions<ExtraStorageConfiguration
                 .bonsaiImmutableTreeCacheEnabled(unstableOptions.bonsaiImmutableTreeCacheEnabled)
                 .bonsaiImmutableTreeCachePruneAfterBlocks(
                     unstableOptions.bonsaiImmutableTreeCachePruneAfterBlocks)
-                .bonsaiImmutableTreeCacheMaxNodes(unstableOptions.bonsaiImmutableTreeCacheMaxNodes)
+                .bonsaiImmutableTreeCacheMaxCapacity(
+                    unstableOptions.bonsaiImmutableTreeCacheMaxCapacity)
                 .build())
         .build();
   }

@@ -74,7 +74,7 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
     this.bonsaiCachedMerkleTrieLoader = bonsaiCachedMerkleTrieLoader;
     this.amsterdamMilestone = amsterdamMilestone;
     this.immutableTreeCache =
-        createImmutableTreeCache(extraStorageConfiguration, worldStateKeyValueStorage);
+        createImmutableTreeCache(extraStorageConfiguration, worldStateKeyValueStorage, blockchain);
     this.evmConfiguration = evmConfiguration;
     provideWorldStateCacheManager(
         new BonsaiWorldStateCacheManager(
@@ -98,7 +98,7 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
     this.bonsaiCachedMerkleTrieLoader = bonsaiCachedMerkleTrieLoader;
     this.amsterdamMilestone = Optional.empty();
     this.immutableTreeCache =
-        createImmutableTreeCache(extraStorageConfiguration, worldStateKeyValueStorage);
+        createImmutableTreeCache(extraStorageConfiguration, worldStateKeyValueStorage, blockchain);
     this.evmConfiguration = evmConfiguration;
     provideWorldStateCacheManager(bonsaiWorldStateCacheManager);
     initializeHeadWorldState(
@@ -121,7 +121,8 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
 
   private static ImmutableTreeCache createImmutableTreeCache(
       final ExtraStorageConfiguration extraStorageConfiguration,
-      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage) {
+      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
+      final Blockchain blockchain) {
     final ExtraStorageConfiguration.Unstable unstable = extraStorageConfiguration.getUnstable();
     if (!unstable.getBonsaiImmutableTreeCacheEnabled()) {
       return null;
@@ -130,7 +131,12 @@ public class BonsaiWorldStateProvider extends PathBasedWorldStateProvider {
         new ImmutableTreeCache(
             ImmutableTreeCacheConfig.DEFAULT.withLimits(
                 unstable.getBonsaiImmutableTreeCachePruneAfterBlocks(),
-                unstable.getBonsaiImmutableTreeCacheMaxNodes()));
+                unstable.getBonsaiImmutableTreeCacheMaxCapacity()));
+    // Stamp from the head's block on, or the first prune would take everything for stale
+    cache.startAt(
+        worldStateKeyValueStorage
+            .getWorldStateBlockNumber()
+            .orElseGet(blockchain::getChainHeadBlockNumber));
     // Cached trees stand for nodes on disk; drop them when the trie is wiped
     worldStateKeyValueStorage.subscribe(
         new StorageSubscriber() {

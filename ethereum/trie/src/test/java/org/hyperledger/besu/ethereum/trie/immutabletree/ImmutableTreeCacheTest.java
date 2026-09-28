@@ -74,9 +74,9 @@ class ImmutableTreeCacheTest {
     return Bytes.wrap(bytes);
   }
 
-  private static ImmutableTreeCache cache(final int pruneAfterBlocks, final long maxNodes) {
+  private static ImmutableTreeCache cache(final int pruneAfterBlocks, final long maxBytes) {
     return new ImmutableTreeCache(
-        new ImmutableTreeCacheConfig(pruneAfterBlocks, 2, maxNodes, 1, 1000));
+        new ImmutableTreeCacheConfig(pruneAfterBlocks, 2, maxBytes, 1, 1000));
   }
 
   private ImmutableTreeMerkleTrie trie(final ImmutableTreeCache cache, final Bytes32 root) {
@@ -86,7 +86,7 @@ class ImmutableTreeCacheTest {
 
   @Test
   void openingARootLoadsTheRootNodeOnly() {
-    final ImmutableTreeCache cache = cache(512, 1_000_000);
+    final ImmutableTreeCache cache = cache(512, 64 << 20);
     final TreeHandle handle = cache.open(TreeKind.STATE, storedRoot, cache.newSession(store));
 
     assertThat(store.reads()).isEqualTo(1);
@@ -103,7 +103,7 @@ class ImmutableTreeCacheTest {
 
   @Test
   void missingRootFailsWithTheNodeLocation() {
-    final ImmutableTreeCache cache = cache(512, 1_000_000);
+    final ImmutableTreeCache cache = cache(512, 64 << 20);
     final Bytes32 unknown = Bytes32.random();
     assertThatThrownBy(() -> cache.open(TreeKind.STATE, unknown, cache.newSession(store)))
         .isInstanceOf(MerkleTrieException.class)
@@ -116,7 +116,7 @@ class ImmutableTreeCacheTest {
 
   @Test
   void updatesCopyOnWriteAndRootsCoexist() {
-    final ImmutableTreeCache cache = cache(512, 1_000_000);
+    final ImmutableTreeCache cache = cache(512, 64 << 20);
 
     final ImmutableTreeMerkleTrie first = trie(cache, storedRoot);
     final ImmutableTreeMerkleTrie second = trie(cache, storedRoot);
@@ -169,7 +169,7 @@ class ImmutableTreeCacheTest {
 
   @Test
   void registeringAnExistingRootKeepsTheRegisteredTree() {
-    final ImmutableTreeCache cache = cache(512, 1_000_000);
+    final ImmutableTreeCache cache = cache(512, 64 << 20);
     final TreeHandle opened = cache.open(TreeKind.STATE, storedRoot, cache.newSession(store));
     final TreeNode sameContent = TreeSession.create(store, 0).loadRoot(storedRoot);
     assertThat(cache.register(TreeKind.STATE, sameContent)).isSameAs(opened);
@@ -179,7 +179,7 @@ class ImmutableTreeCacheTest {
 
   @Test
   void headAndNewPayloadBindingsKeepRootsWhileForksExpire() {
-    final ImmutableTreeCache cache = cache(512, 1_000_000);
+    final ImmutableTreeCache cache = cache(512, 64 << 20);
     cache.advanceBlock(10, false);
     final TreeHandle headRoot = cache.open(TreeKind.STATE, storedRoot, cache.newSession(store));
     cache.setHead(headRoot);
@@ -214,7 +214,7 @@ class ImmutableTreeCacheTest {
 
   @Test
   void storageBindingsFollowTheAccountAndExpireWhenIdle() {
-    final ImmutableTreeCache cache = cache(16, 1_000_000);
+    final ImmutableTreeCache cache = cache(16, 64 << 20);
     final Bytes32 account = Bytes32.random();
     final Bytes32 otherAccount = Bytes32.random();
     final TreeHandle storage = cache.open(TreeKind.STORAGE, storedRoot, cache.newSession(store));
@@ -256,7 +256,7 @@ class ImmutableTreeCacheTest {
 
   @Test
   void lockedRootsAreNeitherDroppedNorPruned() {
-    final ImmutableTreeCache cache = cache(4, 1_000_000);
+    final ImmutableTreeCache cache = cache(4, 64 << 20);
     cache.advanceBlock(1, false);
     final ImmutableTreeMerkleTrie reader = trie(cache, storedRoot);
     for (final Bytes key : keys.subList(0, 50)) {
@@ -283,7 +283,7 @@ class ImmutableTreeCacheTest {
 
   @Test
   void prunedNodesReloadThroughTheNextSession() {
-    final ImmutableTreeCache cache = cache(4, 1_000_000);
+    final ImmutableTreeCache cache = cache(4, 64 << 20);
     cache.advanceBlock(1, false);
     final TreeHandle handle = cache.open(TreeKind.STATE, storedRoot, cache.newSession(store));
     cache.setHead(handle);
@@ -304,7 +304,7 @@ class ImmutableTreeCacheTest {
 
   @Test
   void decodedBranchesKeepStoredChildrenCompactly() {
-    final ImmutableTreeCache cache = cache(4, 1_000_000);
+    final ImmutableTreeCache cache = cache(4, 64 << 20);
     cache.advanceBlock(1, false);
     final TreeHandle base = cache.open(TreeKind.STATE, storedRoot, cache.newSession(store));
     cache.setHead(base);
@@ -362,7 +362,7 @@ class ImmutableTreeCacheTest {
 
   @Test
   void recentlyUsedPathsSurvivePruning() {
-    final ImmutableTreeCache cache = cache(4, 1_000_000);
+    final ImmutableTreeCache cache = cache(4, 64 << 20);
     cache.advanceBlock(1, false);
     final TreeHandle handle = cache.open(TreeKind.STATE, storedRoot, cache.newSession(store));
     cache.setHead(handle);
@@ -382,8 +382,9 @@ class ImmutableTreeCacheTest {
   }
 
   @Test
-  void nodeBudgetTightensThePruneWindow() {
-    final ImmutableTreeCache cache = cache(512, 800);
+  void heapBudgetShortensThePruneWindow() {
+    final long budget = 150_000;
+    final ImmutableTreeCache cache = cache(512, budget);
     cache.advanceBlock(1, false);
     final TreeHandle handle = cache.open(TreeKind.STATE, storedRoot, cache.newSession(store));
     cache.setHead(handle);
@@ -393,19 +394,108 @@ class ImmutableTreeCacheTest {
         trie(cache, storedRoot).get(key);
       }
     }
-    assertThat(countLoaded(handle.root())).isGreaterThan(800);
+    final long loadedBefore = countLoaded(handle.root());
     final ImmutableTreeCache.PruneStats stats = cache.prune();
-    // placeholders count against the budget too
-    assertThat(stats.materializedNodes() + stats.storedPlaceholders()).isLessThanOrEqualTo(800);
-    assertThat(stats.windowBlocks()).isLessThan(512);
-    assertThat(countLoaded(handle.root())).isEqualTo(stats.materializedNodes());
-    // the head root is never dropped to meet the budget
+    assertThat(stats.estimatedBytes()).isLessThanOrEqualTo(budget);
+    assertThat(stats.windowBlocks()).isLessThan(40);
+    assertThat(countLoaded(handle.root()))
+        .isEqualTo(stats.materializedNodes())
+        .isLessThan(loadedBefore);
+    // the most recent block's paths are kept, the head root is never dropped
+    store.resetReads();
+    trie(cache, storedRoot).get(keys.get(40 * 20));
+    assertThat(store.reads()).isZero();
     assertThat(cache.lookup(TreeKind.STATE, storedRoot)).containsSame(handle);
   }
 
   @Test
+  void pruneTriggerIgnoresBoundRoots() throws InterruptedException {
+    final ImmutableTreeCache cache =
+        new ImmutableTreeCache(new ImmutableTreeCacheConfig(512, 2, 64 << 20, 1000, 3));
+    // many bound storage roots: the head's accounts, kept as long as they are used
+    for (int i = 0; i < 20; i++) {
+      final ImmutableTreeMerkleTrie storage =
+          new ImmutableTreeMerkleTrie(
+              cache,
+              TreeKind.STORAGE,
+              MerkleTrie.EMPTY_TRIE_NODE_HASH,
+              store,
+              null,
+              ImmutableTreeMerkleTrie.RootListener.NONE);
+      storage.put(bytes(32), bytes(8));
+      storage.getRootHash();
+      cache.bindStorage(
+          TreeRole.HEAD, Bytes32.random(), cache.register(TreeKind.STORAGE, storage.currentRoot()));
+    }
+    Thread.sleep(200);
+    assertThat(cache.stats().lastPrune().block()).isEqualTo(-1);
+
+    // unbound roots beyond the cap do start one
+    for (int i = 0; i < 5; i++) {
+      final ImmutableTreeMerkleTrie fork =
+          new ImmutableTreeMerkleTrie(
+              cache,
+              TreeKind.STATE,
+              MerkleTrie.EMPTY_TRIE_NODE_HASH,
+              store,
+              null,
+              ImmutableTreeMerkleTrie.RootListener.NONE);
+      fork.put(bytes(32), bytes(8));
+      fork.getRootHash();
+      cache.register(TreeKind.STATE, fork.currentRoot());
+    }
+    final long deadline = System.currentTimeMillis() + 5_000;
+    while (cache.stats().lastPrune().block() == -1 && System.currentTimeMillis() < deadline) {
+      Thread.sleep(10);
+    }
+    assertThat(cache.stats().lastPrune().block()).isNotEqualTo(-1);
+    // a registration after that run may have started another: settle before counting
+    cache.prune();
+    assertThat(cache.stats().stateRoots()).isLessThanOrEqualTo(3);
+    assertThat(cache.stats().storageRoots()).isEqualTo(20);
+    assertThat(cache.stats().headStorageBindings()).isEqualTo(20);
+  }
+
+  @Test
+  void startingAtTheHeadBlockKeepsTheFirstBlockWarm() {
+    final ImmutableTreeCache cache = cache(512, 64 << 20);
+    cache.startAt(10_000);
+    final TreeHandle handle = cache.open(TreeKind.STATE, storedRoot, cache.newSession(store));
+    cache.setHead(handle);
+    for (final Bytes key : keys.subList(0, 50)) {
+      trie(cache, storedRoot).get(key);
+    }
+    final long loaded = countLoaded(handle.root());
+    cache.advanceBlock(10_001, true);
+    final ImmutableTreeCache.PruneStats stats = cache.prune();
+    assertThat(stats.unloadedSubtrees()).isZero();
+    assertThat(countLoaded(handle.root())).isEqualTo(loaded);
+  }
+
+  @Test
+  void bindingRegistersADroppedRootAgainButNotAfterAClear() {
+    final ImmutableTreeCache cache = cache(512, 64 << 20);
+    cache.advanceBlock(1, false);
+    final TreeHandle handle = cache.open(TreeKind.STATE, storedRoot, cache.newSession(store));
+    cache.advanceBlock(100, false);
+    cache.prune();
+    assertThat(cache.lookup(TreeKind.STATE, storedRoot)).isEmpty();
+
+    // bound after it expired: registered again, so it can be opened and pruned
+    cache.setHead(handle);
+    assertThat(cache.lookup(TreeKind.STATE, storedRoot)).containsSame(handle);
+    assertThat(cache.boundState(TreeRole.HEAD)).containsSame(handle);
+
+    // a root from before a clear stands for nodes that may be gone from storage
+    cache.clear();
+    cache.setNewPayload(handle);
+    assertThat(cache.boundState(TreeRole.NEW_PAYLOAD)).isEmpty();
+    assertThat(cache.lookup(TreeKind.STATE, storedRoot)).isEmpty();
+  }
+
+  @Test
   void commitsMatchBesuAcrossBlocks() {
-    final ImmutableTreeCache cache = cache(512, 1_000_000);
+    final ImmutableTreeCache cache = cache(512, 64 << 20);
     final PathBasedNodeStore besuStore = store.copy();
     Bytes32 root = storedRoot;
     final AtomicReference<TreeNode> computed = new AtomicReference<>();
@@ -455,7 +545,7 @@ class ImmutableTreeCacheTest {
 
   @Test
   void deferredMergesSeeEarlierStagedWrites() {
-    final ImmutableTreeCache cache = cache(512, 1_000_000);
+    final ImmutableTreeCache cache = cache(512, 64 << 20);
     final ImmutableTreeMerkleTrie trie = trie(cache, storedRoot);
     final Bytes key = keys.get(0);
     final Bytes staged = Bytes.of(1, 2, 3);
@@ -475,7 +565,7 @@ class ImmutableTreeCacheTest {
 
   @Test
   void rangeReadsDoNotLoadIntoTheSharedTree() {
-    final ImmutableTreeCache cache = cache(512, 1_000_000);
+    final ImmutableTreeCache cache = cache(512, 64 << 20);
     final ImmutableTreeMerkleTrie trie = trie(cache, storedRoot);
     final Map<Bytes32, Bytes> all = trie.entriesFrom(Bytes32.ZERO, Integer.MAX_VALUE);
     assertThat(all)
@@ -487,7 +577,7 @@ class ImmutableTreeCacheTest {
 
   @Test
   void clearDropsEverything() {
-    final ImmutableTreeCache cache = cache(512, 1_000_000);
+    final ImmutableTreeCache cache = cache(512, 64 << 20);
     final TreeHandle handle = cache.open(TreeKind.STATE, storedRoot, cache.newSession(store));
     cache.setHead(handle);
     cache.bindStorage(

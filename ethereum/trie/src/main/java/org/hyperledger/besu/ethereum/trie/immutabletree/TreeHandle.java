@@ -30,15 +30,23 @@ public final class TreeHandle {
 
   private final TreeKey key;
   private final TreeNode root;
+  private final int generation;
   private final AtomicInteger locks = new AtomicInteger();
   private final AtomicLong lastAccessBlock;
 
-  /** Number of role bindings referencing this handle. Guarded by the cache's binding lock. */
-  int bindings;
+  /**
+   * Number of role bindings referencing this handle. Changed under the cache's binding lock; read
+   * without it by pruning, which checks again under the lock before acting.
+   */
+  final AtomicInteger bindings = new AtomicInteger();
 
-  TreeHandle(final TreeKey key, final TreeNode root, final long block) {
+  /** Heap attributed to this root by the last prune walk. Only used by the pruning thread. */
+  long walkBytes;
+
+  TreeHandle(final TreeKey key, final TreeNode root, final long block, final int generation) {
     this.key = key;
     this.root = root;
+    this.generation = generation;
     this.lastAccessBlock = new AtomicLong(block);
   }
 
@@ -76,6 +84,11 @@ public final class TreeHandle {
    */
   public TreeNode root() {
     return root;
+  }
+
+  /** The registry generation this handle was created in; a cleared cache starts a new one. */
+  int generation() {
+    return generation;
   }
 
   /**

@@ -271,8 +271,10 @@ public class ImmutableTreeMerkleTrie implements MerkleTrie<Bytes, Bytes> {
       if (baseRootHash.equals(EMPTY_TRIE_NODE_HASH)) {
         root = EmptyTreeNode.INSTANCE;
       } else if (cache != null) {
-        baseWasCached = cache.lookup(kind, baseRootHash).isPresent();
+        final long loadsBefore = session.loadCount();
         baseHandle = cache.open(kind, baseRootHash, session);
+        // this trie's session is its own, so it loaded the root exactly when it was not cached
+        baseWasCached = session.loadCount() == loadsBefore;
         root = baseHandle.root();
       } else {
         root = session.loadRoot(baseRootHash);

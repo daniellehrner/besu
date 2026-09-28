@@ -1,10 +1,11 @@
 # Immutable tree cache
 
-Bonsai computes state roots on immutable Merkle Patricia trees that stay in memory across blocks.
-The account trie and the storage tries of a block are copy-on-write updates of the trees the
-previous computation left in the cache, and the new state root is the hash of the updated tree. The
-code lives in `org.hyperledger.besu.ethereum.trie.immutabletree` (`ethereum/trie`); Bonsai uses it
-through `BonsaiImmutableTrees` (`ethereum/core`).
+Bonsai can compute state roots on immutable Merkle Patricia trees that stay in memory across
+blocks. The account trie and the storage tries of a block are then copy-on-write updates of the
+trees the previous computation left in the cache, and the new state root is the hash of the updated
+tree. The code lives in `org.hyperledger.besu.ethereum.trie.immutabletree` (`ethereum/trie`);
+Bonsai uses it through `BonsaiImmutableTrees` (`ethereum/core`). It is off by default and enabled
+with `--Xbonsai-immutable-tree-cache-enabled=true`.
 
 Without the cache, each block opens its tries from a root hash, loads every node on the updated
 paths from the node cache or RocksDB, decodes it, and drops everything once the root is known. The
@@ -41,7 +42,7 @@ which is the contract a `StoredMerklePatriciaTrie` has with its `NodeLoader` too
 Encoding reuses Besu's primitives and layout: `CompactEncoding` paths, the leaf terminator, the
 branch value as the 17th item, children embedded when their encoding is shorter than 32 bytes and
 referenced by hash otherwise, and the root always hashed. Decoding is delegated to Besu's
-`StoredNodeFactory`; hashed children of the decoded node become `StoredTreeNode`s.
+`StoredNodeFactory`; hashed children of the decoded node stay stored.
 
 Single-key updates are ports of `PutVisitor`, `RemoveVisitor`, `DeferredPutVisitor` and the
 `replaceChild` / `replacePath` / `maybeFlatten` rules of Besu's nodes, including their behaviour on
@@ -59,9 +60,8 @@ path-based store that validates hashes; decoding round trips; ranges and proofs.
 
 `ImmutableTreeCache.open(kind, rootHash, session)` returns the registered tree for `(rootHash,
 kind)`. If there is none, it loads the root node, and only the root node, through the session's
-loader and registers it. Its children are `StoredTreeNode`s until a traversal touches them;
-traversals load them into the slot they came from (`swapChild`), so every tree sharing that node
-sees it loaded.
+loader and registers it. Its children stay stored until a traversal touches them; traversals load
+them into the slot they came from (`swapChild`), so every tree sharing that node sees it loaded.
 
 `ImmutableTreeMerkleTrie` opens its base root lazily, on its first read or root computation, so a
 missing root node fails in the same place as with a classic trie (inside the committer's
@@ -84,39 +84,44 @@ nodes.
 
 ## Roles, registration and pruning
 
-A persist of a Bonsai world state (or a frozen `rootHash()` recompute) collects the roots its tries
-compute. Only when the persist succeeds, after the root was verified against the block header, are
-they registered and bound:
+A persist of a Bonsai world state, or a frozen `rootHash()` recompute, collects the roots its tries
+compute. Only when it succeeds are they registered, and only a persist binds them:
 
-| World state | State root bound as | Storage roots bound per account as |
+| Computation | State root bound as | Storage roots bound per account as |
 |---|---|---|
-| head world state | `HEAD` | `HEAD` |
-| frozen (payload validation, block building, simulations, tracing) | `NEW_PAYLOAD` | `NEW_PAYLOAD` |
-| rolled layer (not frozen, not head) | nothing: fork | nothing: fork |
+| persist of the head world state | `HEAD` | `HEAD` |
+| persist of a frozen world state (payload validation) | `NEW_PAYLOAD` | `NEW_PAYLOAD` |
+| persist of a rolled layer (not frozen, not head) | nothing: fork | nothing: fork |
+| frozen `rootHash()` recompute (block building, simulations) | nothing: fork | nothing: fork |
 
-A failed persist, including a state root mismatch, registers nothing. Registering a root that is
-already registered keeps the existing tree, so after forkchoice the head binds the tree the payload
-validation of the same block registered. Tries for frontier (pre-Byzantium) receipt roots never
-register their intermediate roots. The BAL committer computes on a parent world state and hands its
-roots to the world state that persists the result.
+A failed persist, including a state root mismatch, registers nothing, so a root that does not match
+its block header is never registered. A block rejected after its state was persisted, for example
+for a wrong receipts root, keeps its roots registered: they describe their state correctly, and the
+role's next binding replaces them. Registering a root that is already registered keeps the existing
+tree, so after forkchoice the head binds the tree the payload validation of the same block
+registered. Tries for frontier (pre-Byzantium) receipt roots never register their intermediate
+roots. The BAL committer computes on a parent world state and hands its roots to the world state
+that persists the result.
+
+The cache starts at the head's block when the node starts, and each persist moves it to its block
+before its tries are created, so nodes are stamped with the block that used them.
 
 A computation opens its base root as a fork if it is not registered yet. Forks are dropped once
 unused for `forkRetentionBlocks` (8) blocks; the least recently used ones beyond `maxUnboundRoots`
-are dropped as well. The state roots bound as `HEAD` / `NEW_PAYLOAD` are replaced as the chain
-moves; storage roots bound to an account are dropped once unused for the prune window.
+(50,000) are dropped as well. The state roots bound as `HEAD` / `NEW_PAYLOAD` are replaced as the
+chain moves; storage roots bound to an account are dropped once unused for the prune window.
 
-Pruning runs on a background thread every `pruneIntervalBlocks` (8) head advances, and whenever
-more roots are registered than `maxUnboundRoots`. It drops expired roots, then walks every
+Pruning runs on a background thread every `pruneIntervalBlocks` (8) head advances, and when more
+unbound roots are registered than `maxUnboundRoots`. It drops expired roots, then walks every
 registered root and replaces each loaded child that no traversal touched in the last
-`pruneAfterBlocks` blocks by a stored one. If more than `maxCachedNodes` loaded nodes and stored
-children are left it halves the window until they fit, and past a window of zero it drops the least
-recently used roots (never the head or new payload state root). A subtree shared by several roots
-is walked once.
+`pruneAfterBlocks` blocks by a stored one. The walk estimates the heap of what is left, by the age
+of the nodes; if that is over `maxCachedBytes`, it picks the longest window that fits and walks
+again, and past a window of zero it drops the least recently used roots (never the head or new
+payload state root). A subtree shared by several roots is walked once.
 
-Each counted item costs about 200 bytes of heap: touching 50,000 random accounts of a 300,000
-account trie cached 94,000 nodes and 146,000 stored children in 47 MiB. The default budget of
-2,000,000 is therefore about 400 MiB. Each prune run logs the counts and an estimate of the heap
-they use.
+The estimate follows the object layouts and was calibrated on a real heap: touching 50,000 random
+accounts of a 300,000 account trie cached 94,000 nodes and 146,000 stored children in 47 MiB,
+estimated at 49 MiB. Each prune run logs the counts and the estimate.
 
 Unloading is safe for every root, including those of frozen computations whose nodes were never
 written: a traversal that reaches a node through a root carries a loader consistent with that root,
@@ -129,13 +134,17 @@ works on. Pruning neither drops a locked root nor unloads nodes below it. Nodes 
 unlocked roots can still be unloaded through those; that only swaps a slot between two
 representations of the same node.
 
+Bindings change under one lock, which the block import takes to bind the roots it computed.
+Pruning scans roots and bindings without it and takes it only for batches of at most 256 removals,
+checking each one again, so a bind never waits for a scan.
+
 ## Configuration
 
 | Option | Default | |
 |---|---|---|
-| `--Xbonsai-immutable-tree-cache-enabled` | `true` | compute Bonsai state roots on the cache |
+| `--Xbonsai-immutable-tree-cache-enabled` | `false` | compute Bonsai state roots on the cache |
 | `--Xbonsai-immutable-tree-cache-prune-after-blocks` | `512` | unload nodes untouched for this many blocks |
-| `--Xbonsai-immutable-tree-cache-max-nodes` | `2000000` | loaded nodes and stored children pruning keeps the cache under (~400 MiB) |
+| `--Xbonsai-immutable-tree-cache-max-capacity` | `536870912` (512 MiB) | estimated heap, in bytes, pruning keeps the cache under |
 
 The archive storage format (`X_BONSAI_ARCHIVE`) keeps computing roots on classic tries.
 
@@ -143,16 +152,19 @@ The archive storage format (`X_BONSAI_ARCHIVE`) keeps computing roots on classic
 
 - `ImmutableTreeParityTest` (`ethereum/trie`): see above.
 - `ImmutableTreeCacheTest` (`ethereum/trie`): copy on write and coexisting roots, lazy opening,
-  head / new payload / storage bindings, locking, age and budget pruning, compact children, and
-  commits matching `ParallelStoredMerklePatriciaTrie` over consecutive blocks.
+  head / new payload / storage bindings, locking, age and heap budget pruning, the prune trigger,
+  starting at the head block, binding a dropped or cleared root, compact children, and commits
+  matching `ParallelStoredMerklePatriciaTrie` over consecutive blocks.
 - `BonsaiImmutableTreeIntegrationTest` (`ethereum/core`): the same random blocks through a Bonsai
   node with the cache and one without, comparing roots and, through classic tries, the whole
   stored state; payload validation followed by forkchoice, frozen root recomputes, reorgs rolled
-  through trie logs, state root mismatches and aggressive pruning.
-- The cache is on by default, so every Bonsai test runs on it, including the execution-spec
-  blockchain tests (`./gradlew :ethereum:referencetests:referenceTests --tests
-  'org.hyperledger.besu.ethereum.vm.executionspec.ExecutionSpecBlockchainTest*'`), which validate
-  each block on a frozen world state and then move the head to it through its trie log.
+  through trie logs, state root mismatches, restarts and aggressive pruning.
+- `StateRootCommitterIntegrationTest` (`ethereum/core`) runs its cross-mode root equivalence
+  scenarios (Default, BAL and Forest committers) with and without the cache.
+- The execution-spec blockchain tests validate each block on a frozen world state and then move the
+  head to it through its trie log. To run them on the cache:
+  `./gradlew :ethereum:referencetests:referenceTests -Dtest.ethereum.bonsai.immutableTreeCache=true
+  --tests 'org.hyperledger.besu.ethereum.vm.executionspec.ExecutionSpecBlockchainTest*'`
 
 ## Logs
 
@@ -169,4 +181,4 @@ back with `"INFO"`.
 
 On a node following the chain, each block should log a `NEW_PAYLOAD` line (validation) and a
 `HEAD` line (forkchoice) with the same state root, the head line with `base cached: true`, and a
-prune line every 8 blocks with the loaded node count staying under the budget.
+prune line every 8 blocks with the estimated heap staying under the budget.

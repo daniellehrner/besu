@@ -179,7 +179,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
       return;
     }
     final TreeRole role = immutableTreeRole();
-    immutableTrees.begin();
+    immutableTrees.begin(blockHeader);
     boolean persisted = false;
     try {
       super.persist(blockHeader, committer);
@@ -198,7 +198,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
     if (immutableTrees == null || !(isStorageFrozen && accumulator.isAccumulatorStateChanged())) {
       return super.rootHash();
     }
-    immutableTrees.begin();
+    immutableTrees.begin(null);
     boolean computed = false;
     try {
       final Hash root = super.rootHash();
@@ -206,7 +206,8 @@ public class BonsaiWorldState extends PathBasedWorldState {
       return root;
     } finally {
       if (computed) {
-        immutableTrees.finish(TreeRole.NEW_PAYLOAD, null, worldStateRootHash);
+        // block building candidates and simulations: registered as forks, never bound
+        immutableTrees.finish(null, null, worldStateRootHash);
       } else {
         immutableTrees.discard();
       }
@@ -214,8 +215,8 @@ public class BonsaiWorldState extends PathBasedWorldState {
   }
 
   /**
-   * The role the roots this world state computes are bound to: the head world state computes the
-   * head, a frozen one validates or builds a payload, and a rolled layer is a short-lived fork.
+   * The role the roots this world state persists are bound to: the head world state persists the
+   * head, a frozen one validates a payload, and a rolled layer is a short-lived fork.
    */
   private TreeRole immutableTreeRole() {
     if (isStorageFrozen()) {
@@ -230,7 +231,7 @@ public class BonsaiWorldState extends PathBasedWorldState {
    */
   public void beginImmutableTreeResults() {
     if (immutableTrees != null) {
-      immutableTrees.begin();
+      immutableTrees.begin(null);
     }
   }
 

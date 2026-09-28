@@ -37,15 +37,18 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Connects a Bonsai world state to the {@link ImmutableTreeCache}: builds the tries its state root
- * computations run on, and registers the roots they produce once the computation is known good.
+ * computations run on, and registers the roots they produce once the computation succeeded.
  *
- * <p>A persist or a frozen root recompute {@link #begin() begins} collecting. The account trie and
- * each storage trie report their root when they are hashed or committed. If the computation
- * persists, {@link #finish} registers the state root and binds it to the role of the world state:
- * {@link TreeRole#HEAD} for the head world state, {@link TreeRole#NEW_PAYLOAD} for a frozen one
- * (payload validation, block building, simulation), none for a rolled layer. The storage roots are
- * bound per account to the same role. If it fails, including on a state root mismatch, {@link
- * #discard()} drops everything, so an invalid root is never registered.
+ * <p>A persist or a frozen root recompute {@link #begin(BlockHeader) begins} collecting. The
+ * account trie and each storage trie report their root when they are hashed or committed. If the
+ * persist succeeds, {@link #finish} registers the state root and binds it to the role of the world
+ * state: {@link TreeRole#HEAD} for the head world state, {@link TreeRole#NEW_PAYLOAD} for a frozen
+ * one (payload validation), none for a rolled layer. The storage roots are bound per account to the
+ * same role. Frozen root recomputes (block building, simulations) register their roots as forks,
+ * bound to no role. If the computation fails, including on a state root mismatch, {@link
+ * #discard()} drops everything, so a root that does not match its block header is never registered.
+ * A block rejected after its state was persisted, for example for a wrong receipts root, keeps its
+ * roots registered: they describe their state correctly, and the role's next binding replaces them.
  *
  * <p>Tries for frontier receipt roots report nothing: their intermediate roots are never
  * registered.
@@ -159,8 +162,16 @@ public class BonsaiImmutableTrees {
     return new ImmutableTreeMerkleTrie(cache, kind, rootHash, loader, null, RootListener.NONE);
   }
 
-  /** Starts collecting the roots of a computation. */
-  public void begin() {
+  /**
+   * Starts collecting the roots of a computation. The cache moves to the block first, so the nodes
+   * the computation touches are stamped with it.
+   *
+   * @param blockHeader the block being persisted, or null for a root recompute
+   */
+  public void begin(final BlockHeader blockHeader) {
+    if (blockHeader != null) {
+      cache.advanceBlock(blockHeader.getNumber(), false);
+    }
     clearResults();
     collecting = true;
   }
