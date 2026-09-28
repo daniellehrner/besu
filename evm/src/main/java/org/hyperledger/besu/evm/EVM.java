@@ -89,7 +89,6 @@ import org.hyperledger.besu.evm.operation.VirtualOperation;
 import org.hyperledger.besu.evm.operation.XorOperation;
 import org.hyperledger.besu.evm.operation.XorOperationOptimized;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
-import org.hyperledger.besu.evm.v2.StackArithmetic;
 import org.hyperledger.besu.evm.v2.operation.AddModOperationV2;
 import org.hyperledger.besu.evm.v2.operation.AddOperationV2;
 import org.hyperledger.besu.evm.v2.operation.AddressOperationV2;
@@ -182,6 +181,9 @@ import org.hyperledger.besu.evm.v2.operation.TStoreOperationV2;
 import org.hyperledger.besu.evm.v2.operation.TimestampOperationV2;
 import org.hyperledger.besu.evm.v2.operation.XorOperationV2;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.nio.ByteOrder;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -201,6 +203,20 @@ public class EVM {
   /** The constant UNDERFLOW_RESPONSE. */
   protected static final OperationResult UNDERFLOW_RESPONSE =
       new OperationResult(0L, ExceptionalHaltReason.INSUFFICIENT_STACK_ITEMS);
+
+  // The costs the untraced v2 loop charges for the operations it runs inline, the same numbers the
+  // v2 operations' results carry. Constants rather than fields of the gas calculator: as fields
+  // they are loads C2 hoists to the loop's dispatch, where they run for every operation.
+  private static final long BASE_TIER_GAS = 2L;
+  private static final long VERY_LOW_TIER_GAS = 3L;
+  private static final long LOW_TIER_GAS = 5L;
+  private static final long MID_TIER_GAS = 8L;
+  private static final long HIGH_TIER_GAS = 10L;
+  private static final long JUMPDEST_GAS = 1L;
+
+  // Reads and writes a big-endian word of a byte array, as memory and input data hold them.
+  private static final VarHandle LONG_BE =
+      MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
 
   private final OperationRegistry operations;
   private final GasCalculator gasCalculator;
@@ -235,14 +251,6 @@ public class EVM {
   private final SLoadOperationV2 sLoadOperationV2;
 
   private final JumpDestOnlyCodeCache jumpDestOnlyCodeCache;
-  private final long pushGas;
-
-  // Costs of the arms the loop carries inline. Taken from the gas calculator rather than written
-  // as literals: the shared per-operation result objects already hardcode these numbers, and one
-  // source of truth for them is enough.
-  private final long veryLowTierGas;
-  private final long baseTierGas;
-  private final long jumpDestGas;
 
   /**
    * Instantiates a new Evm.
@@ -263,10 +271,6 @@ public class EVM {
     this.evmConfiguration = evmConfiguration;
     this.evmSpecVersion = evmSpecVersion;
     this.jumpDestOnlyCodeCache = new JumpDestOnlyCodeCache(evmConfiguration);
-    this.pushGas = gasCalculator.getVeryLowTierGasCost();
-    this.veryLowTierGas = gasCalculator.getVeryLowTierGasCost();
-    this.baseTierGas = gasCalculator.getBaseTierGasCost();
-    this.jumpDestGas = gasCalculator.getJumpDestOperationGasCost();
 
     enableByzantium = EvmSpecVersion.BYZANTIUM.ordinal() <= evmSpecVersion.ordinal();
     enableConstantinople = EvmSpecVersion.CONSTANTINOPLE.ordinal() <= evmSpecVersion.ordinal();
@@ -598,435 +602,906 @@ public class EVM {
   }
 
   /**
-   * EVM v2 execution loop using long[] stack representation. Only opcodes explicitly listed in the
-   * switch are handled via the v2 path; all others fall through to the v1 operation registry. This
-   * skeleton stub establishes the dispatch structure for incremental v2 operation rollout.
+   * Runs the frame on the EVM v2 interpreter, through the untraced loop unless the tracer wants the
+   * per-operation hooks. A tracer that only wants the transaction-level hooks reports itself
+   * disabled and gets the untraced loop.
+   *
+   * @param frame the frame
+   * @param operationTracer the tracer
    */
-  // Note: like runToHalt, this is performance-critical code. Benchmark before refactoring.
-  /**
-   * Opcodes whose v2 implementation reads and writes nothing but the stack and the frame's
-   * environment. While these run, the program counter and the remaining gas live in locals of the
-   * dispatch loop instead of frame fields, so charging an opcode and stepping past it is register
-   * arithmetic. Everything else, and every opcode while a tracer is attached, sees the frame
-   * brought up to date first and the loop reloads from it afterwards. Opcodes not marked here are
-   * treated as frame-owned, so a missing entry costs two stores and two loads, never correctness.
-   */
-  private static final boolean[] LOOP_OWNS_STATE = new boolean[256];
-
-  static {
-    // arithmetic and bitwise, without EXP which charges by exponent size
-    for (int op = 0x01; op <= 0x1e; op++) {
-      LOOP_OWNS_STATE[op] = op != 0x0a && op != 0x0c && op != 0x0d && op != 0x0e && op != 0x0f;
-    }
-    // environment and block values pushed from the frame, without BALANCE and BLOCKHASH
-    for (final int op :
-        new int[] {
-          0x30, 0x32, 0x33, 0x34, 0x35, 0x36, 0x38, 0x3a, 0x3d, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46,
-          0x47, 0x48, 0x49, 0x4a, 0x4b
-        }) {
-      LOOP_OWNS_STATE[op] = true;
-    }
-    // stack only
-    LOOP_OWNS_STATE[0x50] = true;
-    LOOP_OWNS_STATE[0x59] = true;
-    LOOP_OWNS_STATE[0x5b] = true;
-    LOOP_OWNS_STATE[0x5f] = true;
-    for (int op = 0x60; op <= 0x9f; op++) {
-      LOOP_OWNS_STATE[op] = true;
-    }
-    LOOP_OWNS_STATE[0xfe] = true;
-  }
-
   private void runToHaltV2(final MessageFrame frame, final OperationTracer operationTracer) {
     evmSpecVersion.maybeWarnVersion();
-
-    final Code codeObject = frame.getCode();
-    final byte[] code = codeObject.getBytes().toArrayUnsafe();
-    final long[] pushBits = codeObject.pushBits();
-    final int[] pushBase = codeObject.pushBase();
-    final long[] pushValues = codeObject.pushValues();
-    final long[] pushWide = codeObject.pushWide();
-    final Operation[] operationArray = operations.getOperations();
-    // Block import runs without operation tracing. The two tracer hooks and the current-operation
-    // bookkeeping that only tracers read are then skipped on every opcode; the fallback branch
-    // below still records the operation it hands to the standard interpreter. A tracer that only
-    // wants the transaction-level hooks reports itself disabled and gets the same fast path.
     final boolean tracing = operationTracer.isEnabled();
     frame.setRecordUpdatesForTracer(tracing);
+    if (tracing) {
+      runToHaltV2Traced(frame, operationTracer);
+    } else {
+      runToHaltV2Untraced(frame);
+    }
+  }
+
+  // The arms of the untraced v2 loop. It switches on an opcode's arm rather than on the opcode, so
+  // that the switch's table has an entry per arm instead of one per opcode up to the highest one
+  // handled inline: that table is bytecode of the loop and counts against its inlining budget.
+  // Opcodes without an arm map to 0 and take the general path.
+  private static final int ARM_PUSH = 1;
+  private static final int ARM_DUP = 2;
+  private static final int ARM_SWAP = 3;
+  private static final int ARM_JUMPDEST = 4;
+  private static final int ARM_POP = 5;
+  private static final int ARM_PUSH2 = 6;
+  private static final int ARM_JUMPI = 7;
+  private static final int ARM_JUMP = 8;
+  private static final int ARM_ADD = 9;
+  private static final int ARM_MSTORE = 10;
+  private static final int ARM_ISZERO = 11;
+  private static final int ARM_AND = 12;
+  private static final int ARM_MLOAD = 13;
+  private static final int ARM_SUB = 14;
+  private static final int ARM_EQ = 15;
+  private static final int ARM_COMPARE = 16;
+  private static final int ARM_SHIFT = 17;
+  private static final int ARM_CALLDATALOAD = 18;
+  private static final int ARM_PUSH0 = 19;
+  private static final int ARM_MUL = 20;
+  private static final int ARM_CALLDATASIZE = 21;
+  private static final int ARM_DIV_MOD = 22;
+  private static final int ARM_OR = 23;
+  private static final int ARM_NOT = 24;
+  private static final int ARM_GAS = 25;
+  private static final int ARM_SIGNEXTEND = 26;
+  private static final int ARM_XOR = 27;
+  private static final int ARM_PUSH1 = 28;
+
+  // Per opcode: the arm in the low byte, and above it a bias of minus the arm times 16 for the
+  // untraced loop's stack and code indices; see runToHaltV2Untraced.
+  private static final int[] DISPATCH = new int[256];
+
+  static {
+    final byte[] arms = new byte[256];
+    for (int op = 0x60; op <= 0x7f; op++) {
+      arms[op] = ARM_PUSH;
+    }
+    arms[0x60] = ARM_PUSH1;
+    arms[0x61] = ARM_PUSH2;
+    for (int op = 0x80; op <= 0x8f; op++) {
+      arms[op] = ARM_DUP;
+    }
+    for (int op = 0x90; op <= 0x9f; op++) {
+      arms[op] = ARM_SWAP;
+    }
+    arms[0x5b] = ARM_JUMPDEST;
+    arms[0x50] = ARM_POP;
+    arms[0x57] = ARM_JUMPI;
+    arms[0x56] = ARM_JUMP;
+    arms[0x01] = ARM_ADD;
+    arms[0x52] = ARM_MSTORE;
+    arms[0x15] = ARM_ISZERO;
+    arms[0x16] = ARM_AND;
+    arms[0x51] = ARM_MLOAD;
+    arms[0x03] = ARM_SUB;
+    arms[0x14] = ARM_EQ;
+    arms[0x10] = ARM_COMPARE;
+    arms[0x11] = ARM_COMPARE;
+    arms[0x12] = ARM_COMPARE;
+    arms[0x13] = ARM_COMPARE;
+    arms[0x1b] = ARM_SHIFT;
+    arms[0x1c] = ARM_SHIFT;
+    arms[0x1d] = ARM_SHIFT;
+    arms[0x35] = ARM_CALLDATALOAD;
+    arms[0x5f] = ARM_PUSH0;
+    arms[0x02] = ARM_MUL;
+    arms[0x36] = ARM_CALLDATASIZE;
+    arms[0x04] = ARM_DIV_MOD;
+    arms[0x06] = ARM_DIV_MOD;
+    arms[0x17] = ARM_OR;
+    arms[0x19] = ARM_NOT;
+    arms[0x5a] = ARM_GAS;
+    arms[0x0b] = ARM_SIGNEXTEND;
+    arms[0x18] = ARM_XOR;
+    for (int op = 0; op < 256; op++) {
+      // CALLDATALOAD shares MLOAD's case, which cancels MLOAD's bias
+      final int biasArm = arms[op] == ARM_CALLDATALOAD ? ARM_MLOAD : arms[op];
+      DISPATCH[op] = (-(biasArm << 4) << 8) | arms[op];
+    }
+  }
+
+  /**
+   * The v2 loop for untraced execution, which is every block import. The program counter, the
+   * remaining gas and the stack pointer live in locals, and the cheap operations that neither read
+   * world state nor need more than the stack, the code, the input data or already expanded memory
+   * run inline, which is nearly all operations executed on mainnet. An inline arm handles only the
+   * case where its operation succeeds; anything else, and every other operation, goes through
+   * {@link #executeOperationV2} with the state handed back to the frame, so halting behaviour is
+   * defined in one place for both loops.
+   *
+   * <p>No inline arm allocates or calls anything C2 does not inline: one such call is enough for C2
+   * to keep all of the loop's locals in memory rather than in registers, which costs more than the
+   * dispatch itself. The arms are written out rather than calling the stack helpers, because C2
+   * inlines a helper above 35 bytes of bytecode only at call sites it rates hot. For the same
+   * reason no local is read after the general path's call before it is reloaded.
+   *
+   * <p>C2 also stops inlining into a method once its own bytecode and everything inlined into it
+   * reach 8000 bytes, after which even the frame's getters become calls. That budget, not the gas
+   * cost, decides which operations are inline: the cheap operations that mainnet executes rarely,
+   * each well under a tenth of a percent, take the general path.
+   */
+  private void runToHaltV2Untraced(final MessageFrame frame) {
     if (frame.getState() != MessageFrame.State.CODE_EXECUTING) {
       return;
     }
+    final Code codeObject = frame.getCode();
+    // builds the tables the PUSH and jump arms read from codeObject
+    codeObject.pushBits();
+    codeObject.jumpDestinations();
+    final byte[] code = codeObject.getBytes().toArrayUnsafe();
+    final boolean constantinople = enableConstantinople;
+    final boolean shanghai = enableShanghai;
+    // The stack array is stable for one call: a frame returns it to the pool only once execution
+    // has left the frame for good. It holds exactly the maximum number of items.
+    final long[] s = frame.stackDataV2();
+    int sp = frame.stackTopV2();
     int pc = frame.getPC();
     long gas = frame.getRemainingGas();
-    // The stack pointer, the stack and its bound are loop state. Every operation used to reach
-    // them back through the frame, two or three accessor round trips per opcode. The arms carried
-    // inline below work on these locals and the frame is only handed the pointer again before a
-    // call that needs it. The array reference is stable for one runToHaltV2 call: a frame returns
-    // its stack to the pool only once execution has left it for good.
-    int sp = frame.stackTopV2();
-    final long[] s = frame.stackDataV2();
-    final int maxSp = frame.stackMaxSizeV2();
     while (true) {
       final int opcode = pc < code.length ? code[pc] & 0xff : 0;
-      if (!tracing) {
-        // PUSH is the most frequent opcode, so it stays in the loop: the immediate was decoded when
-        // the code was analysed and is found by ranking the pc in the PUSH bitmap, which leaves one
-        // load for PUSH1..PUSH8 and four for the wider ones.
-        if ((opcode >>> 5) == 3) {
-          if (sp + 1 > maxSp) {
-            frame.setTopV2(sp);
-            frame.setPC(pc);
-            frame.setGasRemaining(gas);
-            frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.TOO_MANY_STACK_ITEMS));
-            frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
-            return;
-          }
-          final int n = opcode - PushOperationV2.PUSH_BASE;
-          final int dst = sp << 2;
-          final int block = pc >>> 6;
-          final int ordinal =
-              pushBase[block] + Long.bitCount(pushBits[block] & ((1L << (pc & 63)) - 1));
-          final long value = pushValues[ordinal];
-          if (n <= 8) {
+      // What an inline arm that succeeds charges, how far it moves the program counter and how
+      // many items it adds. The arms leave the updates to the common tail below: the same update
+      // written out in every arm is one computation, which C2 places before the dispatch.
+      long cost = -1;
+      int step = 0;
+      int delta = 0;
+      // The dispatch entry holds the arm and a bias, which the arm cancels again. Stack and code
+      // indices built on a biased pointer differ from arm to arm as far as C2 can tell, so each
+      // arm computes its own. Built on sp and pc directly, the arms share them, and C2 computes
+      // every arm's indices ahead of the dispatch, where they take the registers the loop's state
+      // needs. The arms are in the order of how often mainnet executes them, because C2 inlines
+      // in bytecode order and stops when the method reaches its size budget.
+      final int entry = DISPATCH[opcode];
+      final int bias = entry >> 8;
+      final int base = (sp << 2) + bias;
+      final int pcBase = pc + bias;
+      switch (entry & 0xff) {
+        case ARM_PUSH1 -> {
+          if ((sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
+            final int dst = base + (ARM_PUSH1 << 4);
+            final int at = pcBase + (ARM_PUSH1 << 4);
             s[dst] = 0;
             s[dst + 1] = 0;
             s[dst + 2] = 0;
-            s[dst + 3] = value;
-          } else {
-            final int o = (int) value;
-            s[dst] = pushWide[o];
-            s[dst + 1] = pushWide[o + 1];
-            s[dst + 2] = pushWide[o + 2];
-            s[dst + 3] = pushWide[o + 3];
-          }
-          sp++;
-          gas -= pushGas;
-          pc += 1 + n;
-          if (gas >= 0) {
-            continue;
-          }
-          frame.setTopV2(sp);
-          frame.setPC(pc);
-          frame.setGasRemaining(gas);
-          frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
-          frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
-          return;
-        }
-        // These arms are two thirds of all dispatches and every one of them is fixed cost and
-        // touches nothing but the stack, so they need neither the frame nor a result object. They
-        // handle only the case where the operation succeeds: anything short of stack depth, stack
-        // space or gas leaves the switch without continuing and the general path below
-        // re-dispatches
-        // it through the operation, which owns the halt. The stack helpers are the ones
-        // StackArithmeticTest checks against BigInteger arithmetic modulo 2^256.
-        switch (opcode) {
-          case 0x80,
-              0x81,
-              0x82,
-              0x83,
-              0x84,
-              0x85,
-              0x86,
-              0x87,
-              0x88,
-              0x89,
-              0x8a,
-              0x8b,
-              0x8c,
-              0x8d,
-              0x8e,
-              0x8f -> { // DUP1-16
-            final int depth = opcode - DupOperationV2.DUP_BASE;
-            if (sp >= depth && sp + 1 <= maxSp && gas >= veryLowTierGas) {
-              sp = StackArithmetic.dup(s, sp, depth);
-              gas -= veryLowTierGas;
-              pc++;
-              continue;
-            }
-          }
-          case 0x90,
-              0x91,
-              0x92,
-              0x93,
-              0x94,
-              0x95,
-              0x96,
-              0x97,
-              0x98,
-              0x99,
-              0x9a,
-              0x9b,
-              0x9c,
-              0x9d,
-              0x9e,
-              0x9f -> { // SWAP1-16
-            final int depth = opcode - SwapOperationV2.SWAP_BASE;
-            if (sp >= depth + 1 && gas >= veryLowTierGas) {
-              sp = StackArithmetic.swap(s, sp, depth);
-              gas -= veryLowTierGas;
-              pc++;
-              continue;
-            }
-          }
-          case 0x5b -> { // JUMPDEST
-            if (gas >= jumpDestGas) {
-              gas -= jumpDestGas;
-              pc++;
-              continue;
-            }
-          }
-          case 0x50 -> { // POP
-            if (sp >= 1 && gas >= baseTierGas) {
-              sp--;
-              gas -= baseTierGas;
-              pc++;
-              continue;
-            }
-          }
-          case 0x15 -> { // ISZERO
-            if (sp >= 1 && gas >= veryLowTierGas) {
-              sp = StackArithmetic.isZero(s, sp);
-              gas -= veryLowTierGas;
-              pc++;
-              continue;
-            }
-          }
-          case 0x16 -> { // AND
-            if (sp >= 2 && gas >= veryLowTierGas) {
-              sp = StackArithmetic.and(s, sp);
-              gas -= veryLowTierGas;
-              pc++;
-              continue;
-            }
-          }
-          case 0x14 -> { // EQ
-            if (sp >= 2 && gas >= veryLowTierGas) {
-              sp = StackArithmetic.eq(s, sp);
-              gas -= veryLowTierGas;
-              pc++;
-              continue;
-            }
-          }
-          case 0x10 -> { // LT
-            if (sp >= 2 && gas >= veryLowTierGas) {
-              sp = StackArithmetic.lt(s, sp);
-              gas -= veryLowTierGas;
-              pc++;
-              continue;
-            }
-          }
-          case 0x11 -> { // GT
-            if (sp >= 2 && gas >= veryLowTierGas) {
-              sp = StackArithmetic.gt(s, sp);
-              gas -= veryLowTierGas;
-              pc++;
-              continue;
-            }
-          }
-          case 0x5f -> { // PUSH0, Shanghai onwards
-            if (enableShanghai && sp + 1 <= maxSp && gas >= baseTierGas) {
-              sp = StackArithmetic.pushZero(s, sp);
-              gas -= baseTierGas;
-              pc++;
-              continue;
-            }
-          }
-          default -> {
-            // everything else goes the general way
+            s[dst + 3] = at + 1 < code.length ? code[at + 1] & 0xff : 0;
+            cost = VERY_LOW_TIER_GAS;
+            step = 2;
+            delta = 1;
           }
         }
+        case ARM_PUSH -> { // PUSH3-32; the immediate was decoded when the code was analysed
+          if ((sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
+            final int dst = base + (ARM_PUSH << 4);
+            final int block = pc >>> 6;
+            final long value =
+                codeObject
+                    .pushValues[
+                    codeObject.pushBase[block]
+                        + Long.bitCount(codeObject.pushBits[block] & ((1L << (pc & 63)) - 1))];
+            if (opcode <= 0x67) { // PUSH3-8, the value itself
+              s[dst] = 0;
+              s[dst + 1] = 0;
+              s[dst + 2] = 0;
+              s[dst + 3] = value;
+            } else { // PUSH9-32, where the wide values start
+              final long[] wide = codeObject.pushWide;
+              final int o = (int) value;
+              s[dst] = wide[o];
+              s[dst + 1] = wide[o + 1];
+              s[dst + 2] = wide[o + 2];
+              s[dst + 3] = wide[o + 3];
+            }
+            cost = VERY_LOW_TIER_GAS;
+            step = opcode - 0x5e;
+            delta = 1;
+          }
+        }
+        case ARM_DUP -> {
+          final int depth = opcode - 0x7f;
+          if (sp >= depth && (sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
+            final int from = base + (ARM_DUP << 4) - (depth << 2);
+            final int to = base + (ARM_DUP << 4);
+            s[to] = s[from];
+            s[to + 1] = s[from + 1];
+            s[to + 2] = s[from + 2];
+            s[to + 3] = s[from + 3];
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = 1;
+          }
+        }
+        case ARM_SWAP -> {
+          final int depth = opcode - 0x8f;
+          if (sp > depth && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (ARM_SWAP << 4) - 4;
+            final int b = base + (ARM_SWAP << 4) - 4 - (depth << 2);
+            long t = s[a];
+            s[a] = s[b];
+            s[b] = t;
+            t = s[a + 1];
+            s[a + 1] = s[b + 1];
+            s[b + 1] = t;
+            t = s[a + 2];
+            s[a + 2] = s[b + 2];
+            s[b + 2] = t;
+            t = s[a + 3];
+            s[a + 3] = s[b + 3];
+            s[b + 3] = t;
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = 0;
+          }
+        }
+        case ARM_JUMPDEST -> {
+          if (gas >= JUMPDEST_GAS) {
+            cost = JUMPDEST_GAS;
+            step = 1;
+            delta = 0;
+          }
+        }
+        case ARM_POP -> {
+          if (sp >= 1 && gas >= BASE_TIER_GAS) {
+            cost = BASE_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        case ARM_PUSH2 -> { // and the PUSH2 JUMP and PUSH2 JUMPI that follow it
+          final int at = pcBase + (ARM_PUSH2 << 4);
+          if ((sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS && at + 2 < code.length) {
+            final int immediate = (code[at + 1] & 0xff) << 8 | (code[at + 2] & 0xff);
+            final int next = at + 3 < code.length ? code[at + 3] & 0xff : 0;
+            if (next == 0x56) {
+              if (gas >= VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS
+                  && isJumpDestination(codeObject.jumpDestBitMask, immediate, code.length)) {
+                // PUSH2 JUMP JUMPDEST, without the destination going through the stack
+                cost = VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS;
+                step = immediate + 1 - pc;
+                delta = 0;
+                break;
+              }
+            } else if (next == 0x57 && sp >= 1 && gas >= VERY_LOW_TIER_GAS + HIGH_TIER_GAS) {
+              final int c = base + (ARM_PUSH2 << 4) - 4;
+              if ((s[c] | s[c + 1] | s[c + 2] | s[c + 3]) == 0) {
+                // PUSH2 JUMPI, not taken
+                cost = VERY_LOW_TIER_GAS + HIGH_TIER_GAS;
+                step = 4;
+                delta = -1;
+                break;
+              }
+              if (gas >= VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS
+                  && isJumpDestination(codeObject.jumpDestBitMask, immediate, code.length)) {
+                // PUSH2 JUMPI JUMPDEST, taken
+                cost = VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS;
+                step = immediate + 1 - pc;
+                delta = -1;
+                break;
+              }
+            }
+            final int dst = base + (ARM_PUSH2 << 4);
+            s[dst] = 0;
+            s[dst + 1] = 0;
+            s[dst + 2] = 0;
+            s[dst + 3] = immediate;
+            cost = VERY_LOW_TIER_GAS;
+            step = 3;
+            delta = 1;
+          }
+        }
+        case ARM_JUMPI -> { // and the JUMPDEST it lands on
+          if (sp >= 2 && gas >= HIGH_TIER_GAS) {
+            final int d = base + (ARM_JUMPI << 4) - 4;
+            final int c = d - 4;
+            if ((s[c] | s[c + 1] | s[c + 2] | s[c + 3]) == 0) {
+              cost = HIGH_TIER_GAS;
+              step = 1;
+              delta = -2;
+              break;
+            }
+            final long destination = s[d + 3];
+            if ((s[d] | s[d + 1] | s[d + 2]) == 0
+                && gas >= HIGH_TIER_GAS + JUMPDEST_GAS
+                && isJumpDestination(codeObject.jumpDestBitMask, destination, code.length)) {
+              cost = HIGH_TIER_GAS + JUMPDEST_GAS;
+              step = (int) destination + 1 - pc;
+              delta = -2;
+            }
+          }
+        }
+        case ARM_JUMP -> { // and the JUMPDEST it lands on
+          if (sp >= 1 && gas >= MID_TIER_GAS + JUMPDEST_GAS) {
+            final int d = base + (ARM_JUMP << 4) - 4;
+            final long destination = s[d + 3];
+            if ((s[d] | s[d + 1] | s[d + 2]) == 0
+                && isJumpDestination(codeObject.jumpDestBitMask, destination, code.length)) {
+              cost = MID_TIER_GAS + JUMPDEST_GAS;
+              step = (int) destination + 1 - pc;
+              delta = -1;
+            }
+          }
+        }
+        case ARM_ADD -> {
+          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (ARM_ADD << 4) - 4;
+            final int b = a - 4;
+            final long x0 = s[a + 3];
+            final long y0 = s[b + 3];
+            final long r0 = x0 + y0;
+            final long c0 = ((x0 & y0) | ((x0 | y0) & ~r0)) >>> 63;
+            final long x1 = s[a + 2];
+            final long y1 = s[b + 2];
+            final long r1 = x1 + y1 + c0;
+            final long c1 = ((x1 & y1) | ((x1 | y1) & ~r1)) >>> 63;
+            final long x2 = s[a + 1];
+            final long y2 = s[b + 1];
+            final long r2 = x2 + y2 + c1;
+            final long c2 = ((x2 & y2) | ((x2 | y2) & ~r2)) >>> 63;
+            s[b] = s[a] + s[b] + c2;
+            s[b + 1] = r2;
+            s[b + 2] = r1;
+            s[b + 3] = r0;
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        case ARM_MSTORE -> { // within the memory already expanded
+          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (ARM_MSTORE << 4) - 4;
+            final long location = s[a + 3];
+            if ((s[a] | s[a + 1] | s[a + 2]) == 0
+                && location >= 0
+                && location <= frame.memoryByteSize() - 32) {
+              final byte[] memory = frame.memoryArrayV2();
+              final int i = (int) location;
+              LONG_BE.set(memory, i, s[a - 4]);
+              LONG_BE.set(memory, i + 8, s[a - 3]);
+              LONG_BE.set(memory, i + 16, s[a - 2]);
+              LONG_BE.set(memory, i + 24, s[a - 1]);
+              cost = VERY_LOW_TIER_GAS;
+              step = 1;
+              delta = -2;
+            }
+          }
+        }
+        case ARM_ISZERO -> {
+          if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (ARM_ISZERO << 4) - 4;
+            final long zero = (s[a] | s[a + 1] | s[a + 2] | s[a + 3]) == 0 ? 1L : 0L;
+            s[a] = 0;
+            s[a + 1] = 0;
+            s[a + 2] = 0;
+            s[a + 3] = zero;
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = 0;
+          }
+        }
+        case ARM_AND -> {
+          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (ARM_AND << 4) - 4;
+            s[a - 4] &= s[a];
+            s[a - 3] &= s[a + 1];
+            s[a - 2] &= s[a + 2];
+            s[a - 1] &= s[a + 3];
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        case ARM_MLOAD, ARM_CALLDATALOAD -> {
+          // Both read a word from an array into the top item: MLOAD from memory already expanded,
+          // CALLDATALOAD from the input data unless the word straddles its end. They share the
+          // reads because each read inlines a chain of VarHandle methods into the loop.
+          if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (ARM_MLOAD << 4) - 4;
+            final long location = s[a + 3];
+            final boolean small = (s[a] | s[a + 1] | s[a + 2]) == 0 && location >= 0;
+            final byte[] source;
+            final boolean readable;
+            if (opcode == 0x51) {
+              source = frame.memoryArrayV2();
+              readable = small && location <= frame.memoryByteSize() - 32;
+            } else {
+              source = frame.inputDataArrayIfPresent();
+              if (source != null && (!small || location >= source.length)) {
+                // past the end of the input
+                s[a] = 0;
+                s[a + 1] = 0;
+                s[a + 2] = 0;
+                s[a + 3] = 0;
+                cost = VERY_LOW_TIER_GAS;
+                step = 1;
+                delta = 0;
+                break;
+              }
+              readable = source != null && source.length - location >= 32;
+            }
+            if (readable) {
+              final int i = (int) location;
+              s[a] = (long) LONG_BE.get(source, i);
+              s[a + 1] = (long) LONG_BE.get(source, i + 8);
+              s[a + 2] = (long) LONG_BE.get(source, i + 16);
+              s[a + 3] = (long) LONG_BE.get(source, i + 24);
+              cost = VERY_LOW_TIER_GAS;
+              step = 1;
+              delta = 0;
+            }
+          }
+        }
+        case ARM_SUB -> {
+          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (ARM_SUB << 4) - 4;
+            final int b = a - 4;
+            final long x0 = s[a + 3];
+            final long y0 = s[b + 3];
+            final long r0 = x0 - y0;
+            final long b0 = ((~x0 & y0) | ((~x0 | y0) & r0)) >>> 63;
+            final long x1 = s[a + 2];
+            final long y1 = s[b + 2];
+            final long r1 = x1 - y1 - b0;
+            final long b1 = ((~x1 & y1) | ((~x1 | y1) & r1)) >>> 63;
+            final long x2 = s[a + 1];
+            final long y2 = s[b + 1];
+            final long r2 = x2 - y2 - b1;
+            final long b2 = ((~x2 & y2) | ((~x2 | y2) & r2)) >>> 63;
+            s[b] = s[a] - s[b] - b2;
+            s[b + 1] = r2;
+            s[b + 2] = r1;
+            s[b + 3] = r0;
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        case ARM_EQ -> {
+          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (ARM_EQ << 4) - 4;
+            final int b = a - 4;
+            final long equal =
+                ((s[a] ^ s[b])
+                            | (s[a + 1] ^ s[b + 1])
+                            | (s[a + 2] ^ s[b + 2])
+                            | (s[a + 3] ^ s[b + 3]))
+                        == 0
+                    ? 1L
+                    : 0L;
+            s[b] = 0;
+            s[b + 1] = 0;
+            s[b + 2] = 0;
+            s[b + 3] = equal;
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        case ARM_COMPARE -> { // LT, GT, SLT, SGT
+          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (ARM_COMPARE << 4) - 4;
+            final int b = a - 4;
+            // the most significant limb in which the two differ, or the least significant one
+            final int i =
+                s[a] != s[b] ? 0 : s[a + 1] != s[b + 1] ? 1 : s[a + 2] != s[b + 2] ? 2 : 3;
+            long x = s[a + i];
+            long y = s[b + i];
+            if (i == 0 && opcode >= 0x12) {
+              // signed: flipping the sign bits makes the unsigned comparison a signed one
+              x ^= Long.MIN_VALUE;
+              y ^= Long.MIN_VALUE;
+            }
+            final int comparison = Long.compareUnsigned(x, y);
+            s[b] = 0;
+            s[b + 1] = 0;
+            s[b + 2] = 0;
+            // LT and SLT are the even opcodes, GT and SGT the odd ones
+            s[b + 3] = ((opcode & 1) == 0 ? comparison < 0 : comparison > 0) ? 1L : 0L;
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        case ARM_SHIFT -> { // SHL, SHR, SAR, Constantinople onwards
+          if (constantinople && sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (ARM_SHIFT << 4) - 4;
+            final int v = a - 4;
+            long w3 = s[v];
+            long w2 = s[v + 1];
+            long w1 = s[v + 2];
+            long w0 = s[v + 3];
+            final long fill = opcode == 0x1d ? w3 >> 63 : 0L;
+            final long shift = s[a + 3];
+            if ((s[a] | s[a + 1] | s[a + 2]) != 0 || shift < 0 || shift >= 256) {
+              w3 = fill;
+              w2 = fill;
+              w1 = fill;
+              w0 = fill;
+            } else {
+              final int bits = (int) shift & 63;
+              final int limbs = (int) shift >>> 6;
+              if (opcode == 0x1b) {
+                // whole limbs first, towards the most significant
+                w3 = limbs == 0 ? w3 : limbs == 1 ? w2 : limbs == 2 ? w1 : w0;
+                w2 = limbs == 0 ? w2 : limbs == 1 ? w1 : limbs == 2 ? w0 : 0;
+                w1 = limbs == 0 ? w1 : limbs == 1 ? w0 : 0;
+                w0 = limbs == 0 ? w0 : 0;
+                if (bits != 0) {
+                  w3 = w3 << bits | w2 >>> -bits;
+                  w2 = w2 << bits | w1 >>> -bits;
+                  w1 = w1 << bits | w0 >>> -bits;
+                  w0 <<= bits;
+                }
+              } else {
+                // whole limbs first, towards the least significant
+                w0 = limbs == 0 ? w0 : limbs == 1 ? w1 : limbs == 2 ? w2 : w3;
+                w1 = limbs == 0 ? w1 : limbs == 1 ? w2 : limbs == 2 ? w3 : fill;
+                w2 = limbs == 0 ? w2 : limbs == 1 ? w3 : fill;
+                w3 = limbs == 0 ? w3 : fill;
+                if (bits != 0) {
+                  w0 = w0 >>> bits | w1 << -bits;
+                  w1 = w1 >>> bits | w2 << -bits;
+                  w2 = w2 >>> bits | w3 << -bits;
+                  w3 = opcode == 0x1c ? w3 >>> bits : w3 >> bits;
+                }
+              }
+            }
+            s[v] = w3;
+            s[v + 1] = w2;
+            s[v + 2] = w1;
+            s[v + 3] = w0;
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        case ARM_PUSH0 -> { // Shanghai onwards
+          if (shanghai && (sp << 2) < s.length && gas >= BASE_TIER_GAS) {
+            final int dst = base + (ARM_PUSH0 << 4);
+            s[dst] = 0;
+            s[dst + 1] = 0;
+            s[dst + 2] = 0;
+            s[dst + 3] = 0;
+            cost = BASE_TIER_GAS;
+            step = 1;
+            delta = 1;
+          }
+        }
+        case ARM_MUL -> { // when either factor fits in 64 bits
+          if (sp >= 2 && gas >= LOW_TIER_GAS) {
+            final int a = base + (ARM_MUL << 4) - 4;
+            final int b = a - 4;
+            final int wide;
+            if ((s[a] | s[a + 1] | s[a + 2]) == 0) {
+              wide = b;
+            } else if ((s[b] | s[b + 1] | s[b + 2]) == 0) {
+              wide = a;
+            } else {
+              wide = -1;
+            }
+            if (wide >= 0) {
+              final long m = s[(wide == a ? b : a) + 3];
+              final long x3 = s[wide];
+              final long x2 = s[wide + 1];
+              final long x1 = s[wide + 2];
+              final long x0 = s[wide + 3];
+              final long h0 = Math.unsignedMultiplyHigh(x0, m);
+              final long h1 = Math.unsignedMultiplyHigh(x1, m);
+              final long h2 = Math.unsignedMultiplyHigh(x2, m);
+              final long l1 = x1 * m;
+              final long r1 = l1 + h0;
+              // a high half is at most 2^64 - 2, so adding a carry to one cannot overflow
+              final long l2 = x2 * m;
+              final long r2 = l2 + h1 + (Long.compareUnsigned(r1, l1) < 0 ? 1L : 0L);
+              s[b] = x3 * m + h2 + (Long.compareUnsigned(r2, l2) < 0 ? 1L : 0L);
+              s[b + 1] = r2;
+              s[b + 2] = r1;
+              s[b + 3] = x0 * m;
+              cost = LOW_TIER_GAS;
+              step = 1;
+              delta = -1;
+            }
+          }
+        }
+        case ARM_CALLDATASIZE -> {
+          final byte[] data = frame.inputDataArrayIfPresent();
+          if (data != null && (sp << 2) < s.length && gas >= BASE_TIER_GAS) {
+            final int dst = base + (ARM_CALLDATASIZE << 4);
+            s[dst] = 0;
+            s[dst + 1] = 0;
+            s[dst + 2] = 0;
+            s[dst + 3] = data.length;
+            cost = BASE_TIER_GAS;
+            step = 1;
+            delta = 1;
+          }
+        }
+        case ARM_DIV_MOD -> { // when both operands fit in 64 bits
+          if (sp >= 2 && gas >= LOW_TIER_GAS) {
+            final int a = base + (ARM_DIV_MOD << 4) - 4;
+            final int b = a - 4;
+            if ((s[a] | s[a + 1] | s[a + 2] | s[b] | s[b + 1] | s[b + 2]) == 0) {
+              final long x = s[a + 3];
+              final long y = s[b + 3];
+              s[b + 3] =
+                  y == 0
+                      ? 0L
+                      : opcode == 0x04 ? Long.divideUnsigned(x, y) : Long.remainderUnsigned(x, y);
+              cost = LOW_TIER_GAS;
+              step = 1;
+              delta = -1;
+            }
+          }
+        }
+        case ARM_OR -> {
+          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (ARM_OR << 4) - 4;
+            s[a - 4] |= s[a];
+            s[a - 3] |= s[a + 1];
+            s[a - 2] |= s[a + 2];
+            s[a - 1] |= s[a + 3];
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        case ARM_NOT -> {
+          if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (ARM_NOT << 4) - 4;
+            s[a] = ~s[a];
+            s[a + 1] = ~s[a + 1];
+            s[a + 2] = ~s[a + 2];
+            s[a + 3] = ~s[a + 3];
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = 0;
+          }
+        }
+        case ARM_GAS -> { // what is left once GAS itself is paid
+          if ((sp << 2) < s.length && gas >= BASE_TIER_GAS) {
+            final int dst = base + (ARM_GAS << 4);
+            s[dst] = 0;
+            s[dst + 1] = 0;
+            s[dst + 2] = 0;
+            s[dst + 3] = gas - BASE_TIER_GAS;
+            cost = BASE_TIER_GAS;
+            step = 1;
+            delta = 1;
+          }
+        }
+        case ARM_SIGNEXTEND -> {
+          if (sp >= 2 && gas >= LOW_TIER_GAS) {
+            final int a = base + (ARM_SIGNEXTEND << 4) - 4;
+            final int v = a - 4;
+            final long index = s[a + 3];
+            if ((s[a] | s[a + 1] | s[a + 2]) == 0 && index >= 0 && index < 31) {
+              // the sign bit and the limb holding it, limbs counted from the least significant
+              final int signBit = (int) index * 8 + 7;
+              final int limb = v + 3 - (signBit >>> 6);
+              final long below = -1L >>> (63 - (signBit & 63));
+              final long fill = (s[limb] >>> (signBit & 63) & 1L) == 0 ? 0L : -1L;
+              s[limb] = (s[limb] & below) | (fill & ~below);
+              // and every limb above it
+              if (limb > v) {
+                s[v] = fill;
+              }
+              if (limb > v + 1) {
+                s[v + 1] = fill;
+              }
+              if (limb > v + 2) {
+                s[v + 2] = fill;
+              }
+            }
+            cost = LOW_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        case ARM_XOR -> {
+          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (ARM_XOR << 4) - 4;
+            s[a - 4] ^= s[a];
+            s[a - 3] ^= s[a + 1];
+            s[a - 2] ^= s[a + 2];
+            s[a - 1] ^= s[a + 3];
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        default -> {
+          // everything else goes through executeOperationV2 below
+        }
       }
-      // The frame takes the stack pointer back before anything that reads it: the operations, the
-      // tracer hooks and the cold arms all go through the frame.
-      frame.setTopV2(sp);
-      final boolean loopOwned = !tracing && LOOP_OWNS_STATE[opcode];
-      if (!loopOwned) {
-        frame.setPC(pc);
-        frame.setGasRemaining(gas);
-      }
-      if (tracing) {
-        frame.setCurrentOperation(pc < code.length ? operationArray[opcode] : endOfScriptStop);
-        operationTracer.tracePreExecution(frame);
+      if (cost >= 0) {
+        gas -= cost;
+        pc += step;
+        sp += delta;
+        continue;
       }
 
-      OperationResult result;
-      try {
-        result =
-            switch (opcode) {
-              // DUP1-16 23.10%
-              case 0x80, // DUP1-16
-                  0x81,
-                  0x82,
-                  0x83,
-                  0x84,
-                  0x85,
-                  0x86,
-                  0x87,
-                  0x88,
-                  0x89,
-                  0x8a,
-                  0x8b,
-                  0x8c,
-                  0x8d,
-                  0x8e,
-                  0x8f ->
-                  DupOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), opcode - DupOperationV2.DUP_BASE);
-              // SWAP1-16 14.21%
-              case 0x90, // SWAP1-16
-                  0x91,
-                  0x92,
-                  0x93,
-                  0x94,
-                  0x95,
-                  0x96,
-                  0x97,
-                  0x98,
-                  0x99,
-                  0x9a,
-                  0x9b,
-                  0x9c,
-                  0x9d,
-                  0x9e,
-                  0x9f ->
-                  SwapOperationV2.staticOperation(
-                      frame, frame.stackDataV2(), opcode - SwapOperationV2.SWAP_BASE);
-              // JUMPDEST 9.39%
-              case 0x5b -> JumpDestOperationV2.staticOperation(frame);
-              // POP 7.09%
-              case 0x50 -> PopOperationV2.staticOperation(frame);
-              // JUMPI 6.11%
-              case 0x57 -> JumpiOperationV2.staticOperation(frame, frame.stackDataV2());
-              // JUMP 5.96%
-              case 0x56 -> JumpOperationV2.staticOperation(frame, frame.stackDataV2());
-              // ADD 5.55%
-              case 0x01 -> AddOperationV2.staticOperation(frame);
-              // MSTORE 3.27%
-              case 0x52 ->
-                  MstoreOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
-              // ISZERO 3.21%
-              case 0x15 -> IsZeroOperationV2.staticOperation(frame, frame.stackDataV2());
-              // AND 3.03%
-              case 0x16 -> AndOperationV2.staticOperation(frame, frame.stackDataV2());
-              // MLOAD 2.73%
-              case 0x51 ->
-                  MloadOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
-              // SUB 2.03%
-              case 0x03 -> SubOperationV2.staticOperation(frame);
-              // EQ 1.87%
-              case 0x14 -> EqOperationV2.staticOperation(frame, frame.stackDataV2());
-              // LT 1.37%
-              case 0x10 -> LtOperationV2.staticOperation(frame, frame.stackDataV2());
-              // SHL 1.18%
-              case 0x1b ->
-                  enableConstantinople
-                      ? ShlOperationV2.staticOperation(frame)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              // GT 1.11%
-              case 0x11 -> GtOperationV2.staticOperation(frame, frame.stackDataV2());
-              // PUSH0 1.05%
-              case 0x5f ->
-                  enableShanghai
-                      ? Push0OperationV2.staticOperation(frame, frame.stackDataV2())
-                      : InvalidOperation.invalidOperationResult(opcode);
-              // CALLDATALOAD 0.94%
-              case 0x35 -> CallDataLoadOperationV2.staticOperation(frame, frame.stackDataV2());
-              // SHR 0.70%
-              case 0x1c ->
-                  enableConstantinople
-                      ? ShrOperationV2.staticOperation(frame)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              // MULMOD 0.66%
-              case 0x09 -> MulModOperationV2.staticOperation(frame);
-              // MUL 0.55%
-              case 0x02 -> MulOperationV2.staticOperation(frame);
-              // SLOAD 0.54%
-              case 0x54 -> sLoadOperationV2.execute(frame, this);
-              // PUSH1-32, tracing path only
-              case 0x60, // PUSH1-32
-                  0x61,
-                  0x62,
-                  0x63,
-                  0x64,
-                  0x65,
-                  0x66,
-                  0x67,
-                  0x68,
-                  0x69,
-                  0x6a,
-                  0x6b,
-                  0x6c,
-                  0x6d,
-                  0x6e,
-                  0x6f,
-                  0x70,
-                  0x71,
-                  0x72,
-                  0x73,
-                  0x74,
-                  0x75,
-                  0x76,
-                  0x77,
-                  0x78,
-                  0x79,
-                  0x7a,
-                  0x7b,
-                  0x7c,
-                  0x7d,
-                  0x7e,
-                  0x7f -> {
-                final int pushSize = opcode - PushOperationV2.PUSH_BASE;
-                final OperationResult pushResult =
-                    PushOperationV2.staticOperation(frame, frame.stackDataV2(), code, pc, pushSize);
-                // the immediate bytes are skipped here; a frame-owned step reloads pc anyway
-                if (pushResult.getHaltReason() == null) {
-                  pc += pushSize;
-                }
-                yield pushResult;
-              }
-              default -> coldOperation(frame, opcode, code, pc);
-            };
-      } catch (final OverflowException oe) {
-        result = OVERFLOW_RESPONSE;
-      } catch (final UnderflowException ue) {
-        result = UNDERFLOW_RESPONSE;
-      }
-      // The operation owned the stack for the duration of the call, so the loop picks the pointer
-      // back up before the arms carried inline above use it again.
-      sp = frame.stackTopV2();
-      final ExceptionalHaltReason haltReason = result.getHaltReason();
-      if (loopOwned) {
-        if (haltReason == null) {
-          gas -= result.getGasCost();
-          if (gas >= 0) {
-            pc += result.getPcIncrement();
-            continue;
-          }
-        }
-        // halting: the frame takes the state back so the handling below sees what it expects
-        frame.setPC(pc);
-        frame.setGasRemaining(gas);
-      }
-      if (haltReason != null) {
-        LOG.trace("MessageFrame evaluation halted because of {}", haltReason);
-        frame.setExceptionalHaltReason(Optional.of(haltReason));
-        frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
-      } else if (loopOwned ? gas < 0 : frame.decrementRemainingGas(result.getGasCost()) < 0) {
-        frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
-        frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
-      }
+      frame.setTopV2(sp);
+      frame.setPC(pc);
+      frame.setGasRemaining(gas);
+      completeOperationV2(frame, executeOperationV2(frame, code, pc, opcode));
       if (frame.getState() != MessageFrame.State.CODE_EXECUTING) {
-        if (tracing) {
-          operationTracer.tracePostExecution(frame, result);
-        }
         return;
       }
-      pc = frame.getPC() + result.getPcIncrement();
+      sp = frame.stackTopV2();
+      pc = frame.getPC();
       gas = frame.getRemainingGas();
-      frame.setPC(pc);
-      if (tracing) {
-        operationTracer.tracePostExecution(frame, result);
-      }
+    }
+  }
+
+  /**
+   * The v2 loop for traced execution, which calls the tracer around every operation and therefore
+   * keeps all state in the frame, where the tracer reads it.
+   */
+  private void runToHaltV2Traced(final MessageFrame frame, final OperationTracer operationTracer) {
+    final byte[] code = frame.getCode().getBytes().toArrayUnsafe();
+    final Operation[] operationArray = operations.getOperations();
+    while (frame.getState() == MessageFrame.State.CODE_EXECUTING) {
+      final int pc = frame.getPC();
+      final int opcode = pc < code.length ? code[pc] & 0xff : 0;
+      frame.setCurrentOperation(pc < code.length ? operationArray[opcode] : endOfScriptStop);
+      operationTracer.tracePreExecution(frame);
+      final OperationResult result = executeOperationV2(frame, code, pc, opcode);
+      completeOperationV2(frame, result);
+      operationTracer.tracePostExecution(frame, result);
+    }
+  }
+
+  private static boolean isJumpDestination(
+      final long[] jumpDestBitMask, final long destination, final int codeSize) {
+    return destination >= 0
+        && destination < codeSize
+        && (jumpDestBitMask[(int) (destination >>> 6)] & 1L << destination) != 0L;
+  }
+
+  /**
+   * Charges the operation's gas, or halts the frame, and steps past the operation.
+   *
+   * @param frame the frame
+   * @param result the result of the operation
+   */
+  private static void completeOperationV2(final MessageFrame frame, final OperationResult result) {
+    final ExceptionalHaltReason haltReason = result.getHaltReason();
+    if (haltReason != null) {
+      LOG.trace("MessageFrame evaluation halted because of {}", haltReason);
+      frame.setExceptionalHaltReason(Optional.of(haltReason));
+      frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
+    } else if (frame.decrementRemainingGas(result.getGasCost()) < 0) {
+      frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
+      frame.setState(MessageFrame.State.EXCEPTIONAL_HALT);
+    }
+    if (frame.getState() == MessageFrame.State.CODE_EXECUTING) {
+      frame.setPC(frame.getPC() + result.getPcIncrement());
+    }
+  }
+
+  /**
+   * Executes one operation against the state held in the frame, the most frequent ones in this
+   * method and the rest in {@link #coldOperation}.
+   *
+   * @param frame the frame
+   * @param code the code being executed
+   * @param pc the program counter
+   * @param opcode the operation code, 0 past the end of the code
+   * @return the result of the operation
+   */
+  private OperationResult executeOperationV2(
+      final MessageFrame frame, final byte[] code, final int pc, final int opcode) {
+    try {
+      return switch (opcode) {
+        case 0x80, // DUP1-16
+            0x81,
+            0x82,
+            0x83,
+            0x84,
+            0x85,
+            0x86,
+            0x87,
+            0x88,
+            0x89,
+            0x8a,
+            0x8b,
+            0x8c,
+            0x8d,
+            0x8e,
+            0x8f ->
+            DupOperationV2.staticOperation(
+                frame, frame.stackDataV2(), opcode - DupOperationV2.DUP_BASE);
+        case 0x90, // SWAP1-16
+            0x91,
+            0x92,
+            0x93,
+            0x94,
+            0x95,
+            0x96,
+            0x97,
+            0x98,
+            0x99,
+            0x9a,
+            0x9b,
+            0x9c,
+            0x9d,
+            0x9e,
+            0x9f ->
+            SwapOperationV2.staticOperation(
+                frame, frame.stackDataV2(), opcode - SwapOperationV2.SWAP_BASE);
+        case 0x5b -> JumpDestOperationV2.staticOperation(frame);
+        case 0x50 -> PopOperationV2.staticOperation(frame);
+        case 0x57 -> JumpiOperationV2.staticOperation(frame, frame.stackDataV2());
+        case 0x56 -> JumpOperationV2.staticOperation(frame, frame.stackDataV2());
+        case 0x01 -> AddOperationV2.staticOperation(frame);
+        case 0x52 -> MstoreOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+        case 0x15 -> IsZeroOperationV2.staticOperation(frame, frame.stackDataV2());
+        case 0x16 -> AndOperationV2.staticOperation(frame, frame.stackDataV2());
+        case 0x51 -> MloadOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator);
+        case 0x03 -> SubOperationV2.staticOperation(frame);
+        case 0x14 -> EqOperationV2.staticOperation(frame, frame.stackDataV2());
+        case 0x10 -> LtOperationV2.staticOperation(frame, frame.stackDataV2());
+        case 0x1b ->
+            enableConstantinople
+                ? ShlOperationV2.staticOperation(frame)
+                : InvalidOperation.invalidOperationResult(opcode);
+        case 0x11 -> GtOperationV2.staticOperation(frame, frame.stackDataV2());
+        case 0x5f ->
+            enableShanghai
+                ? Push0OperationV2.staticOperation(frame, frame.stackDataV2())
+                : InvalidOperation.invalidOperationResult(opcode);
+        case 0x35 -> CallDataLoadOperationV2.staticOperation(frame, frame.stackDataV2());
+        case 0x1c ->
+            enableConstantinople
+                ? ShrOperationV2.staticOperation(frame)
+                : InvalidOperation.invalidOperationResult(opcode);
+        case 0x09 -> MulModOperationV2.staticOperation(frame);
+        case 0x02 -> MulOperationV2.staticOperation(frame);
+        case 0x54 -> sLoadOperationV2.execute(frame, this);
+        case 0x60, // PUSH1-32
+            0x61,
+            0x62,
+            0x63,
+            0x64,
+            0x65,
+            0x66,
+            0x67,
+            0x68,
+            0x69,
+            0x6a,
+            0x6b,
+            0x6c,
+            0x6d,
+            0x6e,
+            0x6f,
+            0x70,
+            0x71,
+            0x72,
+            0x73,
+            0x74,
+            0x75,
+            0x76,
+            0x77,
+            0x78,
+            0x79,
+            0x7a,
+            0x7b,
+            0x7c,
+            0x7d,
+            0x7e,
+            0x7f ->
+            PushOperationV2.staticOperation(
+                frame, frame.stackDataV2(), code, pc, opcode - PushOperationV2.PUSH_BASE);
+        default -> coldOperation(frame, opcode, code, pc);
+      };
+    } catch (final OverflowException oe) {
+      return OVERFLOW_RESPONSE;
+    } catch (final UnderflowException ue) {
+      return UNDERFLOW_RESPONSE;
     }
   }
 

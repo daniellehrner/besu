@@ -40,13 +40,17 @@ public class Code {
 
   private final int size;
 
-  /** Bit mask for jump destinations, used to optimize JUMP/JUMPI operations */
-  private long[] jumpDestBitMask = null;
+  // The analysis tables are package-private for the EVM's untraced v2 loop, which reads them as
+  // fields once jumpDestinations() and pushBits() have built them. Holding the five arrays in
+  // locals instead leaves the loop too few registers for its own state.
 
-  private long[] pushBits = null;
-  private int[] pushBase = null;
-  private long[] pushValues = null;
-  private long[] pushWide = null;
+  /** Bit mask for jump destinations, used to optimize JUMP/JUMPI operations */
+  long[] jumpDestBitMask = null;
+
+  long[] pushBits = null;
+  int[] pushBase = null;
+  long[] pushValues = null;
+  long[] pushWide = null;
 
   /**
    * Public constructor.
@@ -169,6 +173,18 @@ public class Code {
       i += printInstruction(i, ps);
     }
     return out.toString(StandardCharsets.UTF_8);
+  }
+
+  /**
+   * Returns the bitmask of valid jump destinations, computing it on first use.
+   *
+   * @return the bitmask, one bit per byte of code
+   */
+  long[] jumpDestinations() {
+    if (jumpDestBitMask == null) {
+      jumpDestBitMask = calculateJumpDestBitMask();
+    }
+    return jumpDestBitMask;
   }
 
   /**

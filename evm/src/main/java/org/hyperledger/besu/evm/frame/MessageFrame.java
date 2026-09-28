@@ -661,6 +661,16 @@ public class MessageFrame {
   }
 
   /**
+   * Returns the array backing memory, for reads and writes within {@link #memoryByteSize()}. Memory
+   * expansion replaces the array.
+   *
+   * @return the memory array, which may be longer than the active memory
+   */
+  public byte[] memoryArrayV2() {
+    return memory.bytes();
+  }
+
+  /**
    * Reads the 32-byte word at a memory location straight into a v2 stack slot, expanding memory as
    * needed.
    *
@@ -1354,6 +1364,15 @@ public class MessageFrame {
    */
   public Bytes getInputData() {
     return inputData;
+  }
+
+  /**
+   * Returns the input data as a byte array if {@link #getInputDataArray()} has already produced it.
+   *
+   * @return the input data, which must not be modified, or null
+   */
+  public byte[] inputDataArrayIfPresent() {
+    return inputDataArray;
   }
 
   /**
