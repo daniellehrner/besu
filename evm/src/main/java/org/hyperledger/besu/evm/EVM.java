@@ -382,7 +382,42 @@ public class EVM {
   }
 
   /**
-   * Run to halt.
+   * Runs the frame until it halts, on the standard interpreter or, when enabled, on EVM v2.
+   *
+   * <p>Both interpreters have two loops, chosen once per call from {@link
+   * OperationTracer#isEnabled()}: a traced loop, which calls the tracer around every operation and
+   * so keeps all state in the frame, where the tracer reads it, and an untraced loop for everything
+   * else, block import included. The untraced loops are shaped for HotSpot's C2, and each of these
+   * choices was measured:
+   *
+   * <ul>
+   *   <li>No tracer hooks. A tracer may read the frame between any two operations, so with hooks in
+   *       the loop no state can stay in registers. And once a third tracer class has reached the
+   *       hooks, C2 compiles them as virtual calls, about 16% on a loop of cheap operations. A test
+   *       for a tracer inside one shared loop instead costs 8 to 60%.
+   *   <li>The program counter, the remaining gas and the stack live in locals, and go back to the
+   *       frame only before something that reads them there.
+   *   <li>The frequent operations run inline, but only where they succeed. Anything else goes to
+   *       the operation's implementation, which owns every halt, so halts are defined once for both
+   *       loops. Called through its class, an operation costs a call, a result object and the reads
+   *       of its fields; for JUMPDEST that is all of its work.
+   *   <li>Nothing inline allocates or calls what C2 does not inline. One such call anywhere in the
+   *       loop makes C2 keep every local in memory: JUMPDEST goes from 0.45 to about 2 ns.
+   *   <li>The loop stays small. HotSpot never compiles a method of more than 8000 bytes of
+   *       bytecode, and C2 stops inlining into one once its own bytecode and everything inlined
+   *       into it reach 8000 bytes, after which even the accessors every operation shares become
+   *       calls, about eight per operation. Rare operations therefore run in a method of their own.
+   *   <li>PUSH values come from tables rather than being decoded on every execution: in v2 a table
+   *       built once per contract, in the standard interpreter shared tables for PUSH1 and PUSH2.
+   *       PUSH is the most frequent operation, and decoding it each time is about a sixth of the
+   *       loop's time.
+   *   <li>JUMP and JUMPI also run the JUMPDEST they land on, and PUSH2 the JUMP or JUMPI after it,
+   *       which are among the most frequent pairs of operations on mainnet.
+   *   <li>Memory and storage change records, which only tracers read, are made only when tracing.
+   * </ul>
+   *
+   * <p>The untraced loops document the details, and docs/evm/v2-loop-arms.md the workflow for the
+   * v2 loop and the tests that guard these properties.
    *
    * @param frame the frame
    * @param operationTracer the tracing
@@ -1179,8 +1214,9 @@ public class EVM {
       // indices built on a biased pointer differ from arm to arm as far as C2 can tell, so each
       // arm computes its own. Built on sp and pc directly, the arms share them, and C2 computes
       // every arm's indices ahead of the dispatch, where they take the registers the loop's state
-      // needs. The arms are in the order of how often mainnet executes them, because C2 inlines
-      // in bytecode order and stops when the method reaches its size budget.
+      // needs. The arms come in the order of their lowest opcode. C2 inlines in bytecode order and
+      // stops at its size budget, which this loop has nearly used up: another arm may leave the
+      // last calls un-inlined, which EvmV2LoopCompilationTest reports.
       final int entry = DISPATCH[opcode];
       final int bias = entry >> 8;
       final int base = (sp << 2) + bias;
