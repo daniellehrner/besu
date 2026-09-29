@@ -17,18 +17,22 @@ package org.hyperledger.besu.evm.tracing;
 import org.hyperledger.besu.datatypes.AccessListEntry;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.evm.frame.MessageFrame;
+import org.hyperledger.besu.evm.internal.WarmStorageTable;
 import org.hyperledger.besu.evm.operation.Operation.OperationResult;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.SortedMap;
+import java.util.SortedSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
-import com.google.common.collect.Table;
 import org.apache.tuweni.bytes.Bytes32;
 
 /** The Access List Operation Tracer. */
 public class AccessListOperationTracer implements OperationTracer {
 
-  private Table<Address, Bytes32, Boolean> warmedUpStorage;
+  private WarmStorageTable warmedUpStorage;
 
   /** Default constructor. */
   private AccessListOperationTracer() {
@@ -47,15 +51,13 @@ public class AccessListOperationTracer implements OperationTracer {
    */
   public List<AccessListEntry> getAccessList() {
     if (warmedUpStorage != null && !warmedUpStorage.isEmpty()) {
-      final List<AccessListEntry> list = new ArrayList<>(warmedUpStorage.size());
-      warmedUpStorage
-          .rowMap()
-          .forEach(
-              (address, storageKeys) ->
-                  list.add(
-                      new AccessListEntry(
-                          address,
-                          new ArrayList<>(storageKeys.keySet().stream().sorted().toList()))));
+      // sorted by address and slot so the list is the same whichever order the slots were touched
+      final SortedMap<Address, SortedSet<Bytes32>> byAddress = new TreeMap<>();
+      warmedUpStorage.forEach(
+          (address, slot) -> byAddress.computeIfAbsent(address, a -> new TreeSet<>()).add(slot));
+      final List<AccessListEntry> list = new ArrayList<>(byAddress.size());
+      byAddress.forEach(
+          (address, slots) -> list.add(new AccessListEntry(address, new ArrayList<>(slots))));
       return list;
     }
     return List.of();

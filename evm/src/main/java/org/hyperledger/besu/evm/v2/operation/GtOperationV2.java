@@ -14,31 +14,40 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.pushBytes32;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
 
-/** The Prev randao operation. */
-public class PrevRanDaoOperationV2 extends AbstractFixedCostOperationV2 {
+/** The Gt operation. */
+public class GtOperationV2 extends AbstractFixedCostOperationV2 {
 
   /**
-   * Instantiates a new Prev randao operation.
+   * Instantiates a new Gt operation.
    *
    * @param gasCalculator the gas calculator
    */
-  public PrevRanDaoOperationV2(final GasCalculator gasCalculator) {
-    super(0x44, "PREVRANDAO", 0, 1, gasCalculator, gasCalculator.getBaseTierGasCost());
+  public GtOperationV2(final GasCalculator gasCalculator) {
+    super(0x11, "GT", 2, 1, gasCalculator, gasCalculator.getVeryLowTierGasCost());
   }
 
   @Override
   public Operation.OperationResult executeFixedCostOperation(final MessageFrame frame) {
-    if (!frame.stackHasSpaceV2(1)) return OVERFLOW_RESPONSE;
-    final long[] stack = frame.stackDataV2();
-    final int top = frame.stackTopV2();
-    pushBytes32(frame.getBlockValues().getMixHashOrPrevRandao(), stack, top);
-    frame.setTopV2(top + 1);
-    return successResponse;
+    return staticOperation(frame, frame.stackDataV2());
+  }
+
+  /**
+   * Performs gt operation.
+   *
+   * @param frame the frame
+   * @param stack the v2 operand stack ({@code long[]} in big-endian limb order)
+   * @return the operation result
+   */
+  public static OperationResult staticOperation(final MessageFrame frame, final long[] stack) {
+    final int sp = frame.stackTopV2();
+    return result(frame, LtOperationV2.compare(stack, sp, top(sp), 0x11, ANY_GAS), 2, 1);
   }
 }

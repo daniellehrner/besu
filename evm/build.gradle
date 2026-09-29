@@ -35,6 +35,7 @@ dependencies {
   api 'org.slf4j:slf4j-api'
 
   annotationProcessor 'com.google.dagger:dagger-compiler'
+  annotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess'
 
   implementation project(':crypto:algorithms')
   implementation project(':datatypes')
@@ -65,6 +66,10 @@ dependencies {
   testImplementation 'org.junit.jupiter:junit-jupiter'
   testImplementation 'org.mockito:mockito-core'
   testImplementation 'org.mockito:mockito-junit-jupiter'
+
+  jmhImplementation project(':datatypes')
+  jmhImplementation 'io.consensys.tuweni:tuweni-bytes'
+  jmhImplementation 'io.consensys.tuweni:tuweni-units'
 }
 
 publishing {
@@ -77,4 +82,49 @@ publishing {
       }
     }
   }
+}
+
+// The inline cases of the EVM v2 interpreter loop are copied into EVM.java from the @InlineInEvmLoop
+// methods of the operation classes, and every build checks them against the rules that keep the
+// loop fast.
+sourceSets {
+  loopgen
+}
+
+dependencies {
+  loopgenAnnotationProcessor(platform(project(':platform')))
+}
+
+def evmV2LoopOperations = 'src/main/java/org/hyperledger/besu/evm/v2/operation'
+def evmV2LoopFiles = [
+  evmV2LoopOperations,
+  'src/main/java/org/hyperledger/besu/evm/EVM.java'
+]
+
+tasks.register('generateEvmV2Loop', JavaExec) {
+  group = 'build'
+  description = 'Copies the @InlineInEvmLoop methods into the EVM v2 interpreter loop in EVM.java'
+  classpath = sourceSets.loopgen.runtimeClasspath
+  mainClass = 'org.hyperledger.besu.evm.loopgen.EvmV2LoopGenerator'
+  workingDir = projectDir
+  args(['write'] + evmV2LoopFiles)
+  finalizedBy 'spotlessApply'
+}
+
+def checkEvmV2Loop = tasks.register('checkEvmV2Loop', JavaExec) {
+  group = 'verification'
+  description = 'Checks the @InlineInEvmLoop methods against their rules, and that EVM.java holds their copies'
+  classpath = sourceSets.loopgen.runtimeClasspath
+  mainClass = 'org.hyperledger.besu.evm.loopgen.EvmV2LoopGenerator'
+  workingDir = projectDir
+  def marker = layout.buildDirectory.file('evmV2Loop/checked')
+  inputs.dir(evmV2LoopOperations)
+  inputs.file('src/main/java/org/hyperledger/besu/evm/EVM.java')
+  inputs.files(sourceSets.loopgen.runtimeClasspath)
+  outputs.file(marker)
+  args(['check'] + evmV2LoopFiles + [marker.get().asFile.path])
+}
+
+tasks.named('compileJava') {
+  dependsOn checkEvmV2Loop
 }

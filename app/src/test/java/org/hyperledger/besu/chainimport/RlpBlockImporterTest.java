@@ -62,30 +62,44 @@ public final class RlpBlockImporterTest {
   public void blockImport() throws IOException {
     final Path source = dataDir.resolve("1000.blocks");
     BlockTestUtil.write1000Blocks(source);
-    final BesuController targetController =
-        new BesuController.Builder()
-            .fromEthNetworkConfig(
-                EthNetworkConfig.getNetworkConfig(NetworkDefinition.MAINNET), SyncMode.FULL)
-            .synchronizerConfiguration(SynchronizerConfiguration.builder().build())
-            .ethProtocolConfiguration(EthProtocolConfiguration.DEFAULT)
-            .storageProvider(new InMemoryKeyValueStorageProvider())
-            .networkId(BigInteger.ONE)
-            .miningParameters(MiningConfiguration.newDefault())
-            .nodeKey(NodeKeyUtils.generate())
-            .metricsSystem(new NoOpMetricsSystem())
-            .dataDirectory(dataDir)
-            .clock(TestClock.fixed())
-            .transactionPoolConfiguration(TransactionPoolConfiguration.DEFAULT)
-            .evmConfiguration(EvmConfiguration.DEFAULT)
-            .networkConfiguration(NetworkingConfiguration.DEFAULT)
-            .besuComponent(mock(BesuComponent.class))
-            .apiConfiguration(ImmutableApiConfiguration.builder().build())
-            .build();
+    final BesuController targetController = mainnetController();
     final RlpBlockImporter.ImportResult result =
         rlpBlockImporter.importBlockchain(source, targetController, false);
     // Don't count the Genesis block
     assertThat(result.count).isEqualTo(999);
     assertThat(result.td).isEqualTo(UInt256.valueOf(21991996248790L));
+  }
+
+  private BesuController mainnetController() {
+    return new BesuController.Builder()
+        .fromEthNetworkConfig(
+            EthNetworkConfig.getNetworkConfig(NetworkDefinition.MAINNET), SyncMode.FULL)
+        .synchronizerConfiguration(SynchronizerConfiguration.builder().build())
+        .ethProtocolConfiguration(EthProtocolConfiguration.DEFAULT)
+        .storageProvider(new InMemoryKeyValueStorageProvider())
+        .networkId(BigInteger.ONE)
+        .miningParameters(MiningConfiguration.newDefault())
+        .nodeKey(NodeKeyUtils.generate())
+        .metricsSystem(new NoOpMetricsSystem())
+        .dataDirectory(dataDir)
+        .clock(TestClock.fixed())
+        .transactionPoolConfiguration(TransactionPoolConfiguration.DEFAULT)
+        .evmConfiguration(EvmConfiguration.DEFAULT)
+        .networkConfiguration(NetworkingConfiguration.DEFAULT)
+        .besuComponent(mock(BesuComponent.class))
+        .apiConfiguration(ImmutableApiConfiguration.builder().build())
+        .build();
+  }
+
+  @Test
+  public void blockImportWithPerBlockTimings() throws IOException {
+    final Path source = dataDir.resolve("1000.blocks");
+    BlockTestUtil.write1000Blocks(source);
+
+    final RlpBlockImporter.ImportResult result =
+        rlpBlockImporter.importBlockchain(source, mainnetController(), false, 1L, 11L, true);
+
+    assertThat(result.count).isEqualTo(10);
   }
 
   @Test

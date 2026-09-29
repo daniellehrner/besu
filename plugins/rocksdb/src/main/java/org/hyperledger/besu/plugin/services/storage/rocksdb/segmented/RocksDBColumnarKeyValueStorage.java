@@ -299,10 +299,12 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
    */
   private BlockBasedTableConfig createBlockBasedTableConfig(
       final SegmentIdentifier segment, final RocksDBConfiguration config) {
+    // the high spec size is a floor for the hot segments, so a larger configured capacity still
+    // applies to them
     final LRUCache cache =
         new LRUCache(
             config.isHighSpec() && segment.isEligibleToHighSpecFlag()
-                ? ROCKSDB_BLOCKCACHE_SIZE_HIGH_SPEC
+                ? Math.max(ROCKSDB_BLOCKCACHE_SIZE_HIGH_SPEC, config.getCacheCapacity())
                 : config.getCacheCapacity());
     blockCaches.add(cache);
     return new BlockBasedTableConfig()

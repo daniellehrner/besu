@@ -263,9 +263,12 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
               blockHashLookup,
               !blockTracer.isEnabled() ? OperationTracer.NO_TRACING : blockTracer,
               blockAccessListBuilder);
-      protocolSpec
-          .getPreExecutionProcessor()
-          .process(blockProcessingContext, preExecutionAccessLocationTracker);
+      BlockImportTimings.time(
+          BlockImportTimings.Phase.PRE_EXECUTION,
+          () ->
+              protocolSpec
+                  .getPreExecutionProcessor()
+                  .process(blockProcessingContext, preExecutionAccessLocationTracker));
 
       Optional<BlockHeader> maybeParentHeader =
           blockchain.getBlockHeader(blockHeader.getParentHash());
@@ -280,6 +283,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
                               calculateExcessBlobGasForParent(protocolSpec, parentHeader)))
               .orElse(Wei.ZERO);
 
+      final long dispatchStart = System.nanoTime();
       preProcessingContext =
           preprocessingBlockFunction.run(
               protocolContext,
@@ -291,9 +295,11 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
               blockAccessListBuilder,
               blockAccessList,
               maybeParentHeader);
+      BlockImportTimings.addSince(BlockImportTimings.Phase.PARALLEL_DISPATCH, dispatchStart);
 
       boolean parallelizedTxFound = false;
       int nbParallelTx = 0;
+      long parallelizedGas = 0L;
 
       for (int i = 0; i < transactions.size(); i++) {
         final WorldUpdater blockUpdater = worldState.updater();
@@ -341,6 +347,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
           return new BlockProcessingResult(Optional.empty(), errorMessage);
         }
 
+        final long commitStart = System.nanoTime();
         applyPartialBlockAccessView(
             transactionProcessingResult.getPartialBlockAccessView(), blockAccessListBuilder);
 
@@ -349,6 +356,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
         }
         blockUpdater.commit();
         blockUpdater.markTransactionBoundary();
+        BlockImportTimings.addSince(BlockImportTimings.Phase.TX_COMMIT, commitStart);
 
         // EIP-7778: Update both cumulative gas values
         // Block gas uses protocol-specific strategy (pre-refund for Amsterdam+)
@@ -357,9 +365,10 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
                 .getBlockGasAccountingStrategy()
                 .calculateTransactionExecutionGas(transaction, transactionProcessingResult);
         // Receipt gas always uses standard post-refund calculation
-        cumulativeReceiptGasUsed +=
+        final long receiptGas =
             BlockGasAccountingStrategy.calculateReceiptGas(
                 transaction, transactionProcessingResult);
+        cumulativeReceiptGasUsed += receiptGas;
         cumulativeStateGasUsed += transactionProcessingResult.getStateGasUsed();
 
         // EIP-8037: Post-processing check — verify gas metered doesn't exceed block gas limit.
@@ -378,21 +387,24 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
               (versionedHashes.size() * protocolSpec.getGasCalculator().getBlobGasPerBlob());
         }
 
+        final long receiptStart = System.nanoTime();
         final TransactionReceipt transactionReceipt =
             transactionReceiptFactory.create(
                 transaction.getType(),
                 transactionProcessingResult,
                 worldState,
                 cumulativeReceiptGasUsed);
+        BlockImportTimings.addSince(BlockImportTimings.Phase.RECEIPT, receiptStart);
         receipts.add(transactionReceipt);
-        if (!parallelizedTxFound
-            && transactionProcessingResult.getIsProcessedInParallel().isPresent()) {
+        if (transactionProcessingResult.getIsProcessedInParallel().isPresent()) {
           parallelizedTxFound = true;
-          nbParallelTx = 1;
-        } else if (transactionProcessingResult.getIsProcessedInParallel().isPresent()) {
           nbParallelTx++;
+          parallelizedGas += receiptGas;
         }
       }
+      BlockImportTimings.transactions(
+          transactions.size(), nbParallelTx, parallelizedGas, cumulativeReceiptGasUsed);
+      final long postExecutionStart = System.nanoTime();
       final var optionalHeaderBlobGasUsed = blockHeader.getBlobGasUsed();
       if (optionalHeaderBlobGasUsed.isPresent()) {
         final long headerBlobGasUsed = optionalHeaderBlobGasUsed.get();
@@ -535,6 +547,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
 
       LOG.trace("traceEndBlock for {}", blockHeader.getNumber());
       blockTracer.traceEndBlock(blockHeader, blockBody);
+      BlockImportTimings.addSince(BlockImportTimings.Phase.POST_EXECUTION, postExecutionStart);
 
       try {
         worldState.persist(blockHeader, stateRootCommitter);
@@ -570,7 +583,8 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
                   maybeBlockAccessList,
                   gasMetered,
                   blockHashLookup.getAccessedAncestors())),
-          parallelizedTxFound ? Optional.of(nbParallelTx) : Optional.empty());
+          parallelizedTxFound ? Optional.of(nbParallelTx) : Optional.empty(),
+          parallelizedGas);
     } finally {
       stateRootCommitter.cancel();
       preProcessingContext.ifPresent(
@@ -596,16 +610,19 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
       final int location,
       final BlockHashLookup blockHashLookup,
       final Optional<AccessLocationTracker> accessLocationTracker) {
-    return transactionProcessor.processTransaction(
-        transactionUpdater,
-        blockProcessingContext.getBlockHeader(),
-        transaction,
-        miningBeneficiary,
-        blockProcessingContext.getOperationTracer(),
-        blockHashLookup,
-        TransactionValidationParams.processingBlock(),
-        blobGasPrice,
-        accessLocationTracker);
+    return BlockImportTimings.time(
+        BlockImportTimings.Phase.TX_EXECUTE,
+        () ->
+            transactionProcessor.processTransaction(
+                transactionUpdater,
+                blockProcessingContext.getBlockHeader(),
+                transaction,
+                miningBeneficiary,
+                blockProcessingContext.getOperationTracer(),
+                blockHashLookup,
+                TransactionValidationParams.processingBlock(),
+                blobGasPrice,
+                accessLocationTracker));
   }
 
   @SuppressWarnings(

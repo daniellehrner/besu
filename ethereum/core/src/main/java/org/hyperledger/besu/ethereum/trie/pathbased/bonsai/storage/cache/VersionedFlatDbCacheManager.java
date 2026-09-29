@@ -20,6 +20,7 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
+import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 
 import java.io.Closeable;
@@ -71,6 +72,8 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
   private final Counter cacheMissCounter;
   private final Counter cacheInsertCounter;
   private final Counter cacheRemovalCounter;
+  private final Counter accountEvictionCounter;
+  private final Counter storageEvictionCounter;
 
   /**
    * Creates a new VersionedFlatDbCacheManager with the default drain threshold.
@@ -111,8 +114,26 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
 
     this.drainExecutor = new ThresholdDrainExecutor(drainThreshold, this::scheduleAsyncMaintenance);
 
-    this.accountCache = createCache(accountCacheSize);
-    this.storageCache = createCache(storageCacheSize);
+    final LabelledMetric<Counter> evictionCounter =
+        metricsSystem.createLabelledCounter(
+            BesuMetricCategory.BLOCKCHAIN,
+            "bonsai_cache_evictions_total",
+            "Total number of entries the cache evicted for size",
+            "segment");
+    this.accountEvictionCounter = evictionCounter.labels("account");
+    this.storageEvictionCounter = evictionCounter.labels("storage");
+    this.accountCache = createCache(accountCacheSize, accountEvictionCounter);
+    this.storageCache = createCache(storageCacheSize, storageEvictionCounter);
+    metricsSystem.createLongGauge(
+        BesuMetricCategory.BLOCKCHAIN,
+        "bonsai_cache_account_size",
+        "Current number of entries in the account cache",
+        accountCache::estimatedSize);
+    metricsSystem.createLongGauge(
+        BesuMetricCategory.BLOCKCHAIN,
+        "bonsai_cache_storage_size",
+        "Current number of entries in the storage cache",
+        storageCache::estimatedSize);
 
     this.cacheRequestCounter =
         metricsSystem.createCounter(
@@ -146,11 +167,18 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
         "Cache maintenance will trigger asynchronously after {} pending tasks", drainThreshold);
   }
 
-  private Cache<CacheKey, VersionedValue> createCache(final long maxSize) {
+  private Cache<CacheKey, VersionedValue> createCache(
+      final long maxSize, final Counter evictionCounter) {
     return Caffeine.newBuilder()
         .initialCapacity(initialCapacityFor(maxSize))
         .maximumSize(maxSize)
         .executor(drainExecutor)
+        .evictionListener(
+            (key, value, cause) -> {
+              if (cause.wasEvicted()) {
+                evictionCounter.inc();
+              }
+            })
         .build();
   }
 

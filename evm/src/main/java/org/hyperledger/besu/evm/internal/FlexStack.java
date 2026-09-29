@@ -18,7 +18,6 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 
-import java.lang.reflect.Array;
 import java.util.Arrays;
 import java.util.Objects;
 
@@ -52,7 +51,9 @@ public class FlexStack<T> {
    */
   private static final int MAX_ARRAY_LENGTH = Integer.MAX_VALUE - 8;
 
-  private T[] entries;
+  // An Object[] rather than an array of the entry type, so that storing an entry needs no array
+  // store check; every entry is a T, as only this class and the interpreter loop write them.
+  private Object[] entries;
 
   private final int maxSize;
   private int currentCapacity;
@@ -63,15 +64,14 @@ public class FlexStack<T> {
    * Instantiates a new Flex stack.
    *
    * @param maxSize the max size
-   * @param klass the klass
+   * @param klass the class of the entries
    */
-  @SuppressWarnings("unchecked")
   public FlexStack(final int maxSize, final Class<T> klass) {
     checkArgument(maxSize > 0, "max size must be positive");
     checkArgument(maxSize <= MAX_ARRAY_LENGTH, "max size is too large");
 
     this.currentCapacity = Math.min(INITIAL_SIZE, maxSize);
-    this.entries = (T[]) Array.newInstance(klass, currentCapacity);
+    this.entries = new Object[currentCapacity];
     this.maxSize = maxSize;
     this.top = -1;
   }
@@ -82,12 +82,13 @@ public class FlexStack<T> {
    * @param offset the offset
    * @return the operand
    */
+  @SuppressWarnings("unchecked")
   public T get(final int offset) {
     if (offset < 0 || offset >= size()) {
       throw new UnderflowException();
     }
 
-    return entries[top - offset];
+    return (T) entries[top - offset];
   }
 
   /**
@@ -95,12 +96,13 @@ public class FlexStack<T> {
    *
    * @return the operand
    */
+  @SuppressWarnings("unchecked")
   public T pop() {
     if (top < 0) {
       throw new UnderflowException();
     }
 
-    final T removed = entries[top];
+    final T removed = (T) entries[top];
     entries[top--] = null;
     return removed;
   }
@@ -110,11 +112,12 @@ public class FlexStack<T> {
    *
    * @return the T entry
    */
+  @SuppressWarnings("unchecked")
   public T peek() {
     if (top < 0) {
       return null;
     } else {
-      return entries[top];
+      return (T) entries[top];
     }
   }
 
@@ -164,11 +167,8 @@ public class FlexStack<T> {
     }
   }
 
-  @SuppressWarnings("unchecked")
   private void expandEntries(final int nextSize) {
-    var nextEntries = (T[]) Array.newInstance(entries.getClass().getComponentType(), nextSize);
-    System.arraycopy(entries, 0, nextEntries, 0, currentCapacity);
-    entries = nextEntries;
+    entries = Arrays.copyOf(entries, nextSize);
     currentCapacity = nextSize;
   }
 
@@ -221,6 +221,35 @@ public class FlexStack<T> {
    */
   public int size() {
     return top + 1;
+  }
+
+  /**
+   * Returns the array holding the entries, for the interpreter loop to read and write in place
+   * together with {@link #top()} and {@link #setTop(int)}. The stack replaces the array when it
+   * grows, so it has to be fetched again after every push made through this class.
+   *
+   * @return the array holding the entries, bottom first
+   */
+  public Object[] entries() {
+    return entries;
+  }
+
+  /**
+   * Returns the index of the top entry in {@link #entries()}.
+   *
+   * @return the index of the top entry, -1 when the stack is empty
+   */
+  public int top() {
+    return top;
+  }
+
+  /**
+   * Sets the index of the top entry, after entries were pushed or popped in place.
+   *
+   * @param top the index of the top entry, -1 for an empty stack
+   */
+  public void setTop(final int top) {
+    this.top = top;
   }
 
   @Override

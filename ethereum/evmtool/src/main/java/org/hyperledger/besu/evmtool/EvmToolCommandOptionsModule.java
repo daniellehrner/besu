@@ -118,11 +118,11 @@ public class EvmToolCommandOptionsModule {
       description =
           "size in kilobytes to allow the cache "
               + "of valid jump destinations to grow to before evicting the least recently used entry",
-      fallbackValue = "32000",
-      defaultValue = "32000",
+      fallbackValue = "96000",
+      defaultValue = "96000",
       hidden = true)
   private Long jumpDestCacheWeightKilobytes =
-      32_000L; // 10k contracts, (25k max contract size / 8 bit) + 32byte hash
+      96_000L; // 10k contracts, 3 x (25k max contract size / 8 bit) + 32byte hash
 
   @CommandLine.Option(
       names = {"--Xevm-worldstate-update-mode"},

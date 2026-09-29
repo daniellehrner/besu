@@ -27,6 +27,7 @@ public class BlockProcessingResult extends BlockValidationResult {
   private final Optional<BlockProcessingOutputs> yield;
   private final boolean isPartial;
   private Optional<Integer> nbParallelizedTransactions = Optional.empty();
+  private long parallelizedGasUsed = 0L;
   private final Optional<BlockAccessList> maybeGeneratedBlockAccessList;
   private final boolean worldStateUnavailable;
 
@@ -76,8 +77,24 @@ public class BlockProcessingResult extends BlockValidationResult {
   public BlockProcessingResult(
       final Optional<BlockProcessingOutputs> yield,
       final Optional<Integer> nbParallelizedTransactions) {
+    this(yield, nbParallelizedTransactions, 0L);
+  }
+
+  /**
+   * A result indicating that processing was successful but incomplete.
+   *
+   * @param yield the outputs of processing a block
+   * @param nbParallelizedTransactions potential number of parallelized transactions during block
+   *     processing
+   * @param parallelizedGasUsed gas used by the transactions whose speculative results were kept
+   */
+  public BlockProcessingResult(
+      final Optional<BlockProcessingOutputs> yield,
+      final Optional<Integer> nbParallelizedTransactions,
+      final long parallelizedGasUsed) {
     this(yield, false);
     this.nbParallelizedTransactions = nbParallelizedTransactions;
+    this.parallelizedGasUsed = parallelizedGasUsed;
   }
 
   /**
@@ -210,6 +227,15 @@ public class BlockProcessingResult extends BlockValidationResult {
    */
   public Optional<Integer> getNbParallelizedTransactions() {
     return nbParallelizedTransactions;
+  }
+
+  /**
+   * Gas used by the transactions whose speculative results were kept, zero when none were.
+   *
+   * @return the gas
+   */
+  public long getParallelizedGasUsed() {
+    return parallelizedGasUsed;
   }
 
   /**

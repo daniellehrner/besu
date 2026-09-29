@@ -199,6 +199,13 @@ public class BlocksSubCommand implements Runnable {
         arity = "1..1")
     private final Long endBlock = Long.MAX_VALUE;
 
+    @Option(
+        names = "--block-timings",
+        description =
+            "Log the phase breakdown of every imported block, as the engine API does, rather than "
+                + "throughput every 1000 blocks. For benchmarking a block range. (default: ${DEFAULT-VALUE})")
+    private final Boolean perBlockTimings = false;
+
     @SuppressWarnings("unused")
     @Spec
     private CommandSpec spec;
@@ -303,7 +310,7 @@ public class BlocksSubCommand implements Runnable {
     private void importRlpBlocks(final BesuController controller, final Path path)
         throws IOException {
       try (final RlpBlockImporter importer = parentCommand.rlpBlockImporter.get()) {
-        importer.importBlockchain(path, controller, skipPow, startBlock, endBlock);
+        importer.importBlockchain(path, controller, skipPow, startBlock, endBlock, perBlockTimings);
       }
     }
 

@@ -22,6 +22,7 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.Bonsai
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListOverlay;
 import org.hyperledger.besu.ethereum.mainnet.staterootcommitter.DefaultStateRootCommitter;
 import org.hyperledger.besu.ethereum.mainnet.staterootcommitter.TrieDisabledStateRootCommitter;
@@ -210,9 +211,13 @@ public abstract class PathBasedWorldState
     final BonsaiWorldStateKeyValueStorage.Updater stateUpdater =
         worldStateKeyValueStorage.updater();
     try {
-      final StateRootComputation computation = committer.compute(this, blockHeader, accumulator);
+      final StateRootComputation computation =
+          BlockImportTimings.time(
+              BlockImportTimings.Phase.STATE_ROOT,
+              () -> committer.compute(this, blockHeader, accumulator));
       if (!isStorageFrozen()) {
-        computation.applyTo(stateUpdater);
+        BlockImportTimings.time(
+            BlockImportTimings.Phase.STATE_COMMIT, () -> computation.applyTo(stateUpdater));
       }
       final Hash calculatedRootHash = computation.root();
       stageWorldStateKeys(stateUpdater, blockHeader, calculatedRootHash);
@@ -220,16 +225,21 @@ public abstract class PathBasedWorldState
       if (blockHeader != null) {
         verifyWorldStateRoot(calculatedRootHash, blockHeader);
         // Trie log first, ahead of composed state, in case of an abnormal shutdown.
-        trieLogManager.saveTrieLog(accumulator, calculatedRootHash, blockHeader, this);
+        BlockImportTimings.time(
+            BlockImportTimings.Phase.TRIE_LOG,
+            () -> trieLogManager.saveTrieLog(accumulator, calculatedRootHash, blockHeader, this));
       }
 
-      stateUpdater.commitComposedOnly();
+      BlockImportTimings.time(
+          BlockImportTimings.Phase.STATE_COMMIT, stateUpdater::commitComposedOnly);
       // Advance in-memory head only after trielog + composed commit succeeded, so a failing
       // observer (e.g. TrieLogPruner during EthScheduler shutdown) cannot leave a half-updated
       // worldstate that later cascades into MerkleTrieException / heal.
       setWorldStateHead(blockHeader, calculatedRootHash);
       if (blockHeader != null && !isStorageFrozen) {
-        worldStateCacheManager.addCachedLayer(blockHeader, calculatedRootHash, this);
+        BlockImportTimings.time(
+            BlockImportTimings.Phase.STATE_COMMIT,
+            () -> worldStateCacheManager.addCachedLayer(blockHeader, calculatedRootHash, this));
       }
     } catch (final RuntimeException | Error e) {
       try {

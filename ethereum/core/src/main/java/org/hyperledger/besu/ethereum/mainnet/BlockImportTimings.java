@@ -1,0 +1,537 @@
+/*
+ * Copyright contributors to Besu.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+ * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package org.hyperledger.besu.ethereum.mainnet;
+
+import org.hyperledger.besu.metrics.BesuMetricCategory;
+import org.hyperledger.besu.plugin.services.MetricsSystem;
+import org.hyperledger.besu.plugin.services.metrics.Histogram;
+import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
+
+import java.lang.management.GarbageCollectorMXBean;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadMXBean;
+import java.util.List;
+import java.util.Locale;
+import java.util.function.Supplier;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Wall-clock breakdown of one block import on the thread that performs it.
+ *
+ * <p>The phases are the steps of the critical path from header validation to the persisted state,
+ * with the transaction loop split into results reused from speculative execution and transactions
+ * executed on this thread. Alongside the phases it records the importing thread's own CPU time and
+ * the JVM garbage collection time that elapsed while it ran, so time the thread spent neither
+ * computing nor collecting shows up as a separate remainder. Phases entered once per block also
+ * record their own CPU time, which places that remainder: a phase that waits on other threads or on
+ * disk shows the wait as its off-CPU time. Wall time that no phase covers is reported as untimed.
+ *
+ * <p>The instance lives in a thread-local for the duration of the import. The phases span
+ * interfaces that have no room for an extra parameter, such as the world state persist, and the
+ * import is single-threaded, so the thread-local avoids widening every signature on the way down.
+ * When no import has been begun on the current thread the hooks run the timed code unchanged.
+ */
+public final class BlockImportTimings {
+
+  /** A step of the block import or fork choice update. */
+  public enum Phase {
+    /** Header validation against the parent, before any state is touched. */
+    HEADER_VALIDATION("header"),
+    /** Resolving the parent world state to execute on. */
+    WORLD_STATE_LOOKUP("worldstate"),
+    /** System calls and other work before the first transaction. */
+    PRE_EXECUTION("pre"),
+    /** Handing the transactions to the speculative executor. */
+    PARALLEL_DISPATCH("dispatch"),
+    /** Taking over speculative results, including the conflict check and the state merge. */
+    TX_REUSE("reuse", Kind.PER_TRANSACTION),
+    /** Executing transactions on the importing thread. */
+    TX_EXECUTE("execute", Kind.PER_TRANSACTION),
+    /** Committing a transaction's changes into the block's state. */
+    TX_COMMIT("txcommit", Kind.PER_TRANSACTION),
+    /** Building a transaction's receipt, including its logs bloom. */
+    RECEIPT("receipts", Kind.PER_TRANSACTION),
+    /** Withdrawals, requests, block access list and coinbase work after the last transaction. */
+    POST_EXECUTION("post"),
+    /** Computing the state root. */
+    STATE_ROOT("root"),
+    /** Writing the trie log. */
+    TRIE_LOG("trielog"),
+    /** Committing the flat state and trie nodes to storage. */
+    STATE_COMMIT("commit"),
+    /** Receipts root, logs bloom and the other body checks. */
+    BODY_VALIDATION("body"),
+    /** Storing the block, its receipts and its access list. */
+    STORE_BLOCK("store"),
+    /** Moving the world state to the new head on a fork choice update. */
+    FORK_CHOICE_WORLD_STATE("fcu_worldstate"),
+    /** Forwarding or rewinding the chain head on a fork choice update. */
+    FORK_CHOICE_CHAIN_HEAD("fcu_head"),
+    /** Recording the finalized and safe blocks on a fork choice update. */
+    FORK_CHOICE_FINALITY("fcu_finality"),
+    /** Speculative results discarded because they conflicted with an earlier transaction. */
+    TX_CONFLICT("conflict", Kind.COUNT_ONLY),
+    /** Transactions re-executed because their speculative execution had not finished. */
+    TX_UNFINISHED("unfinished", Kind.COUNT_ONLY);
+
+    private enum Kind {
+      ONCE_PER_BLOCK,
+      // reading the thread's CPU clock is a system call, too costly to pay per transaction
+      PER_TRANSACTION,
+      COUNT_ONLY
+    }
+
+    private final String label;
+    private final Kind kind;
+
+    Phase(final String label) {
+      this(label, Kind.ONCE_PER_BLOCK);
+    }
+
+    Phase(final String label, final Kind kind) {
+      this.label = label;
+      this.kind = kind;
+    }
+
+    /**
+     * Whether the phase only counts occurrences and carries no duration of its own.
+     *
+     * @return true for a count-only phase
+     */
+    public boolean isCountOnly() {
+      return kind == Kind.COUNT_ONLY;
+    }
+
+    private boolean measuresCpu() {
+      return kind == Kind.ONCE_PER_BLOCK;
+    }
+
+    /**
+     * The short name used in log lines and as the metric label.
+     *
+     * @return the label
+     */
+    public String label() {
+      return label;
+    }
+  }
+
+  private static final String TOTAL = "total";
+  private static final String CPU = "cpu";
+  private static final String GC = "gc";
+  private static final String REMAINDER = "remainder";
+  private static final String UNTIMED = "untimed";
+  private static final String OFF_CPU_SUFFIX = "_offcpu";
+  // below this an off-CPU figure rounds to 0.0 ms and only lengthens the log line
+  private static final long OFF_CPU_REPORT_THRESHOLD_NANOS = 50_000L;
+
+  private static final Logger LOG = LoggerFactory.getLogger(BlockImportTimings.class);
+  private static final ThreadLocal<BlockImportTimings> CURRENT = new ThreadLocal<>();
+  private static final ThreadMXBean THREADS = ManagementFactory.getThreadMXBean();
+  private static final List<GarbageCollectorMXBean> COLLECTORS =
+      ManagementFactory.getGarbageCollectorMXBeans();
+
+  private final long[] phaseNanos = new long[Phase.values().length];
+  private final int[] phaseCounts = new int[Phase.values().length];
+  private final long[] phaseCpuNanos = new long[Phase.values().length];
+  private final int[] phaseCpuCounts = new int[Phase.values().length];
+  private final long startWallNanos;
+  private final long startCpuNanos;
+  private final long startGcMillis;
+  private long totalNanos;
+  private long cpuNanos;
+  private long gcNanos;
+  // phases can nest, as the persist inside a fork choice update does, so only the outermost count
+  private int depth;
+  private long outermostPhaseNanos;
+  private int txTotal = -1;
+  private int txReused;
+  private long txReusedGas;
+  private long txTotalGas;
+
+  private BlockImportTimings() {
+    startWallNanos = System.nanoTime();
+    startCpuNanos = currentThreadCpuNanos();
+    startGcMillis = collectionMillis();
+  }
+
+  /**
+   * Starts timing an import on the current thread. Hooks reached from this thread record into the
+   * returned instance until {@link #finish()} is called.
+   *
+   * @return the timings for this import
+   */
+  public static BlockImportTimings begin() {
+    final BlockImportTimings timings = new BlockImportTimings();
+    CURRENT.set(timings);
+    return timings;
+  }
+
+  /** Stops timing, detaches from the thread and fixes the total, CPU and GC figures. */
+  public void finish() {
+    totalNanos = System.nanoTime() - startWallNanos;
+    cpuNanos = currentThreadCpuNanos() - startCpuNanos;
+    gcNanos = (collectionMillis() - startGcMillis) * 1_000_000L;
+    CURRENT.remove();
+  }
+
+  /**
+   * Runs the action and attributes its duration to the phase when an import is being timed on this
+   * thread.
+   *
+   * @param phase the phase to attribute the time to
+   * @param action the action to run
+   * @param <T> the action's result type
+   * @return the action's result
+   */
+  public static <T> T time(final Phase phase, final Supplier<T> action) {
+    final BlockImportTimings timings = CURRENT.get();
+    if (timings == null) {
+      return action.get();
+    }
+    final long startCpu = timings.enter(phase);
+    final long start = System.nanoTime();
+    try {
+      return action.get();
+    } finally {
+      timings.exit(phase, System.nanoTime() - start, startCpu);
+    }
+  }
+
+  /**
+   * Runs the action and attributes its duration to the phase when an import is being timed on this
+   * thread.
+   *
+   * @param phase the phase to attribute the time to
+   * @param action the action to run
+   */
+  public static void time(final Phase phase, final Runnable action) {
+    final BlockImportTimings timings = CURRENT.get();
+    if (timings == null) {
+      action.run();
+      return;
+    }
+    final long startCpu = timings.enter(phase);
+    final long start = System.nanoTime();
+    try {
+      action.run();
+    } finally {
+      timings.exit(phase, System.nanoTime() - start, startCpu);
+    }
+  }
+
+  /**
+   * Attributes the time since the given {@link System#nanoTime()} reading to the phase when an
+   * import is being timed on this thread.
+   *
+   * @param phase the phase to attribute the time to
+   * @param startNanos the reading taken when the phase started
+   */
+  public static void addSince(final Phase phase, final long startNanos) {
+    final BlockImportTimings timings = CURRENT.get();
+    if (timings != null) {
+      timings.add(phase, System.nanoTime() - startNanos);
+    }
+  }
+
+  /**
+   * Counts an occurrence of a count-only phase when an import is being timed on this thread.
+   *
+   * @param phase the phase to count
+   */
+  public static void mark(final Phase phase) {
+    final BlockImportTimings timings = CURRENT.get();
+    if (timings != null) {
+      timings.phaseCounts[phase.ordinal()]++;
+    }
+  }
+
+  /**
+   * Records what happened to the block's transactions, for the summary in the log line.
+   *
+   * @param total the number of transactions in the block
+   * @param reused how many kept their speculative result
+   * @param reusedGas the gas used by those
+   * @param totalGas the gas used by all transactions
+   */
+  public static void transactions(
+      final int total, final int reused, final long reusedGas, final long totalGas) {
+    final BlockImportTimings timings = CURRENT.get();
+    if (timings != null) {
+      timings.txTotal = total;
+      timings.txReused = reused;
+      timings.txReusedGas = reusedGas;
+      timings.txTotalGas = totalGas;
+    }
+  }
+
+  private long enter(final Phase phase) {
+    depth++;
+    return phase.measuresCpu() ? currentThreadCpuNanos() : 0L;
+  }
+
+  private void exit(final Phase phase, final long nanos, final long startCpuNanos) {
+    if (phase.measuresCpu()) {
+      phaseCpuNanos[phase.ordinal()] += currentThreadCpuNanos() - startCpuNanos;
+      phaseCpuCounts[phase.ordinal()]++;
+    }
+    depth--;
+    add(phase, nanos);
+  }
+
+  private void add(final Phase phase, final long nanos) {
+    phaseNanos[phase.ordinal()] += nanos;
+    phaseCounts[phase.ordinal()]++;
+    if (depth == 0) {
+      outermostPhaseNanos += nanos;
+    }
+  }
+
+  /**
+   * Time attributed to a phase.
+   *
+   * @param phase the phase
+   * @return the accumulated nanoseconds
+   */
+  public long nanos(final Phase phase) {
+    return phaseNanos[phase.ordinal()];
+  }
+
+  /**
+   * Number of times a phase was entered.
+   *
+   * @param phase the phase
+   * @return the count
+   */
+  public int count(final Phase phase) {
+    return phaseCounts[phase.ordinal()];
+  }
+
+  /**
+   * Wall time of a phase during which the importing thread was not on the CPU, such as waiting for
+   * other threads or for disk. It includes any garbage collection pause inside the phase.
+   *
+   * @param phase the phase
+   * @return the nanoseconds, or -1 when the phase's CPU time was not measured on every entry
+   */
+  public long offCpuNanos(final Phase phase) {
+    final int i = phase.ordinal();
+    if (phaseCounts[i] == 0 || phaseCpuCounts[i] != phaseCounts[i]) {
+      return -1L;
+    }
+    return Math.max(0L, phaseNanos[i] - phaseCpuNanos[i]);
+  }
+
+  /**
+   * Wall time that no phase covers.
+   *
+   * @return the nanoseconds, never negative
+   */
+  public long untimedNanos() {
+    return Math.max(0L, totalNanos - outermostPhaseNanos);
+  }
+
+  /**
+   * Wall time from {@link #begin()} to {@link #finish()}.
+   *
+   * @return the nanoseconds
+   */
+  public long totalNanos() {
+    return totalNanos;
+  }
+
+  /**
+   * CPU time consumed by the importing thread between {@link #begin()} and {@link #finish()}.
+   *
+   * @return the nanoseconds
+   */
+  public long cpuNanos() {
+    return cpuNanos;
+  }
+
+  /**
+   * JVM garbage collection time that elapsed between {@link #begin()} and {@link #finish()}.
+   *
+   * @return the nanoseconds, at millisecond resolution
+   */
+  public long gcNanos() {
+    return gcNanos;
+  }
+
+  /**
+   * Wall time the thread spent neither on CPU nor stopped for collection.
+   *
+   * @return the nanoseconds, never negative
+   */
+  public long remainderNanos() {
+    return Math.max(0L, totalNanos - cpuNanos - gcNanos);
+  }
+
+  /**
+   * Formats the phases that were entered as a log fragment, in milliseconds.
+   *
+   * @return the description
+   */
+  public String describe() {
+    final StringBuilder out = new StringBuilder();
+    for (final Phase phase : Phase.values()) {
+      if (phase == Phase.TX_REUSE) {
+        // the transaction phases and counts read better as one sentence, in their place
+        describeTransactions(out);
+        continue;
+      }
+      final int count = phaseCounts[phase.ordinal()];
+      if (count == 0 || phase.isCountOnly() || phase == Phase.TX_EXECUTE) {
+        continue;
+      }
+      out.append(phase.label()).append(' ').append(millis(phaseNanos[phase.ordinal()]));
+      out.append(" | ");
+    }
+    out.append(UNTIMED).append(' ').append(millis(untimedNanos())).append(" | ");
+    out.append(TOTAL)
+        .append(' ')
+        .append(millis(totalNanos))
+        .append(" | ")
+        .append(CPU)
+        .append(' ')
+        .append(millis(cpuNanos))
+        .append(" | ")
+        .append(GC)
+        .append(' ')
+        .append(millis(gcNanos))
+        .append(" | ")
+        .append(REMAINDER)
+        .append(' ')
+        .append(millis(remainderNanos()));
+    for (final Phase phase : Phase.values()) {
+      final long offCpu = offCpuNanos(phase);
+      if (offCpu >= OFF_CPU_REPORT_THRESHOLD_NANOS) {
+        out.append(" | ")
+            .append(phase.label())
+            .append(OFF_CPU_SUFFIX)
+            .append(' ')
+            .append(millis(offCpu));
+      }
+    }
+    return out.toString();
+  }
+
+  private void describeTransactions(final StringBuilder out) {
+    final int executed = phaseCounts[Phase.TX_EXECUTE.ordinal()];
+    final int total =
+        txTotal >= 0 ? txTotal : Math.max(phaseCounts[Phase.TX_REUSE.ordinal()], executed);
+    if (total == 0 && executed == 0) {
+      return;
+    }
+    final int reused = txTotal >= 0 ? txReused : total - executed;
+    out.append(total).append(" tx: ").append(reused).append(" reused");
+    if (total > 0) {
+      out.append(" (").append(percent(reused, total)).append(" of tx");
+      if (txTotalGas > 0) {
+        out.append(", ").append(percent(txReusedGas, txTotalGas)).append(" of gas");
+      }
+      out.append(')');
+    }
+    out.append(" in ").append(millis(phaseNanos[Phase.TX_REUSE.ordinal()])).append(" ms");
+    out.append(" | ").append(executed).append(" re-executed");
+    final int conflicts = phaseCounts[Phase.TX_CONFLICT.ordinal()];
+    final int unfinished = phaseCounts[Phase.TX_UNFINISHED.ordinal()];
+    if (conflicts > 0 || unfinished > 0) {
+      out.append(" (")
+          .append(conflicts)
+          .append(" conflicts, ")
+          .append(unfinished)
+          .append(" unfinished)");
+    }
+    out.append(" in ").append(millis(phaseNanos[Phase.TX_EXECUTE.ordinal()])).append(" ms | ");
+  }
+
+  private static String percent(final long part, final long whole) {
+    return String.format("%.0f%%", 100.0 * part / whole);
+  }
+
+  /**
+   * Logs the breakdown at info level on this class's logger, so it can be silenced on its own.
+   *
+   * @param kind what was timed, such as an import or a fork choice update
+   * @param blockNumber the block the timing belongs to
+   */
+  public void log(final String kind, final long blockNumber) {
+    if (LOG.isInfoEnabled()) {
+      LOG.info("{} #{} | {}", kind, blockNumber, describe());
+    }
+  }
+
+  /**
+   * Records every entered timed phase, the untimed time, the total, the CPU time, the GC time and
+   * the remainder into the histogram, labelled by phase. Count-only phases are not durations and
+   * are left out.
+   *
+   * @param histogram the histogram to observe into, in seconds
+   */
+  public void recordTo(final LabelledMetric<Histogram> histogram) {
+    for (final Phase phase : Phase.values()) {
+      if (phaseCounts[phase.ordinal()] > 0 && !phase.isCountOnly()) {
+        histogram.labels(phase.label()).observe(seconds(phaseNanos[phase.ordinal()]));
+      }
+    }
+    histogram.labels(UNTIMED).observe(seconds(untimedNanos()));
+    histogram.labels(TOTAL).observe(seconds(totalNanos));
+    histogram.labels(CPU).observe(seconds(cpuNanos));
+    histogram.labels(GC).observe(seconds(gcNanos));
+    histogram.labels(REMAINDER).observe(seconds(remainderNanos()));
+  }
+
+  /**
+   * Creates the histogram that {@link #recordTo(LabelledMetric)} observes into. The metrics system
+   * returns the same instance for repeated calls with this name.
+   *
+   * @param metricsSystem the metrics system
+   * @return the histogram, labelled by phase
+   */
+  public static LabelledMetric<Histogram> createHistogram(final MetricsSystem metricsSystem) {
+    return metricsSystem.createLabelledHistogram(
+        BesuMetricCategory.BLOCK_PROCESSING,
+        "import_phase_seconds",
+        "Wall time of each phase of a block import on the importing thread",
+        new double[] {0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0},
+        "phase");
+  }
+
+  private static long currentThreadCpuNanos() {
+    return THREADS.isCurrentThreadCpuTimeSupported() ? THREADS.getCurrentThreadCpuTime() : 0L;
+  }
+
+  private static long collectionMillis() {
+    long millis = 0L;
+    for (final GarbageCollectorMXBean collector : COLLECTORS) {
+      final long time = collector.getCollectionTime();
+      if (time > 0) {
+        millis += time;
+      }
+    }
+    return millis;
+  }
+
+  private static String millis(final long nanos) {
+    return String.format(Locale.ROOT, "%.1f", nanos / 1_000_000.0);
+  }
+
+  private static double seconds(final long nanos) {
+    return nanos / 1_000_000_000.0;
+  }
+}

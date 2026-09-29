@@ -25,6 +25,7 @@ import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.mainnet.BlockAccessListValidator;
 import org.hyperledger.besu.ethereum.mainnet.BlockBodyValidator;
 import org.hyperledger.besu.ethereum.mainnet.BlockHeaderValidator;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.BlockProcessor;
 import org.hyperledger.besu.ethereum.mainnet.BodyValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
@@ -165,8 +166,13 @@ public class MainnetBlockValidator implements BlockValidator {
       }
       parentHeader = maybeParentHeader.get();
 
-      if (!blockHeaderValidator.validateHeader(
-          header, parentHeader, context, headerValidationMode)) {
+      final boolean headerValid =
+          BlockImportTimings.time(
+              BlockImportTimings.Phase.HEADER_VALIDATION,
+              () ->
+                  blockHeaderValidator.validateHeader(
+                      header, parentHeader, context, headerValidationMode));
+      if (!headerValid) {
         final String error = String.format("Header validation failed (%s)", headerValidationMode);
         var retval = new BlockProcessingResult(error);
         handleFailedBlockProcessing(block, blockAccessList, retval, shouldRecordBadBlock, context);
@@ -185,7 +191,10 @@ public class MainnetBlockValidator implements BlockValidator {
             .withShouldWorldStateUpdateHead(shouldUpdateHead)
             .build();
     try (final var worldState =
-        context.getWorldStateArchive().getWorldState(worldStateQueryParams).orElse(null)) {
+        BlockImportTimings.time(
+            BlockImportTimings.Phase.WORLD_STATE_LOOKUP,
+            () ->
+                context.getWorldStateArchive().getWorldState(worldStateQueryParams).orElse(null))) {
 
       if (worldState == null) {
         var retval =
@@ -217,7 +226,12 @@ public class MainnetBlockValidator implements BlockValidator {
         return result;
       }
 
-      context.getWorldStateArchive().prepareWorldStateForBlock(block.getHeader(), worldState);
+      BlockImportTimings.time(
+          BlockImportTimings.Phase.WORLD_STATE_LOOKUP,
+          () ->
+              context
+                  .getWorldStateArchive()
+                  .prepareWorldStateForBlock(block.getHeader(), worldState));
 
       var result = processBlock(context, worldState, block, blockAccessList);
       if (result.isFailed()) {
@@ -234,14 +248,19 @@ public class MainnetBlockValidator implements BlockValidator {
             result.getYield().map(BlockProcessingOutputs::getAccessedAncestors).orElse(Map.of());
         long cumulativeBlockGasUsed =
             result.getYield().map(BlockProcessingOutputs::getCumulativeBlockGasUsed).orElse(0L);
-        if (!blockBodyValidator.validateBody(
-            context,
-            block,
-            receipts,
-            worldState.rootHash(),
-            ommerValidationMode,
-            BodyValidationMode.FULL,
-            OptionalLong.of(cumulativeBlockGasUsed))) {
+        final boolean bodyValid =
+            BlockImportTimings.time(
+                BlockImportTimings.Phase.BODY_VALIDATION,
+                () ->
+                    blockBodyValidator.validateBody(
+                        context,
+                        block,
+                        receipts,
+                        worldState.rootHash(),
+                        ommerValidationMode,
+                        BodyValidationMode.FULL,
+                        OptionalLong.of(cumulativeBlockGasUsed)));
+        if (!bodyValid) {
           result = new BlockProcessingResult("failed to validate output of imported block");
           handleFailedBlockProcessing(
               block, blockAccessList, result, shouldRecordBadBlock, context);
@@ -257,7 +276,8 @@ public class MainnetBlockValidator implements BlockValidator {
                     processedBlockAccessList,
                     cumulativeBlockGasUsed,
                     accessedAncestors)),
-            result.getNbParallelizedTransactions());
+            result.getNbParallelizedTransactions(),
+            result.getParallelizedGasUsed());
       }
     } catch (MerkleTrieException ex) {
       LOG.debug(
