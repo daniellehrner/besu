@@ -205,8 +205,8 @@ so the code was copied twice on the way to the EVM: out of the mapping into the 
 the value into the array `Code` keeps. `MappedCodeStorage` (in `ethereum/core`, next to the code
 storage strategies) lets a storage serve the value where it lies instead. `CodeStore.read` holds
 the store open for the call and hands the record's `MemorySegment` to the strategy, which copies
-the code into its array and the analysis into its `long[]` straight from the mapping. One copy, and
-nothing else allocated.
+the code into its array and the analysis into its `long[]` straight from the mapping: one copy of
+each, and no intermediate value.
 
 `CodeLoadBenchmark`, a whole load from code hash to the `Code` the EVM runs, 128 MiB of code per
 size, page cache warm, two forks, p50:
