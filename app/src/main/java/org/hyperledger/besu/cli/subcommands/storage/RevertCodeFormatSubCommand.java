@@ -40,8 +40,9 @@ import picocli.CommandLine.ParentCommand;
 @Command(
     name = "revert-code-format",
     description =
-        "Revert the contract code storage to the format read by Besu versions before the versioned"
-            + " code format, so that the database can be opened by them again.",
+        "Revert the contract code storage to the bare code read by Besu versions before the jump"
+            + " destination analysis was stored with it, so that the database can be opened by them"
+            + " again.",
     mixinStandardHelpOptions = true,
     versionProvider = VersionProvider.class)
 public class RevertCodeFormatSubCommand implements Runnable {
@@ -57,7 +58,7 @@ public class RevertCodeFormatSubCommand implements Runnable {
   @Override
   public void run() {
     checkNotNull(parentCommand);
-    // opening the database migrates a code storage that is not in the current format, so a
+    // opening the database migrates a code storage keyed by code hash that holds bare code, so a
     // reverted one is migrated first and then reverted again
     try (final BesuController controller = parentCommand.besuCommand.buildController()) {
       CodeStorageMigration.revert(
