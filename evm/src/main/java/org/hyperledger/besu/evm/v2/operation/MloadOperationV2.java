@@ -14,10 +14,10 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
-import static org.hyperledger.besu.evm.v2.operation.Arms.LONG_BE;
-import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LONG_BE;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
 
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
@@ -73,9 +73,7 @@ public class MloadOperationV2 extends AbstractOperationV2 {
    * memory already expanded, CALLDATALOAD from the input data unless the word straddles its end.
    * They share an arm because each read inlines a chain of VarHandle methods into the loop.
    */
-  @Arm(
-      rank = 14,
-      opcodes = {0x51, 0x35})
+  @InlineInEvmLoop(opcodes = {0x51, 0x35})
   static long loadWord(
       final long[] s,
       final int sp,

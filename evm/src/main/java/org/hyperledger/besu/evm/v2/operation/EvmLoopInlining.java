@@ -25,11 +25,11 @@ import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 
 /**
- * What the arms of the untraced EVM v2 loop, marked with {@link Arm}, are written with: the
- * constants and helpers they may name, which EVM.java imports from here too, and the way an
+ * What the arms of the untraced EVM v2 loop, marked with {@link InlineInEvmLoop}, are written with:
+ * the constants and helpers they may name, which EVM.java imports from here too, and the way an
  * operation class runs its arm against the state held in the frame.
  */
-public final class Arms {
+public final class EvmLoopInlining {
 
   // The costs the loops charge for the operations they run inline, the same numbers the operations'
   // results carry. Constants rather than fields of the gas calculator: as fields they are loads C2
@@ -75,7 +75,7 @@ public final class Arms {
     }
   }
 
-  private Arms() {}
+  private EvmLoopInlining() {}
 
   /**
    * Whether a destination is a JUMPDEST of the code. The arms call it, so it has to stay within

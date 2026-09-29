@@ -78,8 +78,8 @@ import com.sun.source.util.Trees;
 
 /**
  * Generates the inline arms of the untraced EVM v2 loop in EVM.java from the methods of the
- * operation classes marked {@code @Arm}, and checks those methods against the rules that keep the
- * loop fast. The rules and why each exists are documented on {@code Arm}.
+ * operation classes marked {@code @InlineInEvmLoop}, and checks those methods against the rules
+ * that keep the loop fast. The rules and why each exists are documented on {@code InlineInEvmLoop}.
  *
  * <p>Usage: {@code EvmV2LoopGenerator write|check <operations dir> <EVM.java> [<marker file>]}.
  * {@code write} rewrites the generated regions of EVM.java; {@code check} fails if any rule is
@@ -93,7 +93,7 @@ public final class EvmV2LoopGenerator {
   static final String ARMS_END = "// END GENERATED arms";
 
   /** Where the constants and helpers an arm may name come from, for the arms and EVM.java alike. */
-  static final String ARMS_CLASS = "org.hyperledger.besu.evm.v2.operation.Arms";
+  static final String ARMS_CLASS = "org.hyperledger.besu.evm.v2.operation.EvmLoopInlining";
 
   /** The loop state an arm may take as a parameter, by name, with its type. */
   private static final Map<String, String> CONTEXT = new LinkedHashMap<>();
@@ -181,8 +181,14 @@ public final class EvmV2LoopGenerator {
   private EvmV2LoopGenerator() {}
 
   /** One arm: the method it comes from, its place in the loop and the opcodes it runs. */
-  private record Arm(
-      String owner, String method, String constant, int rank, Set<Integer> opcodes, String body) {}
+  private record SwitchArm(
+      String owner, String method, String constant, Set<Integer> opcodes, String body) {
+
+    /** The arm's lowest opcode, which decides where it comes in the loop. */
+    int first() {
+      return opcodes.stream().min(Integer::compare).orElse(0);
+    }
+  }
 
   /**
    * Runs the generator.
@@ -200,11 +206,13 @@ public final class EvmV2LoopGenerator {
     final Path evmFile = Path.of(args[2]);
     final List<String> errors = new ArrayList<>();
     final Set<String> named = new TreeSet<>();
-    final List<Arm> arms = parse(operations, named, errors);
+    final List<SwitchArm> arms = parse(operations, named, errors);
     checkNamesResolveToArms(evmFile, named, errors);
     if (!errors.isEmpty()) {
       System.err.println(
-          "The EVM v2 loop arms in " + operations + " break the rules documented on @Arm:");
+          "The EVM v2 loop arms in "
+              + operations
+              + " break the rules documented on @InlineInEvmLoop:");
       errors.forEach(e -> System.err.println("  " + e));
       System.exit(1);
     }
@@ -245,7 +253,7 @@ public final class EvmV2LoopGenerator {
   // ---------------------------------------------------------------------------------------------
   // Parsing and checking
 
-  private static List<Arm> parse(
+  private static List<SwitchArm> parse(
       final Path operations, final Set<String> named, final List<String> errors)
       throws IOException {
     final List<Path> sources;
@@ -253,7 +261,7 @@ public final class EvmV2LoopGenerator {
       sources = files.filter(f -> f.toString().endsWith(".java")).sorted().toList();
     }
     final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-    final List<Arm> arms = new ArrayList<>();
+    final List<SwitchArm> arms = new ArrayList<>();
     try (StandardJavaFileManager files = compiler.getStandardFileManager(null, null, UTF_8)) {
       final JavacTask task =
           (JavacTask)
@@ -274,7 +282,7 @@ public final class EvmV2LoopGenerator {
           for (final Tree member : classTree.getMembers()) {
             if (member instanceof MethodTree method && armAnnotation(method) != null) {
               final Kernel kernel = new Kernel(unit, positions, source, classTree, method, errors);
-              arms.add(kernel.toArm());
+              arms.add(kernel.toSwitchArm());
               named.addAll(kernel.named);
               checkNamesResolveToArms(
                   unit, classTree, kernel.named, classTree.getSimpleName().toString(), errors);
@@ -284,23 +292,13 @@ public final class EvmV2LoopGenerator {
       }
     }
     if (arms.isEmpty()) {
-      errors.add("no @Arm methods found in " + operations);
+      errors.add("no @InlineInEvmLoop methods found in " + operations);
     }
-    arms.sort(Comparator.comparingInt(Arm::rank));
+    arms.sort(Comparator.comparingInt(SwitchArm::first));
     final Map<Integer, String> owners = new HashMap<>();
     final Map<String, String> constants = new HashMap<>();
-    for (int i = 0; i < arms.size(); i++) {
-      final Arm arm = arms.get(i);
+    for (final SwitchArm arm : arms) {
       final String where = arm.owner() + "." + arm.method();
-      if (arm.rank() != i + 1) {
-        errors.add(
-            where
-                + " has rank "
-                + arm.rank()
-                + " where the arms' ranks should run 1, 2, 3 and on without a gap or a repeat;"
-                + " it would be number "
-                + (i + 1));
-      }
       final String other = constants.put(arm.constant(), where);
       if (other != null) {
         errors.add(where + " and " + other + " need names of their own, as the loop names arms");
@@ -321,7 +319,7 @@ public final class EvmV2LoopGenerator {
    * An arm names constants and helpers without a qualifier, in its operation's class and, once
    * generated, inside EVM. Java resolves such a name by where it stands, and a member of the
    * enclosing class hides a static import of the same name, overloads included. So each name has to
-   * come from Arms in both places, and neither class may declare a member of that name.
+   * come from EvmLoopInlining in both places, and neither class may declare a member of that name.
    */
   private static void checkNamesResolveToArms(
       final Path evmFile, final Set<String> named, final List<String> errors) throws IOException {
@@ -385,7 +383,7 @@ public final class EvmV2LoopGenerator {
 
   private static AnnotationTree armAnnotation(final MethodTree method) {
     for (final AnnotationTree annotation : method.getModifiers().getAnnotations()) {
-      if (annotation.getAnnotationType().toString().equals("Arm")) {
+      if (annotation.getAnnotationType().toString().equals("InlineInEvmLoop")) {
         return annotation;
       }
     }
@@ -401,9 +399,8 @@ public final class EvmV2LoopGenerator {
     private final MethodTree method;
     private final List<String> errors;
     private final String constant;
-    private int rank = -1;
 
-    /** The constants and helpers of Arms the arm names without a qualifier. */
+    /** The constants and helpers of EvmLoopInlining the arm names without a qualifier. */
     final Set<String> named = new TreeSet<>();
 
     private final Set<String> parameters = new HashSet<>();
@@ -423,19 +420,18 @@ public final class EvmV2LoopGenerator {
       this.owner = owner;
       this.method = method;
       this.errors = errors;
-      this.constant = "ARM_" + upperSnake(method.getName().toString());
+      this.constant = "INLINE_" + upperSnake(method.getName().toString());
     }
 
-    Arm toArm() {
+    SwitchArm toSwitchArm() {
       final Set<Integer> opcodes = opcodes();
       checkSignature();
       collectLocals();
       checkBody();
-      return new Arm(
+      return new SwitchArm(
           owner.getSimpleName().toString(),
           method.getName().toString(),
           constant,
-          rank,
           opcodes,
           translate());
     }
@@ -453,7 +449,7 @@ public final class EvmV2LoopGenerator {
       int last = -1;
       for (final ExpressionTree argument : armAnnotation(method).getArguments()) {
         if (!(argument instanceof AssignmentTree assignment)) {
-          error(argument, "@Arm takes named values");
+          error(argument, "@InlineInEvmLoop takes named values");
           continue;
         }
         final String name = assignment.getVariable().toString();
@@ -466,24 +462,20 @@ public final class EvmV2LoopGenerator {
               opcodes.add(intValue(value));
             }
           }
-          case "rank" -> rank = intValue(value);
           case "first" -> first = intValue(value);
           case "last" -> last = intValue(value);
-          default -> error(argument, "unknown @Arm value " + name);
+          default -> error(argument, "unknown @InlineInEvmLoop value " + name);
         }
       }
-      if (rank < 1) {
-        error(method, "@Arm needs a rank from 1, its place in the loop");
-      }
       if ((first < 0) != (last < 0) || first > last) {
-        error(method, "@Arm needs both first and last, first no greater than last");
+        error(method, "@InlineInEvmLoop needs both first and last, first no greater than last");
       } else if (first >= 0) {
         for (int op = first; op <= last; op++) {
           opcodes.add(op);
         }
       }
       if (opcodes.isEmpty()) {
-        error(method, "@Arm names no opcode");
+        error(method, "@InlineInEvmLoop names no opcode");
       }
       opcodes.forEach(
           op -> {
@@ -496,9 +488,15 @@ public final class EvmV2LoopGenerator {
 
     private int intValue(final ExpressionTree tree) {
       if (tree instanceof LiteralTree literal && literal.getValue() instanceof Integer value) {
+        if (!source
+            .substring((int) start(tree), (int) end(tree))
+            .toLowerCase(Locale.ROOT)
+            .startsWith("0x")) {
+          error(tree, String.format(Locale.ROOT, "write opcodes in hex, as 0x%02x", value));
+        }
         return value;
       }
-      error(tree, "@Arm opcodes must be int literals");
+      error(tree, "@InlineInEvmLoop opcodes must be int literals");
       return -1;
     }
 
@@ -511,7 +509,7 @@ public final class EvmV2LoopGenerator {
         final String name = parameter.getName().toString();
         final String expected = CONTEXT.get(name);
         if (expected == null) {
-          error(parameter, name + " is not loop state an arm can take; see @Arm");
+          error(parameter, name + " is not loop state an arm can take; see @InlineInEvmLoop");
         } else if (!expected.equals(parameter.getType().toString())) {
           error(parameter, name + " must be a " + expected);
         }
@@ -954,9 +952,12 @@ public final class EvmV2LoopGenerator {
   // ---------------------------------------------------------------------------------------------
   // Generation
 
-  static String generate(final String evm, final List<Arm> arms) {
+  static String generate(final String evm, final List<SwitchArm> arms) {
     final StringBuilder table = new StringBuilder();
-    table.append(TABLE_BEGIN).append(" from the @Arm methods; do not edit\n");
+    table
+        .append(TABLE_BEGIN)
+        .append(" for the copies of the @InlineInEvmLoop methods of the v2\n")
+        .append("// operations below; do not edit, run ./gradlew :evm:generateEvmV2Loop\n");
     for (int i = 0; i < arms.size(); i++) {
       table
           .append("private static final int ")
@@ -969,7 +970,7 @@ public final class EvmV2LoopGenerator {
         "\n// Per opcode: the arm in the low byte, and above it a bias of minus the arm times 16,\n"
             + "// which the arm's stack and code indices cancel again; see runToHaltV2Untraced.\n"
             + "private static final int[] DISPATCH = new int[256];\n\nstatic {\n");
-    for (final Arm arm : arms) {
+    for (final SwitchArm arm : arms) {
       for (final int[] run : runs(arm.opcodes())) {
         table
             .append("dispatch(")
@@ -985,18 +986,24 @@ public final class EvmV2LoopGenerator {
     table.append(TABLE_END);
 
     final StringBuilder switchArms = new StringBuilder();
-    switchArms.append(ARMS_BEGIN).append(" from the @Arm methods; do not edit\n");
-    for (final Arm arm : arms) {
+    switchArms
+        .append(ARMS_BEGIN)
+        .append(": copies of the @InlineInEvmLoop methods of the v2 operations;\n")
+        .append("// edit those, then run ./gradlew :evm:generateEvmV2Loop\n");
+    for (final SwitchArm arm : arms) {
+      final String source = arm.owner() + "." + arm.method();
       switchArms
+          .append("// BEGIN automatically copied from ")
+          .append(source)
+          .append("; edit it there\n")
           .append("case ")
           .append(arm.constant())
-          .append(" -> { // ")
-          .append(arm.owner())
-          .append('.')
-          .append(arm.method())
-          .append('\n')
+          .append(" -> {\n")
           .append(arm.body().strip())
-          .append("\n}\n");
+          .append("\n}\n")
+          .append("// END automatically copied from ")
+          .append(source)
+          .append('\n');
     }
     switchArms.append(ARMS_END);
 

@@ -14,12 +14,12 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
-import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.done;
-import static org.hyperledger.besu.evm.v2.operation.Arms.result;
-import static org.hyperledger.besu.evm.v2.operation.Arms.top;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -74,7 +74,7 @@ public class SwapOperationV2 extends AbstractFixedCostOperationV2 {
     return result(frame, swap(s, sp, top(sp), SWAP_BASE + index, ANY_GAS), index + 1, index + 1);
   }
 
-  @Arm(rank = 4, first = 0x90, last = 0x9f)
+  @InlineInEvmLoop(first = 0x90, last = 0x9f)
   static long swap(final long[] s, final int sp, final int top, final int opcode, final long gas) {
     final int depth = opcode - 0x8f;
     if (sp > depth && gas >= VERY_LOW_TIER_GAS) {

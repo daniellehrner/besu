@@ -17,14 +17,14 @@ package org.hyperledger.besu.evm;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static org.hyperledger.besu.evm.operation.PushOperation.PUSH_BASE;
 import static org.hyperledger.besu.evm.operation.SwapOperation.SWAP_BASE;
-import static org.hyperledger.besu.evm.v2.operation.Arms.BASE_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.HIGH_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.JUMPDEST_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.LONG_BE;
-import static org.hyperledger.besu.evm.v2.operation.Arms.LOW_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.MID_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.isJumpDestinationV2;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.BASE_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.HIGH_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.JUMPDEST_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LONG_BE;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.MID_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.isJumpDestinationV2;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
@@ -1056,69 +1056,70 @@ public class EVM {
   // that the switch's table has an entry per arm instead of one per opcode up to the highest one
   // handled inline: that table is bytecode of the loop and counts against its inlining budget.
   // Opcodes without an arm map to 0 and take the general path.
-  // BEGIN GENERATED arm table from the @Arm methods; do not edit
-  private static final int ARM_PUSH1 = 1;
-  private static final int ARM_PUSH = 2;
-  private static final int ARM_DUP = 3;
-  private static final int ARM_SWAP = 4;
-  private static final int ARM_JUMPDEST = 5;
-  private static final int ARM_POP = 6;
-  private static final int ARM_PUSH2 = 7;
-  private static final int ARM_JUMPI = 8;
-  private static final int ARM_JUMP = 9;
-  private static final int ARM_ADD = 10;
-  private static final int ARM_MSTORE = 11;
-  private static final int ARM_ISZERO = 12;
-  private static final int ARM_AND = 13;
-  private static final int ARM_LOAD_WORD = 14;
-  private static final int ARM_SUB = 15;
-  private static final int ARM_EQ = 16;
-  private static final int ARM_COMPARE = 17;
-  private static final int ARM_SHIFT = 18;
-  private static final int ARM_PUSH0 = 19;
-  private static final int ARM_MUL = 20;
-  private static final int ARM_CALLDATASIZE = 21;
-  private static final int ARM_DIV_MOD = 22;
-  private static final int ARM_OR = 23;
-  private static final int ARM_NOT = 24;
-  private static final int ARM_GAS_LEFT = 25;
-  private static final int ARM_SIGNEXTEND = 26;
-  private static final int ARM_XOR = 27;
+  // BEGIN GENERATED arm table for the copies of the @InlineInEvmLoop methods of the v2
+  // operations below; do not edit, run ./gradlew :evm:generateEvmV2Loop
+  private static final int INLINE_ADD = 1;
+  private static final int INLINE_MUL = 2;
+  private static final int INLINE_SUB = 3;
+  private static final int INLINE_DIV_MOD = 4;
+  private static final int INLINE_SIGNEXTEND = 5;
+  private static final int INLINE_COMPARE = 6;
+  private static final int INLINE_EQ = 7;
+  private static final int INLINE_ISZERO = 8;
+  private static final int INLINE_AND = 9;
+  private static final int INLINE_OR = 10;
+  private static final int INLINE_XOR = 11;
+  private static final int INLINE_NOT = 12;
+  private static final int INLINE_SHIFT = 13;
+  private static final int INLINE_LOAD_WORD = 14;
+  private static final int INLINE_CALLDATASIZE = 15;
+  private static final int INLINE_POP = 16;
+  private static final int INLINE_MSTORE = 17;
+  private static final int INLINE_JUMP = 18;
+  private static final int INLINE_JUMPI = 19;
+  private static final int INLINE_GAS_LEFT = 20;
+  private static final int INLINE_JUMPDEST = 21;
+  private static final int INLINE_PUSH0 = 22;
+  private static final int INLINE_PUSH1 = 23;
+  private static final int INLINE_PUSH2 = 24;
+  private static final int INLINE_PUSH = 25;
+  private static final int INLINE_DUP = 26;
+  private static final int INLINE_SWAP = 27;
 
   // Per opcode: the arm in the low byte, and above it a bias of minus the arm times 16,
   // which the arm's stack and code indices cancel again; see runToHaltV2Untraced.
   private static final int[] DISPATCH = new int[256];
 
   static {
-    dispatch(ARM_PUSH1, 0x60, 0x60);
-    dispatch(ARM_PUSH, 0x62, 0x7f);
-    dispatch(ARM_DUP, 0x80, 0x8f);
-    dispatch(ARM_SWAP, 0x90, 0x9f);
-    dispatch(ARM_JUMPDEST, 0x5b, 0x5b);
-    dispatch(ARM_POP, 0x50, 0x50);
-    dispatch(ARM_PUSH2, 0x61, 0x61);
-    dispatch(ARM_JUMPI, 0x57, 0x57);
-    dispatch(ARM_JUMP, 0x56, 0x56);
-    dispatch(ARM_ADD, 0x01, 0x01);
-    dispatch(ARM_MSTORE, 0x52, 0x52);
-    dispatch(ARM_ISZERO, 0x15, 0x15);
-    dispatch(ARM_AND, 0x16, 0x16);
-    dispatch(ARM_LOAD_WORD, 0x35, 0x35);
-    dispatch(ARM_LOAD_WORD, 0x51, 0x51);
-    dispatch(ARM_SUB, 0x03, 0x03);
-    dispatch(ARM_EQ, 0x14, 0x14);
-    dispatch(ARM_COMPARE, 0x10, 0x13);
-    dispatch(ARM_SHIFT, 0x1b, 0x1d);
-    dispatch(ARM_PUSH0, 0x5f, 0x5f);
-    dispatch(ARM_MUL, 0x02, 0x02);
-    dispatch(ARM_CALLDATASIZE, 0x36, 0x36);
-    dispatch(ARM_DIV_MOD, 0x04, 0x04);
-    dispatch(ARM_DIV_MOD, 0x06, 0x06);
-    dispatch(ARM_OR, 0x17, 0x17);
-    dispatch(ARM_NOT, 0x19, 0x19);
-    dispatch(ARM_GAS_LEFT, 0x5a, 0x5a);
-    dispatch(ARM_SIGNEXTEND, 0x0b, 0x0b);
-    dispatch(ARM_XOR, 0x18, 0x18);
+    dispatch(INLINE_ADD, 0x01, 0x01);
+    dispatch(INLINE_MUL, 0x02, 0x02);
+    dispatch(INLINE_SUB, 0x03, 0x03);
+    dispatch(INLINE_DIV_MOD, 0x04, 0x04);
+    dispatch(INLINE_DIV_MOD, 0x06, 0x06);
+    dispatch(INLINE_SIGNEXTEND, 0x0b, 0x0b);
+    dispatch(INLINE_COMPARE, 0x10, 0x13);
+    dispatch(INLINE_EQ, 0x14, 0x14);
+    dispatch(INLINE_ISZERO, 0x15, 0x15);
+    dispatch(INLINE_AND, 0x16, 0x16);
+    dispatch(INLINE_OR, 0x17, 0x17);
+    dispatch(INLINE_XOR, 0x18, 0x18);
+    dispatch(INLINE_NOT, 0x19, 0x19);
+    dispatch(INLINE_SHIFT, 0x1b, 0x1d);
+    dispatch(INLINE_LOAD_WORD, 0x35, 0x35);
+    dispatch(INLINE_LOAD_WORD, 0x51, 0x51);
+    dispatch(INLINE_CALLDATASIZE, 0x36, 0x36);
+    dispatch(INLINE_POP, 0x50, 0x50);
+    dispatch(INLINE_MSTORE, 0x52, 0x52);
+    dispatch(INLINE_JUMP, 0x56, 0x56);
+    dispatch(INLINE_JUMPI, 0x57, 0x57);
+    dispatch(INLINE_GAS_LEFT, 0x5a, 0x5a);
+    dispatch(INLINE_JUMPDEST, 0x5b, 0x5b);
+    dispatch(INLINE_PUSH0, 0x5f, 0x5f);
+    dispatch(INLINE_PUSH1, 0x60, 0x60);
+    dispatch(INLINE_PUSH2, 0x61, 0x61);
+    dispatch(INLINE_PUSH, 0x62, 0x7f);
+    dispatch(INLINE_DUP, 0x80, 0x8f);
+    dispatch(INLINE_SWAP, 0x90, 0x9f);
   }
 
   private static void dispatch(final int arm, final int first, final int last) {
@@ -1139,8 +1140,8 @@ public class EVM {
    * defined in one place for both loops.
    *
    * <p>The arms between the generated markers come from the methods of the operation classes marked
-   * {@code @Arm}, whose javadoc documents the rules they follow; the build rejects an arm that
-   * breaks one, and EVM.java that does not hold what the arms generate. Edit an arm in its
+   * {@code @InlineInEvmLoop}, whose javadoc documents the rules they follow; the build rejects an
+   * arm that breaks one, and EVM.java that does not hold what the arms generate. Edit an arm in its
    * operation's class and run {@code ./gradlew :evm:generateEvmV2Loop}. The loop around them keeps
    * one rule of its own: no local is read after the general path's call before it is reloaded, as a
    * local live across a call is kept in memory.
@@ -1185,174 +1186,12 @@ public class EVM {
       final int base = (sp << 2) + bias;
       final int pcBase = pc + bias;
       switch (entry & 0xff) {
-        // BEGIN GENERATED arms from the @Arm methods; do not edit
-        case ARM_PUSH1 -> { // PushOperationV2.push1
-          if ((sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
-            final int dst = base + (ARM_PUSH1 << 4);
-            final int i = pcBase + (ARM_PUSH1 << 4);
-            s[dst] = 0;
-            s[dst + 1] = 0;
-            s[dst + 2] = 0;
-            s[dst + 3] = i + 1 < code.length ? code[i + 1] & 0xff : 0;
-            cost = VERY_LOW_TIER_GAS;
-            step = 2;
-            delta = 1;
-          }
-        }
-        case ARM_PUSH -> { // PushOperationV2.push
-          if ((sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
-            final int dst = base + (ARM_PUSH << 4);
-            final int block = pc >>> 6;
-            final long value =
-                codeObject
-                    .pushValues()[
-                    codeObject.pushBase()[block]
-                        + Long.bitCount(codeObject.pushBits()[block] & ((1L << (pc & 63)) - 1))];
-            if (opcode <= 0x67) { // PUSH1-8, the value itself
-              s[dst] = 0;
-              s[dst + 1] = 0;
-              s[dst + 2] = 0;
-              s[dst + 3] = value;
-            } else { // PUSH9-32, where the wide values start
-              final long[] wide = codeObject.pushWide();
-              final int o = (int) value;
-              s[dst] = wide[o];
-              s[dst + 1] = wide[o + 1];
-              s[dst + 2] = wide[o + 2];
-              s[dst + 3] = wide[o + 3];
-            }
-            cost = VERY_LOW_TIER_GAS;
-            step = opcode - 0x5e;
-            delta = 1;
-          }
-        }
-        case ARM_DUP -> { // DupOperationV2.dup
-          final int depth = opcode - 0x7f;
-          if (sp >= depth && (sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
-            final int from = (base + (ARM_DUP << 4)) - (depth << 2);
-            final int to = base + (ARM_DUP << 4);
-            s[to] = s[from];
-            s[to + 1] = s[from + 1];
-            s[to + 2] = s[from + 2];
-            s[to + 3] = s[from + 3];
-            cost = VERY_LOW_TIER_GAS;
-            step = 1;
-            delta = 1;
-          }
-        }
-        case ARM_SWAP -> { // SwapOperationV2.swap
-          final int depth = opcode - 0x8f;
-          if (sp > depth && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (ARM_SWAP << 4) - 4;
-            final int b = (base + (ARM_SWAP << 4) - 4) - (depth << 2);
-            long t = s[a];
-            s[a] = s[b];
-            s[b] = t;
-            t = s[a + 1];
-            s[a + 1] = s[b + 1];
-            s[b + 1] = t;
-            t = s[a + 2];
-            s[a + 2] = s[b + 2];
-            s[b + 2] = t;
-            t = s[a + 3];
-            s[a + 3] = s[b + 3];
-            s[b + 3] = t;
-            cost = VERY_LOW_TIER_GAS;
-            step = 1;
-            delta = 0;
-          }
-        }
-        case ARM_JUMPDEST -> { // JumpDestOperationV2.jumpdest
-          if (gas >= JUMPDEST_GAS) {
-            cost = JUMPDEST_GAS;
-            step = 1;
-            delta = 0;
-          }
-        }
-        case ARM_POP -> { // PopOperationV2.pop
-          if (sp >= 1 && gas >= BASE_TIER_GAS) {
-            cost = BASE_TIER_GAS;
-            step = 1;
-            delta = -1;
-          }
-        }
-        case ARM_PUSH2 -> { // PushOperationV2.push2
-          final int i = pcBase + (ARM_PUSH2 << 4);
-          if ((sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS && i + 2 < code.length) {
-            final int immediate = (code[i + 1] & 0xff) << 8 | (code[i + 2] & 0xff);
-            final int following = i + 3 < code.length ? code[i + 3] & 0xff : 0;
-            if (following == 0x56) {
-              if (gas >= VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS
-                  && isJumpDestinationV2(codeObject.getJumpDestBitMask(), immediate, code.length)) {
-                // PUSH2 JUMP JUMPDEST, without the destination going through the stack
-                cost = VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS;
-                step = immediate + 1 - pc;
-                delta = 0;
-                break;
-              }
-            } else if (following == 0x57 && sp >= 1 && gas >= VERY_LOW_TIER_GAS + HIGH_TIER_GAS) {
-              final int c = base + (ARM_PUSH2 << 4) - 4;
-              if ((s[c] | s[c + 1] | s[c + 2] | s[c + 3]) == 0) {
-                // PUSH2 JUMPI, not taken
-                cost = VERY_LOW_TIER_GAS + HIGH_TIER_GAS;
-                step = 4;
-                delta = -1;
-                break;
-              }
-              if (gas >= VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS
-                  && isJumpDestinationV2(codeObject.getJumpDestBitMask(), immediate, code.length)) {
-                // PUSH2 JUMPI JUMPDEST, taken
-                cost = VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS;
-                step = immediate + 1 - pc;
-                delta = -1;
-                break;
-              }
-            }
-            final int dst = base + (ARM_PUSH2 << 4);
-            s[dst] = 0;
-            s[dst + 1] = 0;
-            s[dst + 2] = 0;
-            s[dst + 3] = immediate;
-            cost = VERY_LOW_TIER_GAS;
-            step = 3;
-            delta = 1;
-          }
-        }
-        case ARM_JUMPI -> { // JumpiOperationV2.jumpi
-          if (sp >= 2 && gas >= HIGH_TIER_GAS) {
-            final int d = base + (ARM_JUMPI << 4) - 4;
-            final int c = d - 4;
-            if ((s[c] | s[c + 1] | s[c + 2] | s[c + 3]) == 0) {
-              cost = HIGH_TIER_GAS;
-              step = 1;
-              delta = -2;
-              break;
-            }
-            final long destination = s[d + 3];
-            if ((s[d] | s[d + 1] | s[d + 2]) == 0
-                && gas >= HIGH_TIER_GAS + JUMPDEST_GAS
-                && isJumpDestinationV2(codeObject.getJumpDestBitMask(), destination, code.length)) {
-              cost = HIGH_TIER_GAS + JUMPDEST_GAS;
-              step = (int) destination + 1 - pc;
-              delta = -2;
-            }
-          }
-        }
-        case ARM_JUMP -> { // JumpOperationV2.jump
-          if (sp >= 1 && gas >= MID_TIER_GAS + JUMPDEST_GAS) {
-            final int d = base + (ARM_JUMP << 4) - 4;
-            final long destination = s[d + 3];
-            if ((s[d] | s[d + 1] | s[d + 2]) == 0
-                && isJumpDestinationV2(codeObject.getJumpDestBitMask(), destination, code.length)) {
-              cost = MID_TIER_GAS + JUMPDEST_GAS;
-              step = (int) destination + 1 - pc;
-              delta = -1;
-            }
-          }
-        }
-        case ARM_ADD -> { // AddOperationV2.add
+        // BEGIN GENERATED arms: copies of the @InlineInEvmLoop methods of the v2 operations;
+        // edit those, then run ./gradlew :evm:generateEvmV2Loop
+        // BEGIN automatically copied from AddOperationV2.add; edit it there
+        case INLINE_ADD -> {
           if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (ARM_ADD << 4) - 4;
+            final int a = base + (INLINE_ADD << 4) - 4;
             final int b = a - 4;
             final long x0 = s[a + 3];
             final long y0 = s[b + 3];
@@ -1375,90 +1214,49 @@ public class EVM {
             delta = -1;
           }
         }
-        case ARM_MSTORE -> { // MstoreOperationV2.mstore
-          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (ARM_MSTORE << 4) - 4;
-            final long location = s[a + 3];
-            if ((s[a] | s[a + 1] | s[a + 2]) == 0
-                && location >= 0
-                && location <= frame.memoryByteSize() - 32) {
-              final byte[] memory = frame.memoryArrayV2();
-              final int i = (int) location;
-              LONG_BE.set(memory, i, s[a - 4]);
-              LONG_BE.set(memory, i + 8, s[a - 3]);
-              LONG_BE.set(memory, i + 16, s[a - 2]);
-              LONG_BE.set(memory, i + 24, s[a - 1]);
-              cost = VERY_LOW_TIER_GAS;
-              step = 1;
-              delta = -2;
-            }
-          }
-        }
-        case ARM_ISZERO -> { // IsZeroOperationV2.iszero
-          if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (ARM_ISZERO << 4) - 4;
-            final long zero = (s[a] | s[a + 1] | s[a + 2] | s[a + 3]) == 0 ? 1L : 0L;
-            s[a] = 0;
-            s[a + 1] = 0;
-            s[a + 2] = 0;
-            s[a + 3] = zero;
-            cost = VERY_LOW_TIER_GAS;
-            step = 1;
-            delta = 0;
-          }
-        }
-        case ARM_AND -> { // AndOperationV2.and
-          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (ARM_AND << 4) - 4;
-            s[a - 4] &= s[a];
-            s[a - 3] &= s[a + 1];
-            s[a - 2] &= s[a + 2];
-            s[a - 1] &= s[a + 3];
-            cost = VERY_LOW_TIER_GAS;
-            step = 1;
-            delta = -1;
-          }
-        }
-        case ARM_LOAD_WORD -> { // MloadOperationV2.loadWord
-          if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (ARM_LOAD_WORD << 4) - 4;
-            final long location = s[a + 3];
-            final boolean small = (s[a] | s[a + 1] | s[a + 2]) == 0 && location >= 0;
-            final byte[] source;
-            final boolean readable;
-            if (opcode == 0x51) {
-              source = frame.memoryArrayV2();
-              readable = small && location <= frame.memoryByteSize() - 32;
+        // END automatically copied from AddOperationV2.add
+        // BEGIN automatically copied from MulOperationV2.mul; edit it there
+        case INLINE_MUL -> {
+          if (sp >= 2 && gas >= LOW_TIER_GAS) {
+            final int a = base + (INLINE_MUL << 4) - 4;
+            final int b = a - 4;
+            final int wide;
+            if ((s[a] | s[a + 1] | s[a + 2]) == 0) {
+              wide = b;
+            } else if ((s[b] | s[b + 1] | s[b + 2]) == 0) {
+              wide = a;
             } else {
-              source = frame.inputDataArrayIfPresent();
-              if (source != null && (!small || location >= source.length)) {
-                // past the end of the input
-                s[a] = 0;
-                s[a + 1] = 0;
-                s[a + 2] = 0;
-                s[a + 3] = 0;
-                cost = VERY_LOW_TIER_GAS;
-                step = 1;
-                delta = 0;
-                break;
-              }
-              readable = source != null && source.length - location >= 32;
+              wide = -1;
             }
-            if (readable) {
-              final int i = (int) location;
-              s[a] = (long) LONG_BE.get(source, i);
-              s[a + 1] = (long) LONG_BE.get(source, i + 8);
-              s[a + 2] = (long) LONG_BE.get(source, i + 16);
-              s[a + 3] = (long) LONG_BE.get(source, i + 24);
-              cost = VERY_LOW_TIER_GAS;
+            if (wide >= 0) {
+              final long m = s[(wide == a ? b : a) + 3];
+              final long x3 = s[wide];
+              final long x2 = s[wide + 1];
+              final long x1 = s[wide + 2];
+              final long x0 = s[wide + 3];
+              final long h0 = Math.unsignedMultiplyHigh(x0, m);
+              final long h1 = Math.unsignedMultiplyHigh(x1, m);
+              final long h2 = Math.unsignedMultiplyHigh(x2, m);
+              final long l1 = x1 * m;
+              final long r1 = l1 + h0;
+              // a high half is at most 2^64 - 2, so adding a carry to one cannot overflow
+              final long l2 = x2 * m;
+              final long r2 = l2 + h1 + (Long.compareUnsigned(r1, l1) < 0 ? 1L : 0L);
+              s[b] = x3 * m + h2 + (Long.compareUnsigned(r2, l2) < 0 ? 1L : 0L);
+              s[b + 1] = r2;
+              s[b + 2] = r1;
+              s[b + 3] = x0 * m;
+              cost = LOW_TIER_GAS;
               step = 1;
-              delta = 0;
+              delta = -1;
             }
           }
         }
-        case ARM_SUB -> { // SubOperationV2.sub
+        // END automatically copied from MulOperationV2.mul
+        // BEGIN automatically copied from SubOperationV2.sub; edit it there
+        case INLINE_SUB -> {
           if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (ARM_SUB << 4) - 4;
+            final int a = base + (INLINE_SUB << 4) - 4;
             final int b = a - 4;
             final long x0 = s[a + 3];
             final long y0 = s[b + 3];
@@ -1481,30 +1279,60 @@ public class EVM {
             delta = -1;
           }
         }
-        case ARM_EQ -> { // EqOperationV2.eq
-          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (ARM_EQ << 4) - 4;
+        // END automatically copied from SubOperationV2.sub
+        // BEGIN automatically copied from DivOperationV2.divMod; edit it there
+        case INLINE_DIV_MOD -> {
+          if (sp >= 2 && gas >= LOW_TIER_GAS) {
+            final int a = base + (INLINE_DIV_MOD << 4) - 4;
             final int b = a - 4;
-            final long equal =
-                ((s[a] ^ s[b])
-                            | (s[a + 1] ^ s[b + 1])
-                            | (s[a + 2] ^ s[b + 2])
-                            | (s[a + 3] ^ s[b + 3]))
-                        == 0
-                    ? 1L
-                    : 0L;
-            s[b] = 0;
-            s[b + 1] = 0;
-            s[b + 2] = 0;
-            s[b + 3] = equal;
-            cost = VERY_LOW_TIER_GAS;
+            if ((s[a] | s[a + 1] | s[a + 2] | s[b] | s[b + 1] | s[b + 2]) == 0) {
+              final long x = s[a + 3];
+              final long y = s[b + 3];
+              s[b + 3] =
+                  y == 0
+                      ? 0L
+                      : opcode == 0x04 ? Long.divideUnsigned(x, y) : Long.remainderUnsigned(x, y);
+              cost = LOW_TIER_GAS;
+              step = 1;
+              delta = -1;
+            }
+          }
+        }
+        // END automatically copied from DivOperationV2.divMod
+        // BEGIN automatically copied from SignExtendOperationV2.signextend; edit it there
+        case INLINE_SIGNEXTEND -> {
+          if (sp >= 2 && gas >= LOW_TIER_GAS) {
+            final int a = base + (INLINE_SIGNEXTEND << 4) - 4;
+            final int v = a - 4;
+            final long index = s[a + 3];
+            if ((s[a] | s[a + 1] | s[a + 2]) == 0 && index >= 0 && index < 31) {
+              // the sign bit and the limb holding it, limbs counted from the least significant
+              final int signBit = (int) index * 8 + 7;
+              final int limb = v + 3 - (signBit >>> 6);
+              final long below = -1L >>> (63 - (signBit & 63));
+              final long fill = (s[limb] >>> (signBit & 63) & 1L) == 0 ? 0L : -1L;
+              s[limb] = (s[limb] & below) | (fill & ~below);
+              // and every limb above it
+              if (limb > v) {
+                s[v] = fill;
+              }
+              if (limb > v + 1) {
+                s[v + 1] = fill;
+              }
+              if (limb > v + 2) {
+                s[v + 2] = fill;
+              }
+            }
+            cost = LOW_TIER_GAS;
             step = 1;
             delta = -1;
           }
         }
-        case ARM_COMPARE -> { // LtOperationV2.compare
+        // END automatically copied from SignExtendOperationV2.signextend
+        // BEGIN automatically copied from LtOperationV2.compare; edit it there
+        case INLINE_COMPARE -> {
           if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (ARM_COMPARE << 4) - 4;
+            final int a = base + (INLINE_COMPARE << 4) - 4;
             final int b = a - 4;
             // the most significant limb in which the two differ, or the least significant one
             final int i =
@@ -1527,9 +1355,105 @@ public class EVM {
             delta = -1;
           }
         }
-        case ARM_SHIFT -> { // ShlOperationV2.shift
+        // END automatically copied from LtOperationV2.compare
+        // BEGIN automatically copied from EqOperationV2.eq; edit it there
+        case INLINE_EQ -> {
+          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (INLINE_EQ << 4) - 4;
+            final int b = a - 4;
+            final long equal =
+                ((s[a] ^ s[b])
+                            | (s[a + 1] ^ s[b + 1])
+                            | (s[a + 2] ^ s[b + 2])
+                            | (s[a + 3] ^ s[b + 3]))
+                        == 0
+                    ? 1L
+                    : 0L;
+            s[b] = 0;
+            s[b + 1] = 0;
+            s[b + 2] = 0;
+            s[b + 3] = equal;
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        // END automatically copied from EqOperationV2.eq
+        // BEGIN automatically copied from IsZeroOperationV2.iszero; edit it there
+        case INLINE_ISZERO -> {
+          if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (INLINE_ISZERO << 4) - 4;
+            final long zero = (s[a] | s[a + 1] | s[a + 2] | s[a + 3]) == 0 ? 1L : 0L;
+            s[a] = 0;
+            s[a + 1] = 0;
+            s[a + 2] = 0;
+            s[a + 3] = zero;
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = 0;
+          }
+        }
+        // END automatically copied from IsZeroOperationV2.iszero
+        // BEGIN automatically copied from AndOperationV2.and; edit it there
+        case INLINE_AND -> {
+          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (INLINE_AND << 4) - 4;
+            s[a - 4] &= s[a];
+            s[a - 3] &= s[a + 1];
+            s[a - 2] &= s[a + 2];
+            s[a - 1] &= s[a + 3];
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        // END automatically copied from AndOperationV2.and
+        // BEGIN automatically copied from OrOperationV2.or; edit it there
+        case INLINE_OR -> {
+          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (INLINE_OR << 4) - 4;
+            s[a - 4] |= s[a];
+            s[a - 3] |= s[a + 1];
+            s[a - 2] |= s[a + 2];
+            s[a - 1] |= s[a + 3];
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        // END automatically copied from OrOperationV2.or
+        // BEGIN automatically copied from XorOperationV2.xor; edit it there
+        case INLINE_XOR -> {
+          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (INLINE_XOR << 4) - 4;
+            s[a - 4] ^= s[a];
+            s[a - 3] ^= s[a + 1];
+            s[a - 2] ^= s[a + 2];
+            s[a - 1] ^= s[a + 3];
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = -1;
+          }
+        }
+        // END automatically copied from XorOperationV2.xor
+        // BEGIN automatically copied from NotOperationV2.not; edit it there
+        case INLINE_NOT -> {
+          if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (INLINE_NOT << 4) - 4;
+            s[a] = ~s[a];
+            s[a + 1] = ~s[a + 1];
+            s[a + 2] = ~s[a + 2];
+            s[a + 3] = ~s[a + 3];
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = 0;
+          }
+        }
+        // END automatically copied from NotOperationV2.not
+        // BEGIN automatically copied from ShlOperationV2.shift; edit it there
+        case INLINE_SHIFT -> {
           if (constantinople && sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (ARM_SHIFT << 4) - 4;
+            final int a = base + (INLINE_SHIFT << 4) - 4;
             final int v = a - 4;
             long w3 = s[v];
             long w2 = s[v + 1];
@@ -1580,58 +1504,51 @@ public class EVM {
             delta = -1;
           }
         }
-        case ARM_PUSH0 -> { // Push0OperationV2.push0
-          if (shanghai && (sp << 2) < s.length && gas >= BASE_TIER_GAS) {
-            final int dst = base + (ARM_PUSH0 << 4);
-            s[dst] = 0;
-            s[dst + 1] = 0;
-            s[dst + 2] = 0;
-            s[dst + 3] = 0;
-            cost = BASE_TIER_GAS;
-            step = 1;
-            delta = 1;
-          }
-        }
-        case ARM_MUL -> { // MulOperationV2.mul
-          if (sp >= 2 && gas >= LOW_TIER_GAS) {
-            final int a = base + (ARM_MUL << 4) - 4;
-            final int b = a - 4;
-            final int wide;
-            if ((s[a] | s[a + 1] | s[a + 2]) == 0) {
-              wide = b;
-            } else if ((s[b] | s[b + 1] | s[b + 2]) == 0) {
-              wide = a;
+        // END automatically copied from ShlOperationV2.shift
+        // BEGIN automatically copied from MloadOperationV2.loadWord; edit it there
+        case INLINE_LOAD_WORD -> {
+          if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (INLINE_LOAD_WORD << 4) - 4;
+            final long location = s[a + 3];
+            final boolean small = (s[a] | s[a + 1] | s[a + 2]) == 0 && location >= 0;
+            final byte[] source;
+            final boolean readable;
+            if (opcode == 0x51) {
+              source = frame.memoryArrayV2();
+              readable = small && location <= frame.memoryByteSize() - 32;
             } else {
-              wide = -1;
+              source = frame.inputDataArrayIfPresent();
+              if (source != null && (!small || location >= source.length)) {
+                // past the end of the input
+                s[a] = 0;
+                s[a + 1] = 0;
+                s[a + 2] = 0;
+                s[a + 3] = 0;
+                cost = VERY_LOW_TIER_GAS;
+                step = 1;
+                delta = 0;
+                break;
+              }
+              readable = source != null && source.length - location >= 32;
             }
-            if (wide >= 0) {
-              final long m = s[(wide == a ? b : a) + 3];
-              final long x3 = s[wide];
-              final long x2 = s[wide + 1];
-              final long x1 = s[wide + 2];
-              final long x0 = s[wide + 3];
-              final long h0 = Math.unsignedMultiplyHigh(x0, m);
-              final long h1 = Math.unsignedMultiplyHigh(x1, m);
-              final long h2 = Math.unsignedMultiplyHigh(x2, m);
-              final long l1 = x1 * m;
-              final long r1 = l1 + h0;
-              // a high half is at most 2^64 - 2, so adding a carry to one cannot overflow
-              final long l2 = x2 * m;
-              final long r2 = l2 + h1 + (Long.compareUnsigned(r1, l1) < 0 ? 1L : 0L);
-              s[b] = x3 * m + h2 + (Long.compareUnsigned(r2, l2) < 0 ? 1L : 0L);
-              s[b + 1] = r2;
-              s[b + 2] = r1;
-              s[b + 3] = x0 * m;
-              cost = LOW_TIER_GAS;
+            if (readable) {
+              final int i = (int) location;
+              s[a] = (long) LONG_BE.get(source, i);
+              s[a + 1] = (long) LONG_BE.get(source, i + 8);
+              s[a + 2] = (long) LONG_BE.get(source, i + 16);
+              s[a + 3] = (long) LONG_BE.get(source, i + 24);
+              cost = VERY_LOW_TIER_GAS;
               step = 1;
-              delta = -1;
+              delta = 0;
             }
           }
         }
-        case ARM_CALLDATASIZE -> { // CallDataSizeOperationV2.calldatasize
+        // END automatically copied from MloadOperationV2.loadWord
+        // BEGIN automatically copied from CallDataSizeOperationV2.calldatasize; edit it there
+        case INLINE_CALLDATASIZE -> {
           final byte[] data = frame.inputDataArrayIfPresent();
           if (data != null && (sp << 2) < s.length && gas >= BASE_TIER_GAS) {
-            final int dst = base + (ARM_CALLDATASIZE << 4);
+            final int dst = base + (INLINE_CALLDATASIZE << 4);
             s[dst] = 0;
             s[dst + 1] = 0;
             s[dst + 2] = 0;
@@ -1641,50 +1558,77 @@ public class EVM {
             delta = 1;
           }
         }
-        case ARM_DIV_MOD -> { // DivOperationV2.divMod
-          if (sp >= 2 && gas >= LOW_TIER_GAS) {
-            final int a = base + (ARM_DIV_MOD << 4) - 4;
-            final int b = a - 4;
-            if ((s[a] | s[a + 1] | s[a + 2] | s[b] | s[b + 1] | s[b + 2]) == 0) {
-              final long x = s[a + 3];
-              final long y = s[b + 3];
-              s[b + 3] =
-                  y == 0
-                      ? 0L
-                      : opcode == 0x04 ? Long.divideUnsigned(x, y) : Long.remainderUnsigned(x, y);
-              cost = LOW_TIER_GAS;
-              step = 1;
-              delta = -1;
-            }
-          }
-        }
-        case ARM_OR -> { // OrOperationV2.or
-          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (ARM_OR << 4) - 4;
-            s[a - 4] |= s[a];
-            s[a - 3] |= s[a + 1];
-            s[a - 2] |= s[a + 2];
-            s[a - 1] |= s[a + 3];
-            cost = VERY_LOW_TIER_GAS;
+        // END automatically copied from CallDataSizeOperationV2.calldatasize
+        // BEGIN automatically copied from PopOperationV2.pop; edit it there
+        case INLINE_POP -> {
+          if (sp >= 1 && gas >= BASE_TIER_GAS) {
+            cost = BASE_TIER_GAS;
             step = 1;
             delta = -1;
           }
         }
-        case ARM_NOT -> { // NotOperationV2.not
-          if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (ARM_NOT << 4) - 4;
-            s[a] = ~s[a];
-            s[a + 1] = ~s[a + 1];
-            s[a + 2] = ~s[a + 2];
-            s[a + 3] = ~s[a + 3];
-            cost = VERY_LOW_TIER_GAS;
-            step = 1;
-            delta = 0;
+        // END automatically copied from PopOperationV2.pop
+        // BEGIN automatically copied from MstoreOperationV2.mstore; edit it there
+        case INLINE_MSTORE -> {
+          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (INLINE_MSTORE << 4) - 4;
+            final long location = s[a + 3];
+            if ((s[a] | s[a + 1] | s[a + 2]) == 0
+                && location >= 0
+                && location <= frame.memoryByteSize() - 32) {
+              final byte[] memory = frame.memoryArrayV2();
+              final int i = (int) location;
+              LONG_BE.set(memory, i, s[a - 4]);
+              LONG_BE.set(memory, i + 8, s[a - 3]);
+              LONG_BE.set(memory, i + 16, s[a - 2]);
+              LONG_BE.set(memory, i + 24, s[a - 1]);
+              cost = VERY_LOW_TIER_GAS;
+              step = 1;
+              delta = -2;
+            }
           }
         }
-        case ARM_GAS_LEFT -> { // GasOperationV2.gasLeft
+        // END automatically copied from MstoreOperationV2.mstore
+        // BEGIN automatically copied from JumpOperationV2.jump; edit it there
+        case INLINE_JUMP -> {
+          if (sp >= 1 && gas >= MID_TIER_GAS + JUMPDEST_GAS) {
+            final int d = base + (INLINE_JUMP << 4) - 4;
+            final long destination = s[d + 3];
+            if ((s[d] | s[d + 1] | s[d + 2]) == 0
+                && isJumpDestinationV2(codeObject.getJumpDestBitMask(), destination, code.length)) {
+              cost = MID_TIER_GAS + JUMPDEST_GAS;
+              step = (int) destination + 1 - pc;
+              delta = -1;
+            }
+          }
+        }
+        // END automatically copied from JumpOperationV2.jump
+        // BEGIN automatically copied from JumpiOperationV2.jumpi; edit it there
+        case INLINE_JUMPI -> {
+          if (sp >= 2 && gas >= HIGH_TIER_GAS) {
+            final int d = base + (INLINE_JUMPI << 4) - 4;
+            final int c = d - 4;
+            if ((s[c] | s[c + 1] | s[c + 2] | s[c + 3]) == 0) {
+              cost = HIGH_TIER_GAS;
+              step = 1;
+              delta = -2;
+              break;
+            }
+            final long destination = s[d + 3];
+            if ((s[d] | s[d + 1] | s[d + 2]) == 0
+                && gas >= HIGH_TIER_GAS + JUMPDEST_GAS
+                && isJumpDestinationV2(codeObject.getJumpDestBitMask(), destination, code.length)) {
+              cost = HIGH_TIER_GAS + JUMPDEST_GAS;
+              step = (int) destination + 1 - pc;
+              delta = -2;
+            }
+          }
+        }
+        // END automatically copied from JumpiOperationV2.jumpi
+        // BEGIN automatically copied from GasOperationV2.gasLeft; edit it there
+        case INLINE_GAS_LEFT -> {
           if ((sp << 2) < s.length && gas >= BASE_TIER_GAS) {
-            final int dst = base + (ARM_GAS_LEFT << 4);
+            final int dst = base + (INLINE_GAS_LEFT << 4);
             s[dst] = 0;
             s[dst + 1] = 0;
             s[dst + 2] = 0;
@@ -1694,46 +1638,158 @@ public class EVM {
             delta = 1;
           }
         }
-        case ARM_SIGNEXTEND -> { // SignExtendOperationV2.signextend
-          if (sp >= 2 && gas >= LOW_TIER_GAS) {
-            final int a = base + (ARM_SIGNEXTEND << 4) - 4;
-            final int v = a - 4;
-            final long index = s[a + 3];
-            if ((s[a] | s[a + 1] | s[a + 2]) == 0 && index >= 0 && index < 31) {
-              // the sign bit and the limb holding it, limbs counted from the least significant
-              final int signBit = (int) index * 8 + 7;
-              final int limb = v + 3 - (signBit >>> 6);
-              final long below = -1L >>> (63 - (signBit & 63));
-              final long fill = (s[limb] >>> (signBit & 63) & 1L) == 0 ? 0L : -1L;
-              s[limb] = (s[limb] & below) | (fill & ~below);
-              // and every limb above it
-              if (limb > v) {
-                s[v] = fill;
+        // END automatically copied from GasOperationV2.gasLeft
+        // BEGIN automatically copied from JumpDestOperationV2.jumpdest; edit it there
+        case INLINE_JUMPDEST -> {
+          if (gas >= JUMPDEST_GAS) {
+            cost = JUMPDEST_GAS;
+            step = 1;
+            delta = 0;
+          }
+        }
+        // END automatically copied from JumpDestOperationV2.jumpdest
+        // BEGIN automatically copied from Push0OperationV2.push0; edit it there
+        case INLINE_PUSH0 -> {
+          if (shanghai && (sp << 2) < s.length && gas >= BASE_TIER_GAS) {
+            final int dst = base + (INLINE_PUSH0 << 4);
+            s[dst] = 0;
+            s[dst + 1] = 0;
+            s[dst + 2] = 0;
+            s[dst + 3] = 0;
+            cost = BASE_TIER_GAS;
+            step = 1;
+            delta = 1;
+          }
+        }
+        // END automatically copied from Push0OperationV2.push0
+        // BEGIN automatically copied from PushOperationV2.push1; edit it there
+        case INLINE_PUSH1 -> {
+          if ((sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
+            final int dst = base + (INLINE_PUSH1 << 4);
+            final int i = pcBase + (INLINE_PUSH1 << 4);
+            s[dst] = 0;
+            s[dst + 1] = 0;
+            s[dst + 2] = 0;
+            s[dst + 3] = i + 1 < code.length ? code[i + 1] & 0xff : 0;
+            cost = VERY_LOW_TIER_GAS;
+            step = 2;
+            delta = 1;
+          }
+        }
+        // END automatically copied from PushOperationV2.push1
+        // BEGIN automatically copied from PushOperationV2.push2; edit it there
+        case INLINE_PUSH2 -> {
+          final int i = pcBase + (INLINE_PUSH2 << 4);
+          if ((sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS && i + 2 < code.length) {
+            final int immediate = (code[i + 1] & 0xff) << 8 | (code[i + 2] & 0xff);
+            final int following = i + 3 < code.length ? code[i + 3] & 0xff : 0;
+            if (following == 0x56) {
+              if (gas >= VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS
+                  && isJumpDestinationV2(codeObject.getJumpDestBitMask(), immediate, code.length)) {
+                // PUSH2 JUMP JUMPDEST, without the destination going through the stack
+                cost = VERY_LOW_TIER_GAS + MID_TIER_GAS + JUMPDEST_GAS;
+                step = immediate + 1 - pc;
+                delta = 0;
+                break;
               }
-              if (limb > v + 1) {
-                s[v + 1] = fill;
+            } else if (following == 0x57 && sp >= 1 && gas >= VERY_LOW_TIER_GAS + HIGH_TIER_GAS) {
+              final int c = base + (INLINE_PUSH2 << 4) - 4;
+              if ((s[c] | s[c + 1] | s[c + 2] | s[c + 3]) == 0) {
+                // PUSH2 JUMPI, not taken
+                cost = VERY_LOW_TIER_GAS + HIGH_TIER_GAS;
+                step = 4;
+                delta = -1;
+                break;
               }
-              if (limb > v + 2) {
-                s[v + 2] = fill;
+              if (gas >= VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS
+                  && isJumpDestinationV2(codeObject.getJumpDestBitMask(), immediate, code.length)) {
+                // PUSH2 JUMPI JUMPDEST, taken
+                cost = VERY_LOW_TIER_GAS + HIGH_TIER_GAS + JUMPDEST_GAS;
+                step = immediate + 1 - pc;
+                delta = -1;
+                break;
               }
             }
-            cost = LOW_TIER_GAS;
-            step = 1;
-            delta = -1;
+            final int dst = base + (INLINE_PUSH2 << 4);
+            s[dst] = 0;
+            s[dst + 1] = 0;
+            s[dst + 2] = 0;
+            s[dst + 3] = immediate;
+            cost = VERY_LOW_TIER_GAS;
+            step = 3;
+            delta = 1;
           }
         }
-        case ARM_XOR -> { // XorOperationV2.xor
-          if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (ARM_XOR << 4) - 4;
-            s[a - 4] ^= s[a];
-            s[a - 3] ^= s[a + 1];
-            s[a - 2] ^= s[a + 2];
-            s[a - 1] ^= s[a + 3];
+        // END automatically copied from PushOperationV2.push2
+        // BEGIN automatically copied from PushOperationV2.push; edit it there
+        case INLINE_PUSH -> {
+          if ((sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
+            final int dst = base + (INLINE_PUSH << 4);
+            final int block = pc >>> 6;
+            final long value =
+                codeObject
+                    .pushValues()[
+                    codeObject.pushBase()[block]
+                        + Long.bitCount(codeObject.pushBits()[block] & ((1L << (pc & 63)) - 1))];
+            if (opcode <= 0x67) { // PUSH1-8, the value itself
+              s[dst] = 0;
+              s[dst + 1] = 0;
+              s[dst + 2] = 0;
+              s[dst + 3] = value;
+            } else { // PUSH9-32, where the wide values start
+              final long[] wide = codeObject.pushWide();
+              final int o = (int) value;
+              s[dst] = wide[o];
+              s[dst + 1] = wide[o + 1];
+              s[dst + 2] = wide[o + 2];
+              s[dst + 3] = wide[o + 3];
+            }
+            cost = VERY_LOW_TIER_GAS;
+            step = opcode - 0x5e;
+            delta = 1;
+          }
+        }
+        // END automatically copied from PushOperationV2.push
+        // BEGIN automatically copied from DupOperationV2.dup; edit it there
+        case INLINE_DUP -> {
+          final int depth = opcode - 0x7f;
+          if (sp >= depth && (sp << 2) < s.length && gas >= VERY_LOW_TIER_GAS) {
+            final int from = (base + (INLINE_DUP << 4)) - (depth << 2);
+            final int to = base + (INLINE_DUP << 4);
+            s[to] = s[from];
+            s[to + 1] = s[from + 1];
+            s[to + 2] = s[from + 2];
+            s[to + 3] = s[from + 3];
             cost = VERY_LOW_TIER_GAS;
             step = 1;
-            delta = -1;
+            delta = 1;
           }
         }
+        // END automatically copied from DupOperationV2.dup
+        // BEGIN automatically copied from SwapOperationV2.swap; edit it there
+        case INLINE_SWAP -> {
+          final int depth = opcode - 0x8f;
+          if (sp > depth && gas >= VERY_LOW_TIER_GAS) {
+            final int a = base + (INLINE_SWAP << 4) - 4;
+            final int b = (base + (INLINE_SWAP << 4) - 4) - (depth << 2);
+            long t = s[a];
+            s[a] = s[b];
+            s[b] = t;
+            t = s[a + 1];
+            s[a + 1] = s[b + 1];
+            s[b + 1] = t;
+            t = s[a + 2];
+            s[a + 2] = s[b + 2];
+            s[b + 2] = t;
+            t = s[a + 3];
+            s[a + 3] = s[b + 3];
+            s[b + 3] = t;
+            cost = VERY_LOW_TIER_GAS;
+            step = 1;
+            delta = 0;
+          }
+        }
+        // END automatically copied from SwapOperationV2.swap
         // END GENERATED arms
         default -> {
           // everything else goes through executeOperationV2 below

@@ -14,12 +14,12 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
-import static org.hyperledger.besu.evm.v2.operation.Arms.LOW_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.done;
-import static org.hyperledger.besu.evm.v2.operation.Arms.result;
-import static org.hyperledger.besu.evm.v2.operation.Arms.top;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -54,7 +54,7 @@ public class SignExtendOperationV2 extends AbstractFixedCostOperationV2 {
     return result(frame, signextend(stack, sp, top(sp), ANY_GAS), 2, 1);
   }
 
-  @Arm(rank = 26, opcodes = 0x0b)
+  @InlineInEvmLoop(opcodes = 0x0b)
   static long signextend(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 2 && gas >= LOW_TIER_GAS) {
       final int a = top;

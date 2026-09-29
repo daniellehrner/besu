@@ -14,11 +14,11 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
-import static org.hyperledger.besu.evm.v2.operation.Arms.JUMPDEST_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.MID_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.done;
-import static org.hyperledger.besu.evm.v2.operation.Arms.isJumpDestinationV2;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.JUMPDEST_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.MID_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.isJumpDestinationV2;
 
 import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
@@ -85,7 +85,7 @@ public class JumpOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /** JUMP, and the JUMPDEST it lands on. */
-  @Arm(rank = 9, opcodes = 0x56)
+  @InlineInEvmLoop(opcodes = 0x56)
   static long jump(
       final long[] s,
       final int sp,

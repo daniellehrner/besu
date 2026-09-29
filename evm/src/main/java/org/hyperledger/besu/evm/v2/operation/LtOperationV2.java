@@ -14,12 +14,12 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
-import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.done;
-import static org.hyperledger.besu.evm.v2.operation.Arms.result;
-import static org.hyperledger.besu.evm.v2.operation.Arms.top;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -55,7 +55,7 @@ public class LtOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /** LT, GT, SLT and SGT. */
-  @Arm(rank = 17, first = 0x10, last = 0x13)
+  @InlineInEvmLoop(first = 0x10, last = 0x13)
   static long compare(
       final long[] s, final int sp, final int top, final int opcode, final long gas) {
     if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {

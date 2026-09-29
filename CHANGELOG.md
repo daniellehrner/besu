@@ -79,7 +79,7 @@
 - The experimental EVM v2 interpreter loop keeps the stack pointer, the stack and its bound in locals instead of reaching back through the message frame for them on every opcode, and carries DUP, SWAP, JUMPDEST, POP, ISZERO, AND, EQ, LT, GT and PUSH0 inline. Those are two thirds of all dispatches and every one of them is fixed cost and touches nothing but the stack, so they no longer call an operation or read a result object. Anything short of stack depth, stack space or gas falls out to the operation, which still owns the halt.
 - The standard EVM interpreter runs untraced execution, which is every block import, in a loop of its own that keeps the program counter, the gas and the stack in locals and executes PUSH1, PUSH2, DUP, SWAP, POP, JUMPDEST, JUMP, JUMPI, EQ, LT, GT, ISZERO and PUSH0 inline, 1.8x to 6x faster on contract code in benchmarks.
 - On the experimental EVM v2, untraced execution runs in a loop of its own that keeps the program counter, the gas and the stack pointer in locals and executes every operation below about 10 gas that needs only the stack, the code, the input data or already expanded memory inline.
-- The inline arms of the experimental EVM v2 interpreter loop are generated from `@Arm` methods in the operation classes, which run the same code, and every build checks them against the rules that keep the loop fast.
+- The inline arms of the experimental EVM v2 interpreter loop are generated from `@InlineInEvmLoop` methods in the operation classes, which run the same code, and every build checks them against the rules that keep the loop fast.
 
 ## 26.8.1
 

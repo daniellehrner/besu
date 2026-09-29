@@ -20,11 +20,14 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a method of an operation class as that operation's arm in the untraced EVM v2 loop, which
- * runs the cheap operations inline, one arm of its switch each. {@code ./gradlew
- * :evm:generateEvmV2Loop} copies the body of every such method into the loop in EVM.java, between
- * the generated markers, and every build checks that the loop still holds exactly that. Edit the
- * arm here, in its operation's class, never in EVM.java.
+ * Marks a method of an operation class as code to inline into the untraced EVM v2 loop, which runs
+ * the cheap operations inline, one arm of its switch each. {@code ./gradlew :evm:generateEvmV2Loop}
+ * copies the body of every such method into the loop in EVM.java, between the generated markers and
+ * with a comment naming the method, and every build checks that the loop still holds exactly that.
+ * Edit the method here, in its operation's class, never the copy in EVM.java.
+ *
+ * <p>The loop runs the arms in the order of their lowest opcode. Opcodes are written in hex, the
+ * way opcode tables list them.
  *
  * <p>The loop is fast only while C2 keeps its state in registers, and a small change to one arm can
  * cost every operation a large share of its time. The generator therefore rejects an arm that
@@ -42,8 +45,8 @@ import java.lang.annotation.Target;
  *       enter: the same program ran at 2.7k or 16k us from one JVM to the next.
  *   <li>No field and no local of the loop other than the parameters listed below. A field is a load
  *       C2 hoists to the dispatch, where it runs for every operation. The constants and helpers an
- *       arm names come from {@link Arms}, statically imported, as EVM.java imports them, so that
- *       the name means the same in the loop as in the arm.
+ *       arm names come from {@link EvmLoopInlining}, statically imported, as EVM.java imports them,
+ *       so that the name means the same in the loop as in the arm.
  *   <li>Stack indices are built on {@code top} or {@code next}, code indices on {@code at}, never
  *       on {@code sp} or {@code pc}. The generator turns those three into indices carrying the
  *       arm's own bias. Built on {@code sp} directly, the same index appears in many arms, and C2
@@ -59,12 +62,12 @@ import java.lang.annotation.Target;
  * which owns every halt.
  *
  * <p>Where an arm runs every case in which its operation succeeds, the class's own implementation
- * calls the arm through {@link Arms#result}, giving it all the gas it wants since the class's
- * callers charge the gas, so that the loop and the class share one implementation. The other
- * classes keep their own: PUSH2, JUMP and JUMPI also run the operation after them, which a tracer
- * has to see on its own, and MUL, DIV, MOD, MSTORE, MLOAD, CALLDATALOAD and CALLDATASIZE run only
- * their common cases in the arm. Operations that share an arm, such as LT, GT, SLT and SGT, keep it
- * in the class of the first of them, as one arm costs the loop less bytecode than four.
+ * calls the arm through {@link EvmLoopInlining#result}, giving it all the gas it wants since the
+ * class's callers charge the gas, so that the loop and the class share one implementation. The
+ * other classes keep their own: PUSH2, JUMP and JUMPI also run the operation after them, which a
+ * tracer has to see on its own, and MUL, DIV, MOD, MSTORE, MLOAD, CALLDATALOAD and CALLDATASIZE run
+ * only their common cases in the arm. Operations that share an arm, such as LT, GT, SLT and SGT,
+ * keep it in the class of the first of them, as one arm costs the loop less bytecode than four.
  *
  * <p>An arm is a static method returning long, and takes its parameters by name from the loop,
  * declaring only the ones it uses: {@code s} the stack, {@code sp} the number of items on it,
@@ -79,16 +82,7 @@ import java.lang.annotation.Target;
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.METHOD)
-@interface Arm {
-
-  /**
-   * Where the arm comes in the loop, counting from 1. The arms are ranked by how often mainnet
-   * executes their operations: C2 inlines in the loop's order and stops when the loop reaches its
-   * size budget.
-   *
-   * @return the rank
-   */
-  int rank();
+@interface InlineInEvmLoop {
 
   /**
    * The opcodes the arm runs, besides any range given by {@link #first} and {@link #last}.

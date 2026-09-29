@@ -14,9 +14,9 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
-import static org.hyperledger.besu.evm.v2.operation.Arms.LOW_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
 
 import org.hyperledger.besu.evm.UInt256;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -77,7 +77,7 @@ public class MulOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /** MUL when either factor fits in 64 bits. */
-  @Arm(rank = 20, opcodes = 0x02)
+  @InlineInEvmLoop(opcodes = 0x02)
   static long mul(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 2 && gas >= LOW_TIER_GAS) {
       final int a = top;

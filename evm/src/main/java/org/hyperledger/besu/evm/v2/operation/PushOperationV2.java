@@ -14,16 +14,16 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
-import static org.hyperledger.besu.evm.v2.operation.Arms.HIGH_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.JUMPDEST_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.MID_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.done;
-import static org.hyperledger.besu.evm.v2.operation.Arms.isJumpDestinationV2;
-import static org.hyperledger.besu.evm.v2.operation.Arms.next;
-import static org.hyperledger.besu.evm.v2.operation.Arms.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.HIGH_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.JUMPDEST_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.MID_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.isJumpDestinationV2;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.next;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
 
 import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -88,7 +88,7 @@ public class PushOperationV2 extends AbstractFixedCostOperationV2 {
     return push(s, sp, next(sp), pc, opcode, codeObject, ANY_GAS);
   }
 
-  @Arm(rank = 1, opcodes = 0x60)
+  @InlineInEvmLoop(opcodes = 0x60)
   static long push1(
       final long[] s,
       final int sp,
@@ -112,7 +112,7 @@ public class PushOperationV2 extends AbstractFixedCostOperationV2 {
    * PUSH1-32, although the loop runs PUSH1 and PUSH2 through arms of their own; the immediate was
    * decoded when the code was analysed.
    */
-  @Arm(rank = 2, first = 0x62, last = 0x7f)
+  @InlineInEvmLoop(first = 0x62, last = 0x7f)
   static long push(
       final long[] s,
       final int sp,
@@ -148,7 +148,7 @@ public class PushOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /** PUSH2, and the PUSH2 JUMP and PUSH2 JUMPI that follow it. */
-  @Arm(rank = 7, opcodes = 0x61)
+  @InlineInEvmLoop(opcodes = 0x61)
   static long push2(
       final long[] s,
       final int sp,

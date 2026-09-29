@@ -84,7 +84,7 @@ publishing {
   }
 }
 
-// The inline arms of the EVM v2 interpreter loop are generated into EVM.java from the @Arm
+// The inline arms of the EVM v2 interpreter loop are generated into EVM.java from the @InlineInEvmLoop
 // methods of the operation classes, and every build checks them against the rules that keep the
 // loop fast.
 sourceSets {
@@ -103,7 +103,7 @@ def evmV2LoopFiles = [
 
 tasks.register('generateEvmV2Loop', JavaExec) {
   group = 'build'
-  description = 'Regenerates the inline arms of the EVM v2 interpreter loop in EVM.java from the @Arm methods'
+  description = 'Regenerates the inline arms of the EVM v2 interpreter loop in EVM.java from the @InlineInEvmLoop methods'
   classpath = sourceSets.loopgen.runtimeClasspath
   mainClass = 'org.hyperledger.besu.evm.loopgen.EvmV2LoopGenerator'
   workingDir = projectDir

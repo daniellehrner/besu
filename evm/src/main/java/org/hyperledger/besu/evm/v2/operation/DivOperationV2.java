@@ -14,9 +14,9 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
-import static org.hyperledger.besu.evm.v2.operation.Arms.LOW_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
 
 import org.hyperledger.besu.evm.UInt256;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -75,9 +75,7 @@ public class DivOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /** DIV and MOD when both operands fit in 64 bits. */
-  @Arm(
-      rank = 22,
-      opcodes = {0x04, 0x06})
+  @InlineInEvmLoop(opcodes = {0x04, 0x06})
   static long divMod(
       final long[] s, final int sp, final int top, final int opcode, final long gas) {
     if (sp >= 2 && gas >= LOW_TIER_GAS) {

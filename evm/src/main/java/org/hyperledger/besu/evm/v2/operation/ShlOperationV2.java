@@ -14,12 +14,12 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
-import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.done;
-import static org.hyperledger.besu.evm.v2.operation.Arms.result;
-import static org.hyperledger.besu.evm.v2.operation.Arms.top;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -58,7 +58,7 @@ public class ShlOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /** SHL, SHR and SAR, Constantinople onwards. */
-  @Arm(rank = 18, first = 0x1b, last = 0x1d)
+  @InlineInEvmLoop(first = 0x1b, last = 0x1d)
   static long shift(
       final long[] s,
       final int sp,

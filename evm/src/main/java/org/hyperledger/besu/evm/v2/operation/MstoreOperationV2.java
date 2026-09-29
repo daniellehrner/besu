@@ -14,10 +14,10 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
-import static org.hyperledger.besu.evm.v2.operation.Arms.LONG_BE;
-import static org.hyperledger.besu.evm.v2.operation.Arms.VERY_LOW_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LONG_BE;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
 
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
@@ -70,7 +70,7 @@ public class MstoreOperationV2 extends AbstractOperationV2 {
   }
 
   /** MSTORE within the memory already expanded. */
-  @Arm(rank = 11, opcodes = 0x52)
+  @InlineInEvmLoop(opcodes = 0x52)
   static long mstore(
       final long[] s, final int sp, final int top, final MessageFrame frame, final long gas) {
     if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {

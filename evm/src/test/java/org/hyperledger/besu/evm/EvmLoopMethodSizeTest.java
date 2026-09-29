@@ -115,7 +115,7 @@ class EvmLoopMethodSizeTest {
     assertThat(problems)
         .as(
             "the untraced v2 loop may only call what C2 inlines at any call site; a call it does "
-                + "not inline makes it keep the loop's locals in memory, see @Arm")
+                + "not inline makes it keep the loop's locals in memory, see @InlineInEvmLoop")
         .isEmpty();
   }
 
@@ -160,7 +160,7 @@ class EvmLoopMethodSizeTest {
   private static boolean callsArmResult(final MethodModel method) {
     for (final CodeElement element : method.code().orElseThrow()) {
       if (element instanceof InvokeInstruction invoke
-          && invoke.owner().asInternalName().equals(OPERATIONS + "Arms")
+          && invoke.owner().asInternalName().equals(OPERATIONS + "EvmLoopInlining")
           && invoke.name().equalsString("result")) {
         return true;
       }

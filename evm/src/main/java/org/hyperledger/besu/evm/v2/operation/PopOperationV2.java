@@ -14,11 +14,11 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.BASE_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
-import static org.hyperledger.besu.evm.v2.operation.Arms.done;
-import static org.hyperledger.besu.evm.v2.operation.Arms.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.BASE_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -56,7 +56,7 @@ public class PopOperationV2 extends AbstractFixedCostOperationV2 {
     return result(frame, pop(sp, ANY_GAS), 1, 0);
   }
 
-  @Arm(rank = 6, opcodes = 0x50)
+  @InlineInEvmLoop(opcodes = 0x50)
   static long pop(final int sp, final long gas) {
     if (sp >= 1 && gas >= BASE_TIER_GAS) {
       return done(BASE_TIER_GAS, 1, -1);

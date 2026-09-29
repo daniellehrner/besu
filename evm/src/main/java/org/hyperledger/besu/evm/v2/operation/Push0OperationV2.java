@@ -14,12 +14,12 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.Arms.ANY_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.BASE_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
-import static org.hyperledger.besu.evm.v2.operation.Arms.done;
-import static org.hyperledger.besu.evm.v2.operation.Arms.next;
-import static org.hyperledger.besu.evm.v2.operation.Arms.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.BASE_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.next;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -60,7 +60,7 @@ public class Push0OperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /** PUSH0, Shanghai onwards. */
-  @Arm(rank = 19, opcodes = 0x5f)
+  @InlineInEvmLoop(opcodes = 0x5f)
   static long push0(
       final long[] s, final int sp, final int next, final boolean shanghai, final long gas) {
     if (shanghai && (sp << 2) < s.length && gas >= BASE_TIER_GAS) {

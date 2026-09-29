@@ -15,7 +15,7 @@
 package org.hyperledger.besu.evm.v2.operation;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hyperledger.besu.evm.v2.operation.Arms.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -31,7 +31,7 @@ import org.junit.jupiter.api.Test;
  * Checks the arms of the untraced v2 loop against BigInteger. The loop runs these methods' bodies
  * and the operation classes call the methods, so this covers both.
  */
-class ArmsTest {
+class InlineInEvmLoopTest {
 
   private static final BigInteger MOD = BigInteger.ONE.shiftLeft(256);
   private static final BigInteger MAX = MOD.subtract(BigInteger.ONE);
@@ -221,9 +221,9 @@ class ArmsTest {
             continue;
           }
           assertThat(outcome).as(what).isNotEqualTo(FALLBACK);
-          assertThat(Arms.cost(outcome)).as(what).isEqualTo(op.cost());
-          assertThat(Arms.step(outcome)).as(what).isEqualTo(1);
-          assertThat(Arms.delta(outcome)).as(what).isEqualTo(-1);
+          assertThat(EvmLoopInlining.cost(outcome)).as(what).isEqualTo(op.cost());
+          assertThat(EvmLoopInlining.step(outcome)).as(what).isEqualTo(1);
+          assertThat(EvmLoopInlining.delta(outcome)).as(what).isEqualTo(-1);
           assertThat(get(s, 0)).as(what).isEqualTo(op.reference().apply(a, b));
         }
       }
@@ -239,8 +239,8 @@ class ArmsTest {
         final long outcome = op.arm().run(s, 1, 0, op.cost());
         final String what = op.name() + "(" + a.toString(16) + ")";
         assertThat(outcome).as(what).isNotEqualTo(FALLBACK);
-        assertThat(Arms.cost(outcome)).as(what).isEqualTo(op.cost());
-        assertThat(Arms.delta(outcome)).as(what).isZero();
+        assertThat(EvmLoopInlining.cost(outcome)).as(what).isEqualTo(op.cost());
+        assertThat(EvmLoopInlining.delta(outcome)).as(what).isZero();
         assertThat(get(s, 0)).as(what).isEqualTo(op.reference().apply(a));
       }
     }
@@ -273,11 +273,11 @@ class ArmsTest {
         put(s, slot, BigInteger.valueOf(slot + 100));
       }
       final long dup = DupOperationV2.dup(s, 17, 17 << 2, 0x7f + depth, 3);
-      assertThat(Arms.delta(dup)).isEqualTo(1);
+      assertThat(EvmLoopInlining.delta(dup)).isEqualTo(1);
       assertThat(get(s, 17)).as("DUP%d", depth).isEqualTo(BigInteger.valueOf(117 - depth));
 
       final long swap = SwapOperationV2.swap(s, 17, 16 << 2, 0x8f + depth, 3);
-      assertThat(Arms.delta(swap)).isZero();
+      assertThat(EvmLoopInlining.delta(swap)).isZero();
       assertThat(get(s, 16)).as("SWAP%d", depth).isEqualTo(BigInteger.valueOf(116 - depth));
       assertThat(get(s, 16 - depth)).as("SWAP%d", depth).isEqualTo(BigInteger.valueOf(116));
     }
@@ -285,10 +285,10 @@ class ArmsTest {
 
   @Test
   void outcomesCarryNegativeStepsAndDeltas() {
-    final long outcome = Arms.done(14, -70_000, -2);
-    assertThat(Arms.cost(outcome)).isEqualTo(14);
-    assertThat(Arms.step(outcome)).isEqualTo(-70_000);
-    assertThat(Arms.delta(outcome)).isEqualTo(-2);
+    final long outcome = EvmLoopInlining.done(14, -70_000, -2);
+    assertThat(EvmLoopInlining.cost(outcome)).isEqualTo(14);
+    assertThat(EvmLoopInlining.step(outcome)).isEqualTo(-70_000);
+    assertThat(EvmLoopInlining.delta(outcome)).isEqualTo(-2);
     assertThat(outcome).isNotEqualTo(FALLBACK);
   }
 }
