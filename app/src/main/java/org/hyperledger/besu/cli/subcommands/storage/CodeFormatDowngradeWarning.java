@@ -30,9 +30,9 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Tells the operator how to undo the upgrade to the versioned code format, once it has happened,
- * with a command that can be pasted as it is: the same Besu executable and arguments this process
- * was started with, run as the same user, followed by the revert subcommand.
+ * Tells the operator how to undo the upgrade to code stored with its analysis, once it has
+ * happened, with a command that can be pasted as it is: the same Besu executable and arguments this
+ * process was started with, run as the same user, followed by the revert subcommand.
  */
 public final class CodeFormatDowngradeWarning {
   private static final Pattern SAFE_ARGUMENT = Pattern.compile("[A-Za-z0-9_@%+=:,./-]+");
@@ -58,7 +58,8 @@ public final class CodeFormatDowngradeWarning {
   }
 
   /**
-   * The warning to log when opening the storage upgraded the database to the versioned code format.
+   * The warning to log when opening the storage upgraded the database to code stored with its
+   * analysis.
    *
    * @param dataDir the data directory
    * @param before the storage format recorded before the storage was opened
