@@ -71,7 +71,8 @@ public class MloadOperationV2 extends AbstractOperationV2 {
   /**
    * MLOAD and CALLDATALOAD, which both read a word from an array into the top item: MLOAD from
    * memory already expanded, CALLDATALOAD from the input data unless the word straddles its end.
-   * They share an arm because each read inlines a chain of VarHandle methods into the loop.
+   * They share one inline method because each read inlines a chain of VarHandle methods into the
+   * loop.
    */
   @InlineInEvmLoop(opcodes = {0x51, 0x35})
   static long loadWord(

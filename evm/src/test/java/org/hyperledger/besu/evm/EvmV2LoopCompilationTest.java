@@ -131,7 +131,7 @@ class EvmV2LoopCompilationTest {
   }
 
   /**
-   * Runs one program that reaches every arm of the loop, and the general path, until C2 has
+   * Runs one program that reaches every inline case of the loop, and the general path, until C2 has
    * compiled the loop.
    */
   public static final class Workload {
@@ -165,7 +165,10 @@ class EvmV2LoopCompilationTest {
       }
     }
 
-    /** A loop over one use of every arm, some general-path operations, and the jump variants. */
+    /**
+     * A loop over one use of every inline case, some general-path operations, and the jump
+     * variants.
+     */
     static Bytes program() {
       final Assembler a = new Assembler();
       a.hex("6101005b"); // PUSH2 0x100, the counter, then the head of the loop

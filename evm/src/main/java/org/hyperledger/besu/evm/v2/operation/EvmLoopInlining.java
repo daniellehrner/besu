@@ -25,9 +25,9 @@ import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 
 /**
- * What the arms of the untraced EVM v2 loop, marked with {@link InlineInEvmLoop}, are written with:
- * the constants and helpers they may name, which EVM.java imports from here too, and the way an
- * operation class runs its arm against the state held in the frame.
+ * What the methods copied into the untraced EVM v2 loop, marked with {@link InlineInEvmLoop}, are
+ * written with: the constants and helpers they may name, which EVM.java imports from here too, and
+ * the way an operation class runs such a method against the state held in the frame.
  */
 public final class EvmLoopInlining {
 
@@ -57,16 +57,16 @@ public final class EvmLoopInlining {
   public static final VarHandle LONG_BE =
       MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
 
-  /** What an arm returns when it leaves the operation to its class. */
+  /** What an inline method returns when it leaves the operation to its class. */
   static final long FALLBACK = -1L;
 
   /**
-   * The gas to give an arm from an operation class: whoever calls an operation charges its gas, so
-   * the arm must not stop at its own gas check.
+   * The gas to give an inline method from an operation class: whoever calls an operation charges
+   * its gas, so the method must not stop at its own gas check.
    */
   static final long ANY_GAS = Long.MAX_VALUE;
 
-  /** Results by gas cost, which is at most 14 for an arm. */
+  /** Results by gas cost, which is at most 14 for an inline method. */
   private static final OperationResult[] SUCCESS = new OperationResult[16];
 
   static {
@@ -78,9 +78,9 @@ public final class EvmLoopInlining {
   private EvmLoopInlining() {}
 
   /**
-   * Whether a destination is a JUMPDEST of the code. The arms call it, so it has to stay within
-   * C2's MaxInlineSize of 35 bytes of bytecode; one unsigned comparison is the range check {@code 0
-   * <= destination < codeSize}.
+   * Whether a destination is a JUMPDEST of the code. The inline methods call it, so it has to stay
+   * within C2's MaxInlineSize of 35 bytes of bytecode; one unsigned comparison is the range check
+   * {@code 0 <= destination < codeSize}.
    *
    * @param jumpDestBitMask the code's JUMPDEST bits
    * @param destination the destination
@@ -93,7 +93,7 @@ public final class EvmLoopInlining {
         && (jumpDestBitMask[(int) (destination >>> 6)] & 1L << destination) != 0L;
   }
 
-  /** What an arm returns when it has run the operation: the gas, the pc's step, the stack delta. */
+  /** What an inline method returns when it has run the operation: gas, pc step, stack delta. */
   static long done(final long cost, final int step, final int delta) {
     return cost << 32 | (step & 0xffffffL) << 8 | (delta & 0xffL);
   }
@@ -110,18 +110,21 @@ public final class EvmLoopInlining {
     return (byte) outcome;
   }
 
-  /** The index of the top item's first limb, which an arm takes as {@code top}. */
+  /** The index of the top item's first limb, which an inline method takes as top. */
   static int top(final int sp) {
     return (sp - 1) << 2;
   }
 
-  /** The index of the first limb of the slot above the top item, which an arm takes as next. */
+  /**
+   * The index of the first limb of the slot above the top item, which an inline method takes as
+   * next.
+   */
   static int next(final int sp) {
     return sp << 2;
   }
 
   /**
-   * The result of an operation that called its arm. It is a method of its own so that the
+   * The result of an operation that called its inline method. It is a method of its own so that the
    * operations' own methods stay within C2's MaxInlineSize of 35 bytes: the general path's switch
    * calls them, and C2 counts no case of a switch that large as hot.
    */
@@ -130,7 +133,7 @@ public final class EvmLoopInlining {
     return outcome != FALLBACK ? ran(frame, outcome) : halt(frame, consumed, produced);
   }
 
-  /** Moves the stack and the program counter as an arm that ran its operation says. */
+  /** Moves the stack and the program counter as an inline method that ran its operation says. */
   private static OperationResult ran(final MessageFrame frame, final long outcome) {
     frame.setTopV2(frame.stackTopV2() + delta(outcome));
     final int step = step(outcome);
@@ -142,8 +145,8 @@ public final class EvmLoopInlining {
   }
 
   /**
-   * The halt of an operation whose arm did not run it. Given all the gas it wants, an arm stops
-   * only for a stack it cannot use.
+   * The halt of an operation whose inline method did not run it. Given all the gas it wants, the
+   * method stops only for a stack it cannot use.
    */
   private static OperationResult halt(
       final MessageFrame frame, final int consumed, final int produced) {
@@ -153,6 +156,6 @@ public final class EvmLoopInlining {
     if (!frame.stackHasSpaceV2(produced - consumed)) {
       return OVERFLOW_RESPONSE;
     }
-    throw new IllegalStateException("an arm did not run an operation it should have run");
+    throw new IllegalStateException("an inline method did not run an operation it should have run");
   }
 }

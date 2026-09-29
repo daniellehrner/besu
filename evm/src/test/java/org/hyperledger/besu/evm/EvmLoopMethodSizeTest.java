@@ -122,11 +122,11 @@ class EvmLoopMethodSizeTest {
   /**
    * The traced loop, and the untraced loop's general path, reach an operation's class through a
    * switch in which C2 counts no case as hot, since each is a small share of the calls. There C2
-   * inlines a callee only up to MaxInlineSize. An operation that runs through its arm has little
-   * else to do, and has to fit, or the traced loop pays for a call per operation.
+   * inlines a callee only up to MaxInlineSize. An operation that runs through its inline method has
+   * little else to do, and has to fit, or the traced loop pays for a call per operation.
    */
   @Test
-  void operationsRunThroughTheirArmFitMaxInlineSize() {
+  void operationsRunThroughTheirInlineMethodFitMaxInlineSize() {
     final List<String> problems = new ArrayList<>();
     final Set<String> checked = new TreeSet<>();
     for (final String general : List.of("executeOperationV2", "coldOperation")) {
@@ -139,7 +139,7 @@ class EvmLoopMethodSizeTest {
         final String owner = invoke.owner().asInternalName();
         final MethodModel callee =
             method(owner, invoke.name().stringValue(), invoke.type().stringValue()).orElseThrow();
-        if (!callsArmResult(callee)) {
+        if (!callsInliningResult(callee)) {
           continue;
         }
         final String name =
@@ -151,13 +151,15 @@ class EvmLoopMethodSizeTest {
         }
       }
     }
-    assertThat(checked).as("operations that run through their arm").hasSizeGreaterThan(20);
+    assertThat(checked)
+        .as("operations that run through their inline method")
+        .hasSizeGreaterThan(20);
     assertThat(problems).as("checked %s", checked).isEmpty();
   }
 
   private static final String OPERATIONS = "org/hyperledger/besu/evm/v2/operation/";
 
-  private static boolean callsArmResult(final MethodModel method) {
+  private static boolean callsInliningResult(final MethodModel method) {
     for (final CodeElement element : method.code().orElseThrow()) {
       if (element instanceof InvokeInstruction invoke
           && invoke.owner().asInternalName().equals(OPERATIONS + "EvmLoopInlining")

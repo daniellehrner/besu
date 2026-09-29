@@ -1087,11 +1087,11 @@ public class EVM {
     }
   }
 
-  // The arms of the untraced v2 loop. It switches on an opcode's arm rather than on the opcode, so
-  // that the switch's table has an entry per arm instead of one per opcode up to the highest one
-  // handled inline: that table is bytecode of the loop and counts against its inlining budget.
-  // Opcodes without an arm map to 0 and take the general path.
-  // BEGIN GENERATED arm table for the copies of the @InlineInEvmLoop methods of the v2
+  // The cases of the untraced v2 loop. It switches on an opcode's case rather than on the opcode,
+  // so that the switch's table has an entry per case instead of one per opcode up to the highest
+  // one handled inline: that table is bytecode of the loop and counts against its inlining budget.
+  // Opcodes without a case map to 0 and take the general path.
+  // BEGIN GENERATED case table for the copies of the @InlineInEvmLoop methods of the v2
   // operations below; do not edit, run ./gradlew :evm:generateEvmV2Loop
   private static final int INLINE_ADD = 1;
   private static final int INLINE_MUL = 2;
@@ -1121,8 +1121,8 @@ public class EVM {
   private static final int INLINE_DUP = 26;
   private static final int INLINE_SWAP = 27;
 
-  // Per opcode: the arm in the low byte, and above it a bias of minus the arm times 16,
-  // which the arm's stack and code indices cancel again; see runToHaltV2Untraced.
+  // Per opcode: its case in the low byte, and above it a bias of minus the case times 16,
+  // which the case's stack and code indices cancel again; see runToHaltV2Untraced.
   private static final int[] DISPATCH = new int[256];
 
   static {
@@ -1157,29 +1157,29 @@ public class EVM {
     dispatch(INLINE_SWAP, 0x90, 0x9f);
   }
 
-  private static void dispatch(final int arm, final int first, final int last) {
+  private static void dispatch(final int inlineCase, final int first, final int last) {
     for (int op = first; op <= last; op++) {
-      DISPATCH[op] = (-(arm << 4) << 8) | arm;
+      DISPATCH[op] = (-(inlineCase << 4) << 8) | inlineCase;
     }
   }
 
-  // END GENERATED arm table
+  // END GENERATED case table
 
   /**
    * The v2 loop for untraced execution, which is every block import. The program counter, the
    * remaining gas and the stack pointer live in locals, and the cheap operations that neither read
    * world state nor need more than the stack, the code, the input data or already expanded memory
-   * run inline, which is nearly all operations executed on mainnet. An inline arm handles only the
-   * case where its operation succeeds; anything else, and every other operation, goes through
+   * run inline, which is nearly all operations executed on mainnet. An inline case handles only the
+   * outcome where its operation succeeds; anything else, and every other operation, goes through
    * {@link #executeOperationV2} with the state handed back to the frame, so halting behaviour is
    * defined in one place for both loops.
    *
-   * <p>The arms between the generated markers come from the methods of the operation classes marked
-   * {@code @InlineInEvmLoop}, whose javadoc documents the rules they follow; the build rejects an
-   * arm that breaks one, and EVM.java that does not hold what the arms generate. Edit an arm in its
-   * operation's class and run {@code ./gradlew :evm:generateEvmV2Loop}. The loop around them keeps
-   * one rule of its own: no local is read after the general path's call before it is reloaded, as a
-   * local live across a call is kept in memory.
+   * <p>The cases between the generated markers are copies of the methods of the operation classes
+   * marked {@code @InlineInEvmLoop}, whose javadoc documents the rules they follow; the build
+   * rejects a method that breaks one, and EVM.java that does not hold its copies. Edit a method in
+   * its operation's class and run {@code ./gradlew :evm:generateEvmV2Loop}. The loop around them
+   * keeps one rule of its own: no local is read after the general path's call before it is
+   * reloaded, as a local live across a call is kept in memory.
    *
    * <p>C2 also stops inlining into a method once its own bytecode and everything inlined into it
    * reach 8000 bytes, after which even the frame's getters become calls. That budget, not the gas
@@ -1191,7 +1191,7 @@ public class EVM {
       return;
     }
     final Code codeObject = frame.getCode();
-    // builds the tables the PUSH and jump arms read from codeObject
+    // builds the tables the PUSH and jump cases read from codeObject
     codeObject.analyse();
     final byte[] code = codeObject.getBytes().toArrayUnsafe();
     final boolean constantinople = enableConstantinople;
@@ -1204,25 +1204,25 @@ public class EVM {
     long gas = frame.getRemainingGas();
     while (true) {
       final int opcode = pc < code.length ? code[pc] & 0xff : 0;
-      // What an inline arm that succeeds charges, how far it moves the program counter and how
-      // many items it adds. The arms leave the updates to the common tail below: the same update
-      // written out in every arm is one computation, which C2 places before the dispatch.
+      // What an inline case that succeeds charges, how far it moves the program counter and how
+      // many items it adds. The cases leave the updates to the common tail below: the same update
+      // written out in every case is one computation, which C2 places before the dispatch.
       long cost = -1;
       int step = 0;
       int delta = 0;
-      // The dispatch entry holds the arm and a bias, which the arm cancels again. Stack and code
-      // indices built on a biased pointer differ from arm to arm as far as C2 can tell, so each
-      // arm computes its own. Built on sp and pc directly, the arms share them, and C2 computes
-      // every arm's indices ahead of the dispatch, where they take the registers the loop's state
-      // needs. The arms come in the order of their lowest opcode. C2 inlines in bytecode order and
-      // stops at its size budget, which this loop has nearly used up: another arm may leave the
+      // The dispatch entry holds the case and a bias, which the case cancels again. Stack and code
+      // indices built on a biased pointer differ from case to case as far as C2 can tell, so each
+      // case computes its own. Built on sp and pc directly, the cases share them, and C2 computes
+      // every case's indices ahead of the dispatch, where they take the registers the loop's state
+      // needs. The cases come in the order of their lowest opcode. C2 inlines in bytecode order and
+      // stops at its size budget, which this loop has nearly used up: another case may leave the
       // last calls un-inlined, which EvmV2LoopCompilationTest reports.
       final int entry = DISPATCH[opcode];
       final int bias = entry >> 8;
       final int base = (sp << 2) + bias;
       final int pcBase = pc + bias;
       switch (entry & 0xff) {
-        // BEGIN GENERATED arms: copies of the @InlineInEvmLoop methods of the v2 operations;
+        // BEGIN GENERATED cases: copies of the @InlineInEvmLoop methods of the v2 operations;
         // edit those, then run ./gradlew :evm:generateEvmV2Loop
         // BEGIN automatically copied from AddOperationV2.add; edit it there
         case INLINE_ADD -> {
@@ -1826,7 +1826,7 @@ public class EVM {
           }
         }
         // END automatically copied from SwapOperationV2.swap
-        // END GENERATED arms
+        // END GENERATED cases
         default -> {
           // everything else goes through executeOperationV2 below
         }
@@ -2013,14 +2013,14 @@ public class EVM {
   }
 
   /**
-   * The arms outside the hot set, in their own method so they get their own 8000 byte budget
+   * The operations outside the hot set, in their own method so they get their own 8000 byte budget
    * instead of spending the interpreter loop's. Measured over 400 mainnet blocks these account for
    * about 5% of dispatches between them.
    *
    * @param frame the message frame
    * @param opcode the opcode to execute
    * @param code the code being executed
-   * @param pc the program counter, for the arms that read their immediate
+   * @param pc the program counter, for the operations that read their immediate
    * @return the operation result
    */
   private OperationResult coldOperation(

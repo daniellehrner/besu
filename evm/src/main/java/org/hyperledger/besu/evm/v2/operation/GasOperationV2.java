@@ -42,11 +42,11 @@ public class GasOperationV2 extends AbstractFixedCostOperationV2 {
   @Override
   public Operation.OperationResult executeFixedCostOperation(final MessageFrame frame) {
     final long gas = frame.getRemainingGas();
-    return gas < gasCost ? outOfGas(frame) : result(frame, runArm(frame, gas), 0, 1);
+    return gas < gasCost ? outOfGas(frame) : result(frame, runInline(frame, gas), 0, 1);
   }
 
-  // the arm pushes the gas left once GAS is paid, so unlike the other arms it needs the real gas
-  private static long runArm(final MessageFrame frame, final long gas) {
+  // gasLeft pushes what is left once GAS is paid, so it needs the real gas rather than ANY_GAS
+  private static long runInline(final MessageFrame frame, final long gas) {
     final int sp = frame.stackTopV2();
     return gasLeft(frame.stackDataV2(), sp, next(sp), gas);
   }

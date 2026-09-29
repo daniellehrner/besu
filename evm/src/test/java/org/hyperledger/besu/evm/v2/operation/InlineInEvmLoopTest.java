@@ -28,8 +28,8 @@ import java.util.function.UnaryOperator;
 import org.junit.jupiter.api.Test;
 
 /**
- * Checks the arms of the untraced v2 loop against BigInteger. The loop runs these methods' bodies
- * and the operation classes call the methods, so this covers both.
+ * Checks the @InlineInEvmLoop methods against BigInteger. The loop runs these methods' bodies and
+ * the operation classes call the methods, so this covers both.
  */
 class InlineInEvmLoopTest {
 
@@ -38,32 +38,33 @@ class InlineInEvmLoopTest {
   private static final BigInteger WORD = BigInteger.ONE.shiftLeft(64);
   private static final BigInteger B256 = BigInteger.valueOf(256);
 
-  /** An arm that reads only the stack and the gas. */
-  interface StackArm {
+  /** An inline method that reads only the stack and the gas. */
+  interface StackMethod {
     long run(long[] s, int sp, int top, long gas);
   }
 
   /**
-   * A two-operand arm and what it computes from the top item and the one below it. It may leave the
-   * operands for which {@code wide} holds to the operation's class.
+   * A two-operand inline method and what it computes from the top item and the one below it. It may
+   * leave the operands for which {@code wide} holds to the operation's class.
    */
   private record Binary(
       String name,
-      StackArm arm,
+      StackMethod method,
       long cost,
       BinaryOperator<BigInteger> reference,
       BiPredicate<BigInteger, BigInteger> wide) {
 
     Binary(
         final String name,
-        final StackArm arm,
+        final StackMethod method,
         final long cost,
         final BinaryOperator<BigInteger> reference) {
-      this(name, arm, cost, reference, (a, b) -> false);
+      this(name, method, cost, reference, (a, b) -> false);
     }
   }
 
-  private record Unary(String name, StackArm arm, long cost, UnaryOperator<BigInteger> reference) {}
+  private record Unary(
+      String name, StackMethod method, long cost, UnaryOperator<BigInteger> reference) {}
 
   private static BigInteger signed(final BigInteger v) {
     return v.testBit(255) ? v.subtract(MOD) : v;
@@ -204,7 +205,7 @@ class InlineInEvmLoopTest {
   }
 
   @Test
-  void binaryArmsComputeWhatTheOperationDoes() {
+  void binaryInlineMethodsComputeWhatTheOperationDoes() {
     final List<BigInteger> operands = operands();
     for (final Binary op : BINARY) {
       for (final BigInteger a : operands) {
@@ -212,7 +213,7 @@ class InlineInEvmLoopTest {
           final long[] s = new long[16];
           put(s, 0, b);
           put(s, 1, a);
-          final long outcome = op.arm().run(s, 2, 4, op.cost());
+          final long outcome = op.method().run(s, 2, 4, op.cost());
           final String what = op.name() + "(" + a.toString(16) + ", " + b.toString(16) + ")";
           if (outcome == FALLBACK && op.wide().test(a, b)) {
             // the operation's class computes these, from untouched operands
@@ -231,12 +232,12 @@ class InlineInEvmLoopTest {
   }
 
   @Test
-  void unaryArmsComputeWhatTheOperationDoes() {
+  void unaryInlineMethodsComputeWhatTheOperationDoes() {
     for (final Unary op : UNARY) {
       for (final BigInteger a : operands()) {
         final long[] s = new long[8];
         put(s, 0, a);
-        final long outcome = op.arm().run(s, 1, 0, op.cost());
+        final long outcome = op.method().run(s, 1, 0, op.cost());
         final String what = op.name() + "(" + a.toString(16) + ")";
         assertThat(outcome).as(what).isNotEqualTo(FALLBACK);
         assertThat(EvmLoopInlining.cost(outcome)).as(what).isEqualTo(op.cost());
@@ -247,20 +248,20 @@ class InlineInEvmLoopTest {
   }
 
   @Test
-  void armsLeaveMissingOperandsAndMissingGasToTheOperation() {
+  void inlineMethodsLeaveMissingOperandsAndMissingGasToTheOperation() {
     for (final Binary op : BINARY) {
       final long[] s = new long[16];
       put(s, 0, BigInteger.TWO);
       put(s, 1, BigInteger.ONE);
-      assertThat(op.arm().run(s, 1, 0, op.cost())).as(op.name()).isEqualTo(FALLBACK);
-      assertThat(op.arm().run(s, 2, 4, op.cost() - 1)).as(op.name()).isEqualTo(FALLBACK);
+      assertThat(op.method().run(s, 1, 0, op.cost())).as(op.name()).isEqualTo(FALLBACK);
+      assertThat(op.method().run(s, 2, 4, op.cost() - 1)).as(op.name()).isEqualTo(FALLBACK);
       assertThat(get(s, 0)).as(op.name()).isEqualTo(BigInteger.TWO);
       assertThat(get(s, 1)).as(op.name()).isEqualTo(BigInteger.ONE);
     }
     for (final Unary op : UNARY) {
       final long[] s = new long[8];
-      assertThat(op.arm().run(s, 0, -4, op.cost())).as(op.name()).isEqualTo(FALLBACK);
-      assertThat(op.arm().run(s, 1, 0, op.cost() - 1)).as(op.name()).isEqualTo(FALLBACK);
+      assertThat(op.method().run(s, 0, -4, op.cost())).as(op.name()).isEqualTo(FALLBACK);
+      assertThat(op.method().run(s, 1, 0, op.cost() - 1)).as(op.name()).isEqualTo(FALLBACK);
     }
   }
 

@@ -21,85 +21,87 @@ import java.lang.annotation.Target;
 
 /**
  * Marks a method of an operation class as code to inline into the untraced EVM v2 loop, which runs
- * the cheap operations inline, one arm of its switch each. {@code ./gradlew :evm:generateEvmV2Loop}
- * copies the body of every such method into the loop in EVM.java, between the generated markers and
- * with a comment naming the method, and every build checks that the loop still holds exactly that.
- * Edit the method here, in its operation's class, never the copy in EVM.java.
+ * the cheap operations inline, one case of its switch each. {@code ./gradlew
+ * :evm:generateEvmV2Loop} copies the body of every such method into the loop in EVM.java, between
+ * the generated markers and with a comment naming the method, and every build checks that the loop
+ * still holds exactly that. Edit the method here, in its operation's class, never the copy in
+ * EVM.java.
  *
- * <p>The loop runs the arms in the order of their lowest opcode. Opcodes are written in hex, the
+ * <p>The loop holds the cases in the order of their lowest opcode. Opcodes are written in hex, the
  * way opcode tables list them.
  *
- * <p>The loop is fast only while C2 keeps its state in registers, and a small change to one arm can
- * cost every operation a large share of its time. The generator therefore rejects an arm that
+ * <p>The loop is fast only while C2 keeps its state in registers, and a small change to one method
+ * can cost every operation a large share of its time. The generator therefore rejects a method that
  * breaks one of these rules, each of which was measured:
  *
  * <ul>
  *   <li>No call other than the few that always inline: {@code Long} and {@code Math} intrinsics,
  *       {@code LONG_BE}, the frame's memory and input accessors, the code's analysis tables and
- *       {@code isJumpDestinationV2}. One call C2 does not inline, in any arm, makes it keep all of
- *       the loop's locals in memory for the whole loop; one allocating arm took JUMPDEST from 0.45
+ *       {@code isJumpDestinationV2}. One call C2 does not inline, in any case, makes it keep all of
+ *       the loop's locals in memory for the whole loop; one allocating case took JUMPDEST from 0.45
  *       to about 2 ns.
  *   <li>No allocation, lambda, string, exception or synchronization, for the same reason.
  *   <li>No loop, not even over the four limbs of a word. Every loop head is an on-stack replacement
  *       entry point, and which compilation a JVM then ends up with depends on where it happened to
  *       enter: the same program ran at 2.7k or 16k us from one JVM to the next.
  *   <li>No field and no local of the loop other than the parameters listed below. A field is a load
- *       C2 hoists to the dispatch, where it runs for every operation. The constants and helpers an
- *       arm names come from {@link EvmLoopInlining}, statically imported, as EVM.java imports them,
- *       so that the name means the same in the loop as in the arm.
+ *       C2 hoists to the dispatch, where it runs for every operation. The constants and helpers a
+ *       method names come from {@link EvmLoopInlining}, statically imported, as EVM.java imports
+ *       them, so that a name means the same in the loop as in the method.
  *   <li>Stack indices are built on {@code top} or {@code next}, code indices on {@code at}, never
  *       on {@code sp} or {@code pc}. The generator turns those three into indices carrying the
- *       arm's own bias. Built on {@code sp} directly, the same index appears in many arms, and C2
+ *       case's own bias. Built on {@code sp} directly, the same index appears in many cases, and C2
  *       computes all of them once, ahead of the dispatch, where they take the registers the loop's
  *       state needs.
- *   <li>An arm reports its outcome only through {@code return done(cost, step, delta)} or {@code
- *       return FALLBACK}; the loop's common tail applies the update. Written out in every arm, the
+ *   <li>A method reports its outcome only through {@code return done(cost, step, delta)} or {@code
+ *       return FALLBACK}; the loop's common tail applies the update. Written out in every case, the
  *       same update is again one computation that C2 moves ahead of the dispatch.
  * </ul>
  *
- * <p>An arm handles only the case in which its operation succeeds. Whatever else it meets, it
+ * <p>A method handles only the outcome in which its operation succeeds. Whatever else it meets, it
  * returns {@code FALLBACK}, charging nothing, and the loop runs the operation through its class,
  * which owns every halt.
  *
- * <p>Where an arm runs every case in which its operation succeeds, the class's own implementation
- * calls the arm through {@link EvmLoopInlining#result}, giving it all the gas it wants since the
- * class's callers charge the gas, so that the loop and the class share one implementation. The
- * other classes keep their own: PUSH2, JUMP and JUMPI also run the operation after them, which a
- * tracer has to see on its own, and MUL, DIV, MOD, MSTORE, MLOAD, CALLDATALOAD and CALLDATASIZE run
- * only their common cases in the arm. Operations that share an arm, such as LT, GT, SLT and SGT,
- * keep it in the class of the first of them, as one arm costs the loop less bytecode than four.
+ * <p>Where a method runs every outcome in which its operation succeeds, the class's own
+ * implementation calls the method through {@link EvmLoopInlining#result}, giving it all the gas it
+ * wants since the class's callers charge the gas, so that the loop and the class share one
+ * implementation. The other classes keep their own: PUSH2, JUMP and JUMPI also run the operation
+ * after them, which a tracer has to see on its own, and MUL, DIV, MOD, MSTORE, MLOAD, CALLDATALOAD
+ * and CALLDATASIZE run only their common cases in the method. Operations that share a method, such
+ * as LT, GT, SLT and SGT, keep it in the class of the first of them, as one case costs the loop
+ * less bytecode than four.
  *
- * <p>An arm is a static method returning long, and takes its parameters by name from the loop,
+ * <p>The method is static and returns long, and takes its parameters by name from the loop,
  * declaring only the ones it uses: {@code s} the stack, {@code sp} the number of items on it,
  * {@code top} the index of the top item's first limb and {@code next} that of the slot above it,
  * {@code pc}, {@code at} the program counter as a code index, {@code code}, {@code codeObject},
  * {@code opcode}, {@code gas} the gas left, {@code frame}, and the fork flags {@code
  * constantinople} and {@code shanghai}.
  *
- * <p>A new arm also belongs in the program of {@code EvmV2LoopCompilationTest}, which checks what
- * C2 inlines only in the arms its program reaches; docs/evm/interpreter-loop.md has the rest of the
- * workflow.
+ * <p>A new method also belongs in the program of {@code EvmV2LoopCompilationTest}, which checks
+ * what C2 inlines only in the cases its program reaches; docs/evm/interpreter-loop.md has the rest
+ * of the workflow.
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.METHOD)
 @interface InlineInEvmLoop {
 
   /**
-   * The opcodes the arm runs, besides any range given by {@link #first} and {@link #last}.
+   * The opcodes the method runs, besides any range given by {@link #first} and {@link #last}.
    *
    * @return the opcodes
    */
   int[] opcodes() default {};
 
   /**
-   * The first of a range of opcodes the arm runs.
+   * The first of a range of opcodes the method runs.
    *
    * @return the opcode, or -1 for none
    */
   int first() default -1;
 
   /**
-   * The last of a range of opcodes the arm runs.
+   * The last of a range of opcodes the method runs.
    *
    * @return the opcode, or -1 for none
    */

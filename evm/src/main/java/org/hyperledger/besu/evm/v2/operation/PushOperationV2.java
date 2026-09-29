@@ -77,13 +77,13 @@ public class PushOperationV2 extends AbstractFixedCostOperationV2 {
    */
   public static OperationResult staticOperation(
       final MessageFrame frame, final long[] s, final int pc, final int pushSize) {
-    return result(frame, runArm(frame, s, pc, PUSH_BASE + pushSize), 0, 1);
+    return result(frame, runInline(frame, s, pc, PUSH_BASE + pushSize), 0, 1);
   }
 
-  private static long runArm(
+  private static long runInline(
       final MessageFrame frame, final long[] s, final int pc, final int opcode) {
     final Code codeObject = frame.getCode();
-    codeObject.analyse(); // builds the tables the arm reads
+    codeObject.analyse(); // builds the tables push reads
     final int sp = frame.stackTopV2();
     return push(s, sp, next(sp), pc, opcode, codeObject, ANY_GAS);
   }
@@ -109,7 +109,7 @@ public class PushOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /**
-   * PUSH1-32, although the loop runs PUSH1 and PUSH2 through arms of their own; the immediate was
+   * PUSH1-32, although the loop runs PUSH1 and PUSH2 through cases of their own; the immediate was
    * decoded when the code was analysed.
    */
   @InlineInEvmLoop(first = 0x62, last = 0x7f)

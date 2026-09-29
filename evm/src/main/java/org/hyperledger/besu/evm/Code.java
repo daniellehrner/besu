@@ -225,7 +225,7 @@ public class Code {
 
   /**
    * Bit set at the pc of every PUSH, one long per 64 bytes of code. A plain accessor, as the v2
-   * loop's arms call it: null until {@link #analyse()} has run.
+   * loop's inline code calls it: null until {@link #analyse()} has run.
    *
    * @return the bitmap
    */
