@@ -36,7 +36,9 @@ import org.slf4j.LoggerFactory;
  * with the transaction loop split into results reused from speculative execution and transactions
  * executed on this thread. Alongside the phases it records the importing thread's own CPU time and
  * the JVM garbage collection time that elapsed while it ran, so time the thread spent neither
- * computing nor collecting shows up as a separate remainder.
+ * computing nor collecting shows up as a separate remainder. Phases entered once per block also
+ * record their own CPU time, which places that remainder: a phase that waits on other threads or on
+ * disk shows the wait as its off-CPU time. Wall time that no phase covers is reported as untimed.
  *
  * <p>The instance lives in a thread-local for the duration of the import. The phases span
  * interfaces that have no room for an extra parameter, such as the world state persist, and the
@@ -56,9 +58,13 @@ public final class BlockImportTimings {
     /** Handing the transactions to the speculative executor. */
     PARALLEL_DISPATCH("dispatch"),
     /** Taking over speculative results, including the conflict check and the state merge. */
-    TX_REUSE("reuse"),
+    TX_REUSE("reuse", Kind.PER_TRANSACTION),
     /** Executing transactions on the importing thread. */
-    TX_EXECUTE("execute"),
+    TX_EXECUTE("execute", Kind.PER_TRANSACTION),
+    /** Committing a transaction's changes into the block's state. */
+    TX_COMMIT("txcommit", Kind.PER_TRANSACTION),
+    /** Building a transaction's receipt, including its logs bloom. */
+    RECEIPT("receipts", Kind.PER_TRANSACTION),
     /** Withdrawals, requests, block access list and coinbase work after the last transaction. */
     POST_EXECUTION("post"),
     /** Computing the state root. */
@@ -78,20 +84,27 @@ public final class BlockImportTimings {
     /** Recording the finalized and safe blocks on a fork choice update. */
     FORK_CHOICE_FINALITY("fcu_finality"),
     /** Speculative results discarded because they conflicted with an earlier transaction. */
-    TX_CONFLICT("conflict", true),
+    TX_CONFLICT("conflict", Kind.COUNT_ONLY),
     /** Transactions re-executed because their speculative execution had not finished. */
-    TX_UNFINISHED("unfinished", true);
+    TX_UNFINISHED("unfinished", Kind.COUNT_ONLY);
 
-    private final String label;
-    private final boolean countOnly;
-
-    Phase(final String label) {
-      this(label, false);
+    private enum Kind {
+      ONCE_PER_BLOCK,
+      // reading the thread's CPU clock is a system call, too costly to pay per transaction
+      PER_TRANSACTION,
+      COUNT_ONLY
     }
 
-    Phase(final String label, final boolean countOnly) {
+    private final String label;
+    private final Kind kind;
+
+    Phase(final String label) {
+      this(label, Kind.ONCE_PER_BLOCK);
+    }
+
+    Phase(final String label, final Kind kind) {
       this.label = label;
-      this.countOnly = countOnly;
+      this.kind = kind;
     }
 
     /**
@@ -100,7 +113,11 @@ public final class BlockImportTimings {
      * @return true for a count-only phase
      */
     public boolean isCountOnly() {
-      return countOnly;
+      return kind == Kind.COUNT_ONLY;
+    }
+
+    private boolean measuresCpu() {
+      return kind == Kind.ONCE_PER_BLOCK;
     }
 
     /**
@@ -117,6 +134,10 @@ public final class BlockImportTimings {
   private static final String CPU = "cpu";
   private static final String GC = "gc";
   private static final String REMAINDER = "remainder";
+  private static final String UNTIMED = "untimed";
+  private static final String OFF_CPU_SUFFIX = "_offcpu";
+  // below this an off-CPU figure rounds to 0.0 ms and only lengthens the log line
+  private static final long OFF_CPU_REPORT_THRESHOLD_NANOS = 50_000L;
 
   private static final Logger LOG = LoggerFactory.getLogger(BlockImportTimings.class);
   private static final ThreadLocal<BlockImportTimings> CURRENT = new ThreadLocal<>();
@@ -126,12 +147,17 @@ public final class BlockImportTimings {
 
   private final long[] phaseNanos = new long[Phase.values().length];
   private final int[] phaseCounts = new int[Phase.values().length];
+  private final long[] phaseCpuNanos = new long[Phase.values().length];
+  private final int[] phaseCpuCounts = new int[Phase.values().length];
   private final long startWallNanos;
   private final long startCpuNanos;
   private final long startGcMillis;
   private long totalNanos;
   private long cpuNanos;
   private long gcNanos;
+  // phases can nest, as the persist inside a fork choice update does, so only the outermost count
+  private int depth;
+  private long outermostPhaseNanos;
   private int txTotal = -1;
   private int txReused;
   private long txReusedGas;
@@ -177,11 +203,12 @@ public final class BlockImportTimings {
     if (timings == null) {
       return action.get();
     }
+    final long startCpu = timings.enter(phase);
     final long start = System.nanoTime();
     try {
       return action.get();
     } finally {
-      timings.add(phase, System.nanoTime() - start);
+      timings.exit(phase, System.nanoTime() - start, startCpu);
     }
   }
 
@@ -198,11 +225,12 @@ public final class BlockImportTimings {
       action.run();
       return;
     }
+    final long startCpu = timings.enter(phase);
     final long start = System.nanoTime();
     try {
       action.run();
     } finally {
-      timings.add(phase, System.nanoTime() - start);
+      timings.exit(phase, System.nanoTime() - start, startCpu);
     }
   }
 
@@ -251,9 +279,26 @@ public final class BlockImportTimings {
     }
   }
 
+  private long enter(final Phase phase) {
+    depth++;
+    return phase.measuresCpu() ? currentThreadCpuNanos() : 0L;
+  }
+
+  private void exit(final Phase phase, final long nanos, final long startCpuNanos) {
+    if (phase.measuresCpu()) {
+      phaseCpuNanos[phase.ordinal()] += currentThreadCpuNanos() - startCpuNanos;
+      phaseCpuCounts[phase.ordinal()]++;
+    }
+    depth--;
+    add(phase, nanos);
+  }
+
   private void add(final Phase phase, final long nanos) {
     phaseNanos[phase.ordinal()] += nanos;
     phaseCounts[phase.ordinal()]++;
+    if (depth == 0) {
+      outermostPhaseNanos += nanos;
+    }
   }
 
   /**
@@ -274,6 +319,30 @@ public final class BlockImportTimings {
    */
   public int count(final Phase phase) {
     return phaseCounts[phase.ordinal()];
+  }
+
+  /**
+   * Wall time of a phase during which the importing thread was not on the CPU, such as waiting for
+   * other threads or for disk. It includes any garbage collection pause inside the phase.
+   *
+   * @param phase the phase
+   * @return the nanoseconds, or -1 when the phase's CPU time was not measured on every entry
+   */
+  public long offCpuNanos(final Phase phase) {
+    final int i = phase.ordinal();
+    if (phaseCounts[i] == 0 || phaseCpuCounts[i] != phaseCounts[i]) {
+      return -1L;
+    }
+    return Math.max(0L, phaseNanos[i] - phaseCpuNanos[i]);
+  }
+
+  /**
+   * Wall time that no phase covers.
+   *
+   * @return the nanoseconds, never negative
+   */
+  public long untimedNanos() {
+    return Math.max(0L, totalNanos - outermostPhaseNanos);
   }
 
   /**
@@ -332,6 +401,7 @@ public final class BlockImportTimings {
       out.append(phase.label()).append(' ').append(millis(phaseNanos[phase.ordinal()]));
       out.append(" | ");
     }
+    out.append(UNTIMED).append(' ').append(millis(untimedNanos())).append(" | ");
     out.append(TOTAL)
         .append(' ')
         .append(millis(totalNanos))
@@ -347,6 +417,16 @@ public final class BlockImportTimings {
         .append(REMAINDER)
         .append(' ')
         .append(millis(remainderNanos()));
+    for (final Phase phase : Phase.values()) {
+      final long offCpu = offCpuNanos(phase);
+      if (offCpu >= OFF_CPU_REPORT_THRESHOLD_NANOS) {
+        out.append(" | ")
+            .append(phase.label())
+            .append(OFF_CPU_SUFFIX)
+            .append(' ')
+            .append(millis(offCpu));
+      }
+    }
     return out.toString();
   }
 
@@ -397,8 +477,9 @@ public final class BlockImportTimings {
   }
 
   /**
-   * Records every entered timed phase, the total, the CPU time, the GC time and the remainder into
-   * the histogram, labelled by phase. Count-only phases are not durations and are left out.
+   * Records every entered timed phase, the untimed time, the total, the CPU time, the GC time and
+   * the remainder into the histogram, labelled by phase. Count-only phases are not durations and
+   * are left out.
    *
    * @param histogram the histogram to observe into, in seconds
    */
@@ -408,6 +489,7 @@ public final class BlockImportTimings {
         histogram.labels(phase.label()).observe(seconds(phaseNanos[phase.ordinal()]));
       }
     }
+    histogram.labels(UNTIMED).observe(seconds(untimedNanos()));
     histogram.labels(TOTAL).observe(seconds(totalNanos));
     histogram.labels(CPU).observe(seconds(cpuNanos));
     histogram.labels(GC).observe(seconds(gcNanos));

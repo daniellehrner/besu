@@ -347,6 +347,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
           return new BlockProcessingResult(Optional.empty(), errorMessage);
         }
 
+        final long commitStart = System.nanoTime();
         applyPartialBlockAccessView(
             transactionProcessingResult.getPartialBlockAccessView(), blockAccessListBuilder);
 
@@ -355,6 +356,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
         }
         blockUpdater.commit();
         blockUpdater.markTransactionBoundary();
+        BlockImportTimings.addSince(BlockImportTimings.Phase.TX_COMMIT, commitStart);
 
         // EIP-7778: Update both cumulative gas values
         // Block gas uses protocol-specific strategy (pre-refund for Amsterdam+)
@@ -385,12 +387,14 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
               (versionedHashes.size() * protocolSpec.getGasCalculator().getBlobGasPerBlob());
         }
 
+        final long receiptStart = System.nanoTime();
         final TransactionReceipt transactionReceipt =
             transactionReceiptFactory.create(
                 transaction.getType(),
                 transactionProcessingResult,
                 worldState,
                 cumulativeReceiptGasUsed);
+        BlockImportTimings.addSince(BlockImportTimings.Phase.RECEIPT, receiptStart);
         receipts.add(transactionReceipt);
         if (transactionProcessingResult.getIsProcessedInParallel().isPresent()) {
           parallelizedTxFound = true;

@@ -96,9 +96,12 @@ class BlockImportTimingsTest {
         .contains(" ms | 0 re-executed in ")
         .contains(" ms | root ");
     assertThat(description).doesNotContain("trielog");
-    assertThat(description).contains("| total ").contains("| cpu ").contains("| gc ");
     assertThat(description)
-        .endsWith(String.format("| remainder %.1f", timings.remainderNanos() / 1e6));
+        .contains("| untimed ")
+        .contains("| total ")
+        .contains("| cpu ")
+        .contains("| gc ")
+        .contains(String.format("| remainder %.1f", timings.remainderNanos() / 1e6));
   }
 
   @Test
@@ -115,7 +118,7 @@ class BlockImportTimingsTest {
     timings.recordTo(histogram);
 
     assertThat(observed.keySet())
-        .containsExactlyInAnyOrder("execute", "total", "cpu", "gc", "remainder");
+        .containsExactlyInAnyOrder("execute", "untimed", "total", "cpu", "gc", "remainder");
     assertThat(observed.get("total")).isEqualTo(timings.totalNanos() / 1e9);
   }
 
@@ -135,8 +138,9 @@ class BlockImportTimingsTest {
     timings.recordTo(histogram);
 
     assertThat(timings.count(Phase.TX_CONFLICT)).isEqualTo(2);
-    assertThat(timings.describe()).startsWith("total ");
-    assertThat(observed.keySet()).containsExactlyInAnyOrder("total", "cpu", "gc", "remainder");
+    assertThat(timings.describe()).startsWith("untimed ");
+    assertThat(observed.keySet())
+        .containsExactlyInAnyOrder("untimed", "total", "cpu", "gc", "remainder");
   }
 
   @Test
@@ -154,7 +158,66 @@ class BlockImportTimingsTest {
     assertThat(timings.describe())
         .startsWith("4 tx: 3 reused (75% of tx, 60% of gas) in ")
         .contains(" ms | 1 re-executed (1 conflicts, 1 unfinished) in ")
-        .contains(" ms | total ");
+        .contains(" ms | untimed ");
+  }
+
+  @Test
+  void waitingInsideAPhaseIsReportedAsItsOffCpuTime() {
+    final BlockImportTimings timings = BlockImportTimings.begin();
+    try {
+      BlockImportTimings.time(Phase.STATE_ROOT, () -> sleep(30));
+    } finally {
+      timings.finish();
+    }
+
+    assertThat(timings.offCpuNanos(Phase.STATE_ROOT)).isGreaterThanOrEqualTo(20_000_000L);
+    assertThat(timings.describe()).contains("| root_offcpu ");
+  }
+
+  @Test
+  void perTransactionPhasesAndPhasesWithoutCpuReadingsReportNoOffCpuTime() {
+    final BlockImportTimings timings = BlockImportTimings.begin();
+    try {
+      BlockImportTimings.time(Phase.TX_EXECUTE, () -> sleep(5));
+      BlockImportTimings.addSince(Phase.TX_COMMIT, System.nanoTime() - 5_000_000L);
+      BlockImportTimings.addSince(Phase.POST_EXECUTION, System.nanoTime() - 5_000_000L);
+    } finally {
+      timings.finish();
+    }
+
+    assertThat(timings.offCpuNanos(Phase.TX_EXECUTE)).isEqualTo(-1L);
+    assertThat(timings.offCpuNanos(Phase.TX_COMMIT)).isEqualTo(-1L);
+    assertThat(timings.offCpuNanos(Phase.POST_EXECUTION)).isEqualTo(-1L);
+    assertThat(timings.describe()).doesNotContain("_offcpu").contains("| txcommit ");
+  }
+
+  @Test
+  void untimedCountsNestedPhasesOnlyOnce() {
+    final BlockImportTimings timings = BlockImportTimings.begin();
+    try {
+      BlockImportTimings.time(
+          Phase.FORK_CHOICE_WORLD_STATE,
+          () -> {
+            BlockImportTimings.time(Phase.STATE_ROOT, () -> sleep(20));
+            BlockImportTimings.addSince(Phase.TRIE_LOG, System.nanoTime() - 20_000_000L);
+          });
+      sleep(20);
+    } finally {
+      timings.finish();
+    }
+
+    assertThat(timings.untimedNanos())
+        .isEqualTo(timings.totalNanos() - timings.nanos(Phase.FORK_CHOICE_WORLD_STATE));
+    assertThat(timings.untimedNanos()).isGreaterThanOrEqualTo(15_000_000L);
+  }
+
+  private static void sleep(final long millis) {
+    try {
+      Thread.sleep(millis);
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException(e);
+    }
   }
 
   @Test
