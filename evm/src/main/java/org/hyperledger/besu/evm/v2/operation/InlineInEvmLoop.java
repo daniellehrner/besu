@@ -77,7 +77,7 @@ import java.lang.annotation.Target;
  * constantinople} and {@code shanghai}.
  *
  * <p>A new arm also belongs in the program of {@code EvmV2LoopCompilationTest}, which checks what
- * C2 inlines only in the arms its program reaches; docs/evm/v2-loop-arms.md has the rest of the
+ * C2 inlines only in the arms its program reaches; docs/evm/interpreter-loop.md has the rest of the
  * workflow.
  */
 @Retention(RetentionPolicy.SOURCE)

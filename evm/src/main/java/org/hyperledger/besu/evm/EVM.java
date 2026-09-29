@@ -416,8 +416,8 @@ public class EVM {
    *   <li>Memory and storage change records, which only tracers read, are made only when tracing.
    * </ul>
    *
-   * <p>The untraced loops document the details, and docs/evm/v2-loop-arms.md the workflow for the
-   * v2 loop and the tests that guard these properties.
+   * <p>The untraced loops document the details, and docs/evm/interpreter-loop.md the workflow for
+   * the v2 loop and the tests that guard these properties.
    *
    * @param frame the frame
    * @param operationTracer the tracing
