@@ -28,6 +28,7 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStorageProviderBui
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiSnapshotWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.code.JumpDestCodeStorageStrategy;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.code.MappedCodeStorage;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.ImmutableDataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.ImmutableExtraStorageConfiguration;
@@ -45,6 +46,7 @@ import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBKeyValueStora
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBMetricsFactory;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBFactoryConfiguration;
 
+import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -341,6 +343,31 @@ class BonsaiMmapStorageTest {
     final Code code = bonsai.getCode(CODE_HASH, ACCOUNT).orElseThrow();
     assertThat(code.getBytes()).isEqualTo(CODE);
     assertThat(code.getJumpDestBitMask()).isNotNull();
+  }
+
+  @Test
+  void readsCodeWhereItLies() throws Exception {
+    final Node node = start(DelegateCodeMode.IGNORE);
+    deployCode(node.bonsai());
+
+    final MappedCodeStorage composed =
+        (MappedCodeStorage) node.provider.getStorageBySegmentIdentifiers(COMPOSED);
+    assertThat(composed.readCode(CODE_HASH.getBytes().toArrayUnsafe(), MemorySegment::byteSize))
+        .contains((long) JumpDestCodeStorageStrategy.encode(CODE).length);
+    assertThat(composed.readCode(Hash.hash(Bytes.of(9)).getBytes().toArrayUnsafe(), view -> view))
+        .isEmpty();
+  }
+
+  @Test
+  void codeOutlivesTheStoreItWasReadFrom() throws Exception {
+    deployCode(start(DelegateCodeMode.IGNORE).bonsai());
+    final Code code = node.bonsai().getCode(CODE_HASH, ACCOUNT).orElseThrow();
+
+    // starting again closes the store, and with it the mapping the code was read from
+    start(DelegateCodeMode.IGNORE);
+
+    assertThat(code.getBytes()).isEqualTo(CODE);
+    assertThat(code.isJumpDestInvalid(0)).isTrue();
   }
 
   @Test

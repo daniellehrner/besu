@@ -21,10 +21,12 @@ import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
 
@@ -43,14 +45,10 @@ public class JumpDestCodeStorageStrategy extends CodeHashCodeStorageStrategy {
   public static final byte[] MARKER = "jumpDest".getBytes(StandardCharsets.UTF_8);
 
   private static final int HEADER_SIZE = Integer.BYTES;
-
-  @Override
-  public Optional<Code> getFlatCode(
-      final Hash codeHash, final Hash accountHash, final SegmentedKeyValueStorage storage) {
-    return storage
-        .get(CODE_STORAGE, codeHash.getBytes().toArrayUnsafe())
-        .map(value -> decode(value, codeHash));
-  }
+  private static final ValueLayout.OfInt INT =
+      ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN);
+  private static final ValueLayout.OfLong LONG =
+      ValueLayout.JAVA_LONG_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN);
 
   @Override
   public void putFlatCode(
@@ -109,30 +107,52 @@ public class JumpDestCodeStorageStrategy extends CodeHashCodeStorageStrategy {
     return value;
   }
 
+  @Override
+  protected Code codeOf(final byte[] value, final Hash codeHash) {
+    return decode(value, codeHash);
+  }
+
+  @Override
+  protected Code codeOf(final MemorySegment value, final Hash codeHash) {
+    return decode(value, codeHash);
+  }
+
   /**
-   * The code a stored value holds, with its jump destination analysis set. The code keeps a slice
-   * of the value instead of a copy.
+   * The code a stored value holds, with its jump destination analysis set.
    *
    * @param value the stored value
    * @param codeHash the hash of the code, or null to compute it when it is asked for
    * @return the code
    */
   public static Code decode(final byte[] value, final Hash codeHash) {
-    if (value.length < HEADER_SIZE) {
-      throw new IllegalStateException("Stored code value of " + value.length + " bytes");
+    return decode(MemorySegment.ofArray(value), codeHash);
+  }
+
+  /**
+   * The code a stored value holds, with its jump destination analysis set. The code and the
+   * analysis are copied out of the value, which is only readable during the call.
+   *
+   * @param value a view of the stored value
+   * @param codeHash the hash of the code, or null to compute it when it is asked for
+   * @return the code
+   */
+  public static Code decode(final MemorySegment value, final Hash codeHash) {
+    final long size = value.byteSize();
+    if (size < HEADER_SIZE) {
+      throw new IllegalStateException("Stored code value of " + size + " bytes");
     }
-    final ByteBuffer buffer = ByteBuffer.wrap(value);
-    final int codeSize = buffer.getInt();
-    final long[] jumpDestBitMask = new long[(codeSize >> 6) + 1];
-    if (codeSize < 0
-        || value.length != HEADER_SIZE + codeSize + jumpDestBitMask.length * Long.BYTES) {
+    final int codeSize = value.get(INT, 0);
+    final int maskLongs = codeSize < 0 ? 0 : (codeSize >> 6) + 1;
+    if (codeSize < 0 || size != HEADER_SIZE + (long) codeSize + (long) maskLongs * Long.BYTES) {
       throw new IllegalStateException(
-          "Stored code of " + codeSize + " bytes has a value of " + value.length + " bytes");
+          "Stored code of " + codeSize + " bytes has a value of " + size + " bytes");
     }
-    buffer.position(HEADER_SIZE + codeSize);
-    buffer.asLongBuffer().get(jumpDestBitMask);
-    final Code code = new Code(Bytes.wrap(value, HEADER_SIZE, codeSize), codeHash);
-    code.setJumpDestBitMask(jumpDestBitMask);
-    return code;
+    final byte[] code = new byte[codeSize];
+    MemorySegment.copy(value, ValueLayout.JAVA_BYTE, HEADER_SIZE, code, 0, codeSize);
+    final long[] jumpDestBitMask = new long[maskLongs];
+    MemorySegment.copy(value, LONG, HEADER_SIZE + (long) codeSize, jumpDestBitMask, 0, maskLongs);
+    final Code decoded = new Code(Bytes.wrap(code), codeHash);
+    decoded.setJumpDestBitMask(jumpDestBitMask);
+    return decoded;
   }
 }

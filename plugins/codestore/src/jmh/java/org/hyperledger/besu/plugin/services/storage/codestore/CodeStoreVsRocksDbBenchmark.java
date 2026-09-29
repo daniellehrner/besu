@@ -16,30 +16,15 @@ package org.hyperledger.besu.plugin.services.storage.codestore;
 
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.CODE_STORAGE;
 
-import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
-import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
-import org.hyperledger.besu.plugin.services.BesuConfiguration;
-import org.hyperledger.besu.plugin.services.storage.DataStorageConfiguration;
-import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
-import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
-import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
-import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBKeyValueStorageFactory;
-import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBMetricsFactory;
-import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBFactoryConfiguration;
-
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.SplittableRandom;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Stream;
 
-import org.mockito.Mockito;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -69,7 +54,6 @@ import org.openjdk.jmh.annotations.Warmup;
 public class CodeStoreVsRocksDbBenchmark {
 
   private static final int HOT_SET = 1_000;
-  private static final int LOAD_BATCH = 20_000;
 
   /** Which backend serves the read. */
   @Param({"mmap", "rocksdb"})
@@ -90,8 +74,7 @@ public class CodeStoreVsRocksDbBenchmark {
   private Path rocksDir;
   private CodeStore store;
   private MmapCodeKeyValueStorage mmap;
-  private RocksDBKeyValueStorageFactory rocksFactory;
-  private SegmentedKeyValueStorage rocks;
+  private BenchmarkRocksDb rocksDb;
   private byte[][] hashes;
   private int cursor;
   private boolean warmed;
@@ -106,12 +89,11 @@ public class CodeStoreVsRocksDbBenchmark {
     store = CodeStore.open(storeDir);
     mmap = new MmapCodeKeyValueStorage(store);
 
-    final byte[][] all = allHashes();
-    if (Files.notExists(rocksDir.resolve("CURRENT"))) {
-      buildRocksDb(all.length);
+    rocksDb = new BenchmarkRocksDb(rocksDir);
+    if (!rocksDb.isBuilt()) {
+      rocksDb.fillFrom(store);
     }
-    rocks = openRocksDb();
-    hashes = select(all);
+    hashes = select(allHashes());
   }
 
   private byte[][] allHashes() {
@@ -146,58 +128,6 @@ public class CodeStoreVsRocksDbBenchmark {
     }
   }
 
-  private void buildRocksDb(final int entries) throws Exception {
-    System.out.printf("Building RocksDB CODE_STORAGE from %d entries in %s%n", entries, rocksDir);
-    final SegmentedKeyValueStorage db = openRocksDb();
-    SegmentedKeyValueStorageTransaction tx = db.startTransaction();
-    int inBatch = 0;
-    try (Stream<Map.Entry<byte[], byte[]>> entriesStream = store.stream()) {
-      for (final Map.Entry<byte[], byte[]> e :
-          (Iterable<Map.Entry<byte[], byte[]>>) entriesStream::iterator) {
-        tx.put(CODE_STORAGE, e.getKey(), e.getValue());
-        if (++inBatch == LOAD_BATCH) {
-          tx.commit();
-          tx = db.startTransaction();
-          inBatch = 0;
-        }
-      }
-    }
-    tx.commit();
-    // A node's column family has been compacted over time; let the background jobs finish.
-    long files = -1;
-    for (long now = sstFiles(); now != files; now = sstFiles()) {
-      files = now;
-      Thread.sleep(30_000);
-    }
-    db.close();
-    rocksFactory.close();
-    System.out.printf("RocksDB built: %d sst files%n", files);
-  }
-
-  private long sstFiles() throws IOException {
-    try (Stream<Path> files = Files.list(rocksDir)) {
-      return files.filter(p -> p.toString().endsWith(".sst")).count();
-    }
-  }
-
-  private SegmentedKeyValueStorage openRocksDb() {
-    final BesuConfiguration configuration = Mockito.mock(BesuConfiguration.class);
-    Mockito.when(configuration.getStoragePath()).thenReturn(rocksDir);
-    Mockito.when(configuration.getDataPath()).thenReturn(rocksDir);
-    Mockito.when(configuration.getDatabaseFormat()).thenReturn(DataStorageFormat.BONSAI);
-    final DataStorageConfiguration storage = Mockito.mock(DataStorageConfiguration.class);
-    Mockito.when(storage.getDatabaseFormat()).thenReturn(DataStorageFormat.BONSAI);
-    Mockito.when(configuration.getDataStorageConfiguration()).thenReturn(storage);
-    rocksFactory =
-        new RocksDBKeyValueStorageFactory(
-            () ->
-                new RocksDBFactoryConfiguration(
-                    1024, 4, 134_217_728L, true, false, false, Optional.empty(), Optional.empty()),
-            Arrays.asList(KeyValueSegmentIdentifier.values()),
-            RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS);
-    return rocksFactory.create(List.of(CODE_STORAGE), configuration, new NoOpMetricsSystem());
-  }
-
   /** Warm: everything read into the page cache once. Cold: reopened over an evicted page cache. */
   @Setup(Level.Iteration)
   public void prepareCache() throws Exception {
@@ -209,8 +139,7 @@ public class CodeStoreVsRocksDbBenchmark {
       return;
     }
     // A mapping pins its pages, and RocksDB keeps a block cache: both have to go first.
-    rocks.close();
-    rocksFactory.close();
+    rocksDb.close();
     store.close();
     pageCache(
         "python3 -c 'import os,sys\n"
@@ -220,7 +149,7 @@ public class CodeStoreVsRocksDbBenchmark {
             + "    os.posix_fadvise(fd,0,0,os.POSIX_FADV_DONTNEED); os.close(fd)' %s %s");
     store = CodeStore.open(storeDir);
     mmap = new MmapCodeKeyValueStorage(store);
-    rocks = openRocksDb();
+    rocksDb = new BenchmarkRocksDb(rocksDir);
   }
 
   private void pageCache(final String commandTemplate) throws Exception {
@@ -235,8 +164,7 @@ public class CodeStoreVsRocksDbBenchmark {
 
   @TearDown(Level.Trial)
   public void tearDown() throws Exception {
-    rocks.close();
-    rocksFactory.close();
+    rocksDb.close();
     store.close();
   }
 
@@ -248,6 +176,6 @@ public class CodeStoreVsRocksDbBenchmark {
   @Benchmark
   public Optional<byte[]> get() {
     final byte[] key = next();
-    return "mmap".equals(backend) ? mmap.get(key) : rocks.get(CODE_STORAGE, key);
+    return "mmap".equals(backend) ? mmap.get(key) : rocksDb.storage().get(CODE_STORAGE, key);
   }
 }

@@ -55,6 +55,14 @@ java -Dcodestore.bench.dir=/path/to/code-store --enable-native-access=ALL-UNNAME
      -jar plugins/codestore/build/libs/codestore-*-jmh.jar CodeStoreVsRocksDb -rf json
 ```
 
+`CodeLoadBenchmark` measures the whole load, from a code hash to the `Code` the EVM runs. It builds
+one store per code size under `-Dcodestore.bench.work` on first use and keeps them:
+
+```
+java -Dcodestore.bench.work=/path/to/scratch --enable-native-access=ALL-UNNAMED \
+     -jar plugins/codestore/build/libs/codestore-*-jmh.jar CodeLoadBenchmark -prof gc -rf json
+```
+
 `slowTest` writes about 5 GiB under the system temp directory. Its size can be reduced with
 `-Dcodestore.property.pairs=N` and `-Dcodestore.kill.iterations=N`.
 
@@ -157,9 +165,9 @@ records, a small hot set, and Besu's code cache in front. How their four problem
    devnet-8 JUMPDEST attack under a cgroup memory limit and record TLB shootdowns, kswapd CPU,
    major faults and time-to-safepoint.
 
-In Stage 1 mmap buys nothing over `pread`, because the storage SPI forces a copy to `byte[]`. It is
-kept for the zero-copy `Code` of a later stage, the only thing that removes the 64 KB allocate,
-zero-fill and copy per cold call. None of this carries over to a flat account/storage engine:
+What mmap buys over `pread` is the copy it does not do: the code is decoded where it lies, so a
+load allocates and copies it once instead of twice (see below). None of this carries over to a flat
+account/storage engine:
 mutable, far larger than memory, random point reads of tiny values. That wants an explicit
 off-heap page cache with positional reads.
 
@@ -189,6 +197,34 @@ at the price of a syscall per read; not done, to be decided with the M4 memory-p
 
 In the node both backends sit behind the 256 MB `BonsaiCodeCache`, so block time only sees these
 differences on its misses.
+
+### Reading code where it lies
+
+`KeyValueStorage.get` hands back a `byte[]`, and Bonsai stores code as `length | code | analysis`,
+so the code was copied twice on the way to the EVM: out of the mapping into the value, and out of
+the value into the array `Code` keeps. `MappedCodeStorage` (in `ethereum/core`, next to the code
+storage strategies) lets a storage serve the value where it lies instead. `CodeStore.read` holds
+the store open for the call and hands the record's `MemorySegment` to the strategy, which copies
+the code into its array and the analysis into its `long[]` straight from the mapping. One copy, and
+nothing else allocated.
+
+`CodeLoadBenchmark`, a whole load from code hash to the `Code` the EVM runs, 128 MiB of code per
+size, page cache warm, two forks, p50:
+
+| code size | mmap, in place | mmap, through `byte[]` | RocksDB | allocated, in place / through `byte[]` |
+|---|---|---|---|---|
+| 512 B | 270 ns | 280 ns | 2,288 ns | 712 B / 1,376 B |
+| 4 KB | 550 ns | 810 ns | 2,348 ns | 4.8 kB / 9.4 kB |
+| 24 KB | 2,080 ns | 3,228 ns | 4,920 ns | 27.8 kB / 55.4 kB |
+| 64 KB | 4,936 ns | 8,120 ns | 13,456 ns | 73.9 kB / 147.6 kB |
+
+Allocation halves exactly, which is the larger part of it: an attack block that loads 38k 64 KB
+contracts allocated 5.5 GB of code and now allocates 2.8 GB.
+
+The copy that remains cannot be removed from the store side. `EVM.runToHalt` begins with
+`frame.getCode().getBytes().toArrayUnsafe()`, so the code has to be in one heap array to be
+executed at all. A `Code` reading the mapping directly would only move that copy into the EVM,
+where it would happen per call instead of per load, and so cost more on every code cache hit.
 
 ### Reads do not check the CRC
 

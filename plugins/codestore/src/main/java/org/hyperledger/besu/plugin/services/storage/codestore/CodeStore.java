@@ -33,6 +33,7 @@ import java.util.Spliterators;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
@@ -276,6 +277,27 @@ public final class CodeStore implements AutoCloseable {
       checkOpen();
       final long offset = offsetOf(codeHash);
       return offset < 0 ? Optional.empty() : Optional.of(log.payload(offset));
+    } finally {
+      lock.readLock().unlock();
+    }
+  }
+
+  /**
+   * Applies {@code reader} to the code stored for {@code codeHash} where it lies. The store is held
+   * open for the call, so unlike {@link #get} nothing can invalidate the view under the reader.
+   *
+   * @param codeHash the 32-byte code hash
+   * @param reader turns the stored code into the result; must not keep the segment
+   * @param <T> what the reader builds from the code
+   * @return the reader's result, or empty if the hash is not stored
+   */
+  public <T> Optional<T> read(final byte[] codeHash, final Function<MemorySegment, T> reader) {
+    checkHash(codeHash);
+    lock.readLock().lock();
+    try {
+      checkOpen();
+      final long offset = offsetOf(codeHash);
+      return offset < 0 ? Optional.empty() : Optional.of(reader.apply(log.payload(offset)));
     } finally {
       lock.readLock().unlock();
     }

@@ -21,6 +21,8 @@ import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -30,9 +32,32 @@ public class CodeHashCodeStorageStrategy implements CodeStorageStrategy {
   @Override
   public Optional<Code> getFlatCode(
       final Hash codeHash, final Hash accountHash, final SegmentedKeyValueStorage storage) {
-    return storage
-        .get(CODE_STORAGE, codeHash.getBytes().toArrayUnsafe())
-        .map(value -> new Code(Bytes.wrap(value), codeHash));
+    final byte[] key = codeHash.getBytes().toArrayUnsafe();
+    return storage instanceof MappedCodeStorage mapped
+        ? mapped.readCode(key, value -> codeOf(value, codeHash))
+        : storage.get(CODE_STORAGE, key).map(value -> codeOf(value, codeHash));
+  }
+
+  /**
+   * The code a stored value holds.
+   *
+   * @param value the stored value, which the code takes over
+   * @param codeHash the hash of the code
+   * @return the code
+   */
+  protected Code codeOf(final byte[] value, final Hash codeHash) {
+    return new Code(Bytes.wrap(value), codeHash);
+  }
+
+  /**
+   * The code a stored value holds, copied out of a value that is only readable during the call.
+   *
+   * @param value a view of the stored value
+   * @param codeHash the hash of the code
+   * @return the code
+   */
+  protected Code codeOf(final MemorySegment value, final Hash codeHash) {
+    return new Code(Bytes.wrap(value.toArray(ValueLayout.JAVA_BYTE)), codeHash);
   }
 
   @Override

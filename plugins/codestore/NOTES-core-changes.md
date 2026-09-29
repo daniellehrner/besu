@@ -42,7 +42,10 @@ from Besu `main` at
   own transaction.
 - **Core changes made**: `BesuCommand` registers `MmapCodeStoragePlugin` as a built-in and stops it
   after the runner has closed, and checks `requireCodeReachable` before building the storage
-  provider; `app` depends on `:plugins:codestore`. Test plumbing only: the reference tests build
+  provider; `app` depends on `:plugins:codestore`. `MappedCodeStorage` (in
+  `.../bonsai/storage/code/`) lets a storage serve a code value where it lies, and the two
+  code-hash strategies build their `Code` from it when the storage offers it, which is one copy of
+  the code instead of two; see the in-place read section of the README. Test plumbing only: the reference tests build
   their storage through `ReferenceTestStorageProvider` (`-Dbesu.reftest.mmapCodeStoreDir=DIR` puts
   code on an mmap store in verify mode), and the acceptance-test process runner takes its storage
   from `-Dacctests.keyValueStorage`.

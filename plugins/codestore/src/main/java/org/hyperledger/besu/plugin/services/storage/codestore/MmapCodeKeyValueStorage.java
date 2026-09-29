@@ -15,6 +15,7 @@
 package org.hyperledger.besu.plugin.services.storage.codestore;
 
 import org.hyperledger.besu.crypto.Hash;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.code.MappedCodeStorage;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
@@ -29,6 +30,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -46,7 +48,7 @@ import org.apache.tuweni.bytes.Bytes;
  *
  * <p>Closing this view does not close the store, which belongs to the factory.
  */
-public class MmapCodeKeyValueStorage implements KeyValueStorage {
+public class MmapCodeKeyValueStorage implements KeyValueStorage, MappedCodeStorage {
 
   private final CodeStore store;
   private final AtomicBoolean closed = new AtomicBoolean();
@@ -60,19 +62,14 @@ public class MmapCodeKeyValueStorage implements KeyValueStorage {
     this.store = store;
   }
 
-  /**
-   * Zero-copy lookup. Internal on purpose: nothing outside this class may hold a segment, so that a
-   * later stage can promote this method without restructuring.
-   */
-  private Optional<MemorySegment> view(final byte[] codeHash) {
-    return store.get(codeHash);
+  @Override
+  public <T> Optional<T> readCode(final byte[] codeHash, final Function<MemorySegment, T> reader) {
+    return isCodeHash(codeHash) ? store.read(codeHash, reader) : Optional.empty();
   }
 
   @Override
   public Optional<byte[]> get(final byte[] key) throws StorageException {
-    return isCodeHash(key)
-        ? view(key).map(segment -> segment.toArray(ValueLayout.JAVA_BYTE))
-        : Optional.empty();
+    return readCode(key, segment -> segment.toArray(ValueLayout.JAVA_BYTE));
   }
 
   @Override

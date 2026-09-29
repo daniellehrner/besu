@@ -15,6 +15,7 @@
 package org.hyperledger.besu.plugin.services.storage.codestore;
 
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.code.MappedCodeStorage;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
@@ -25,11 +26,13 @@ import org.hyperledger.besu.plugin.services.storage.SnappableKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SnappedKeyValueStorage;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
@@ -49,7 +52,7 @@ import org.apache.tuweni.bytes.Bytes;
  * store: it can see code added after it was taken, but only under a hash that no account in the
  * snapshot holds.
  */
-public class CodeRoutingKeyValueStorage implements SnappableKeyValueStorage {
+public class CodeRoutingKeyValueStorage implements SnappableKeyValueStorage, MappedCodeStorage {
 
   /** How the delegate's own {@code CODE_STORAGE} segment is used. */
   public enum DelegateCodeMode {
@@ -102,13 +105,54 @@ public class CodeRoutingKeyValueStorage implements SnappableKeyValueStorage {
       final Optional<byte[]> expected = delegate.get(segment, key);
       if (value.isPresent() != expected.isPresent()
           || (value.isPresent() && !Arrays.equals(value.get(), expected.get()))) {
-        throw new StorageException(
-            String.format(
-                "Differential read mismatch for code %s: mmap store %s, delegate %s",
-                Bytes.wrap(key).toHexString(), describe(value), describe(expected)));
+        throw mismatch(key, describe(value), describe(expected));
       }
     }
     return value;
+  }
+
+  @Override
+  public <T> Optional<T> readCode(final byte[] codeHash, final Function<MemorySegment, T> reader) {
+    if (mode != DelegateCodeMode.VERIFY) {
+      return readStoredCode(codeHash, reader);
+    }
+    final Optional<byte[]> expected =
+        delegate.get(KeyValueSegmentIdentifier.CODE_STORAGE, codeHash);
+    final Optional<T> value =
+        readStoredCode(
+            codeHash,
+            view -> {
+              if (expected.isEmpty() || !matches(view, expected.get())) {
+                throw mismatch(codeHash, view.byteSize() + " bytes", describe(expected));
+              }
+              return reader.apply(view);
+            });
+    if (value.isEmpty() && expected.isPresent()) {
+      throw mismatch(codeHash, "absent", describe(expected));
+    }
+    return value;
+  }
+
+  private <T> Optional<T> readStoredCode(
+      final byte[] codeHash, final Function<MemorySegment, T> reader) {
+    return code instanceof MappedCodeStorage mapped
+        ? mapped.readCode(codeHash, reader)
+        : code.get(codeHash).map(value -> reader.apply(MemorySegment.ofArray(value)));
+  }
+
+  private static boolean matches(final MemorySegment view, final byte[] expected) {
+    return view.byteSize() == expected.length
+        && MemorySegment.mismatch(
+                view, 0, view.byteSize(), MemorySegment.ofArray(expected), 0, expected.length)
+            < 0;
+  }
+
+  private static StorageException mismatch(
+      final byte[] key, final String value, final String expected) {
+    return new StorageException(
+        String.format(
+            "Differential read mismatch for code %s: mmap store %s, delegate %s",
+            Bytes.wrap(key).toHexString(), value, expected));
   }
 
   private static String describe(final Optional<byte[]> value) {
@@ -333,6 +377,17 @@ public class CodeRoutingKeyValueStorage implements SnappableKeyValueStorage {
       }
       final Optional<byte[]> value = liveCode.get(key);
       return value.isPresent() ? value : snapshot.get(segment, key);
+    }
+
+    @Override
+    public <T> Optional<T> readCode(
+        final byte[] codeHash, final Function<MemorySegment, T> reader) {
+      final Optional<T> value = super.readCode(codeHash, reader);
+      return value.isPresent()
+          ? value
+          : snapshot
+              .get(KeyValueSegmentIdentifier.CODE_STORAGE, codeHash)
+              .map(stored -> reader.apply(MemorySegment.ofArray(stored)));
     }
 
     @Override

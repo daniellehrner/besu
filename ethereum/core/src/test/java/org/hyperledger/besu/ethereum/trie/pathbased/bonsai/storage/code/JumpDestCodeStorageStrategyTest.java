@@ -24,8 +24,11 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
+import java.lang.foreign.MemorySegment;
 import java.util.Arrays;
+import java.util.Optional;
 import java.util.Random;
+import java.util.function.Function;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
@@ -96,6 +99,21 @@ class JumpDestCodeStorageStrategyTest {
   }
 
   @Test
+  void loadsCodeFromAStorageThatServesItWhereItLies() {
+    final InPlaceStorage storage = new InPlaceStorage();
+    final SegmentedKeyValueStorageTransaction transaction = storage.startTransaction();
+    strategy.putFlatCode(storage, transaction, Hash.EMPTY, Hash.hash(CODE), CODE);
+    transaction.commit();
+
+    final Code loaded = strategy.getFlatCode(Hash.hash(CODE), Hash.EMPTY, storage).orElseThrow();
+
+    assertThat(storage.reads).isOne();
+    assertThat(loaded.getBytes()).isEqualTo(CODE);
+    assertThat(loaded.getJumpDestBitMask()).containsExactly(0b1000100L);
+    assertThat(strategy.getFlatCode(Hash.EMPTY, Hash.EMPTY, storage)).isEmpty();
+  }
+
+  @Test
   void marksAnEmptyColumnFamily() {
     final SegmentedKeyValueStorage storage = new SegmentedInMemoryKeyValueStorage();
     assertThat(JumpDestCodeStorageStrategy.isMarked(storage)).isFalse();
@@ -125,5 +143,19 @@ class JumpDestCodeStorageStrategyTest {
   private static Code roundTrip(final Bytes code) {
     return JumpDestCodeStorageStrategy.decode(
         JumpDestCodeStorageStrategy.encode(code), Hash.hash(code));
+  }
+
+  /** Serves code where it lies, as the mmap code store does. */
+  private static final class InPlaceStorage extends SegmentedInMemoryKeyValueStorage
+      implements MappedCodeStorage {
+
+    private int reads;
+
+    @Override
+    public <T> Optional<T> readCode(
+        final byte[] codeHash, final Function<MemorySegment, T> reader) {
+      reads++;
+      return get(CODE_STORAGE, codeHash).map(value -> reader.apply(MemorySegment.ofArray(value)));
+    }
   }
 }
