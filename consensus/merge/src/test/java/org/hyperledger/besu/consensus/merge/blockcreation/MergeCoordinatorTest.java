@@ -15,6 +15,7 @@
 package org.hyperledger.besu.consensus.merge.blockcreation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
 import static org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider.createInMemoryBlockchain;
 import static org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider.createInMemoryWorldStateArchive;
@@ -96,10 +97,14 @@ import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Stream;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -1069,6 +1074,32 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
     verify(mergeContext).setFinalized(firstFinalizedHeader);
     verify(blockchain).setSafeBlock(firstFinalizedBlock.getHash());
     verify(mergeContext).setSafeBlock(firstFinalizedHeader);
+  }
+
+  @Test
+  public void newPayloadAndForkchoiceUpdateWaitForTheHeadLock() throws Exception {
+    final Block terminalBlock = new Block(terminalPowBlock(), BlockBody.empty());
+    final ReentrantLock headLock = protocolContext.getHeadLock();
+    final ExecutorService engineThread = Executors.newSingleThreadExecutor();
+    // stands in for a backward sync import in progress
+    headLock.lock();
+    try {
+      final Future<?> engineCalls =
+          engineThread.submit(
+              () -> sendNewPayloadAndForkchoiceUpdate(terminalBlock, Optional.empty(), Hash.ZERO));
+
+      assertThatThrownBy(() -> engineCalls.get(200, TimeUnit.MILLISECONDS))
+          .isInstanceOf(TimeoutException.class);
+
+      headLock.unlock();
+      engineCalls.get(10, TimeUnit.SECONDS);
+    } finally {
+      if (headLock.isHeldByCurrentThread()) {
+        headLock.unlock();
+      }
+      engineThread.shutdownNow();
+    }
+    assertThat(blockchain.getChainHeadHash()).isEqualTo(terminalBlock.getHash());
   }
 
   @Test
