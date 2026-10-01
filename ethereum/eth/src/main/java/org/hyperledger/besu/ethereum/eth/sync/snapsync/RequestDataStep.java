@@ -280,11 +280,24 @@ public class RequestDataStep {
    * Retrieves local accounts from the flat database and generates the necessary proof, updates the
    * data request with the retrieved information, and returns the modified data request task.
    *
+   * <p>Reading a range and proving it against the trie is local work that only depends on the
+   * request, so it runs on the computation threads and several ranges are checked at once.
+   *
    * @param requestTask request data to fill
    * @return data request with local accounts
    */
   public CompletableFuture<Task<SnapDataRequest>> requestLocalFlatAccounts(
       final Task<SnapDataRequest> requestTask) {
+    return ethContext
+        .getScheduler()
+        .scheduleComputationTask(
+            () -> {
+              loadLocalFlatAccounts(requestTask);
+              return requestTask;
+            });
+  }
+
+  private void loadLocalFlatAccounts(final Task<SnapDataRequest> requestTask) {
 
     final AccountFlatDatabaseHealingRangeRequest accountDataRequest =
         (AccountFlatDatabaseHealingRangeRequest) requestTask.getData();
@@ -316,19 +329,29 @@ public class RequestDataStep {
 
     accountDataRequest.setRootHash(blockHeader.getStateRoot());
     accountDataRequest.addLocalData(worldStateProofProvider, accounts, new ArrayDeque<>(proofs));
-
-    return CompletableFuture.completedFuture(requestTask);
   }
 
   /**
    * Retrieves local storage slots from the flat database and generates the necessary proof, updates
    * the data request with the retrieved information, and returns the modified data request task.
    *
+   * <p>Like {@link #requestLocalFlatAccounts}, this runs on the computation threads.
+   *
    * @param requestTask request data to fill
    * @return data request with local slots
    */
   public CompletableFuture<Task<SnapDataRequest>> requestLocalFlatStorages(
       final Task<SnapDataRequest> requestTask) {
+    return ethContext
+        .getScheduler()
+        .scheduleComputationTask(
+            () -> {
+              loadLocalFlatStorages(requestTask);
+              return requestTask;
+            });
+  }
+
+  private void loadLocalFlatStorages(final Task<SnapDataRequest> requestTask) {
 
     final StorageFlatDatabaseHealingRangeRequest storageDataRequest =
         (StorageFlatDatabaseHealingRangeRequest) requestTask.getData();
@@ -364,7 +387,5 @@ public class RequestDataStep {
               slots.lastKey()));
     }
     storageDataRequest.addLocalData(worldStateProofProvider, slots, new ArrayDeque<>(proofs));
-
-    return CompletableFuture.completedFuture(requestTask);
   }
 }
