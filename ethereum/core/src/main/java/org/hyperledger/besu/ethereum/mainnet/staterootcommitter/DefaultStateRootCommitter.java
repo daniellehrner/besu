@@ -28,7 +28,6 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorld
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.CommittedNodeBatch;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.StorageConsumingMap;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.plugin.data.BlockHeader;
@@ -102,9 +101,6 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
     /** Strategy that persists deferred writes, or drops them when storage is frozen. */
     private final WriteSink sink;
 
-    /** Committed trie nodes, handed to the node cache once the computation is done. */
-    private final CommittedNodeBatch committedNodes;
-
     DefaultComputation(
         final BonsaiWorldState bonsai,
         final BonsaiWorldStateUpdateAccumulator worldStateUpdater,
@@ -113,18 +109,9 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
       this.worldStateUpdater = worldStateUpdater;
       this.addressHasher = addressHasher;
       this.sink = bonsai.isStorageFrozen() ? new FrozenSink() : new PersistingSink(writes);
-      this.committedNodes = bonsai.newCommittedNodeBatch();
     }
 
     Hash executeInto(final List<StateRootComputations.UpdaterWrite> writeSink) {
-      try {
-        return doExecuteInto(writeSink);
-      } finally {
-        bonsai.cacheCommittedNodes(committedNodes);
-      }
-    }
-
-    private Hash doExecuteInto(final List<StateRootComputations.UpdaterWrite> writeSink) {
       clearStorage();
       if (!sink.isFrozen()) {
         collectCodeWrites();
@@ -172,10 +159,7 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
 
       sink.commitTrie(
           accountTrie,
-          (location, hash, value) -> {
-            committedNodes.addAccountNode(hash, value);
-            return u -> u.putAccountStateTrieNode(location, hash, value);
-          });
+          (location, hash, value) -> u -> u.putAccountStateTrieNode(location, hash, value));
       writeSink.addAll(writes);
       return Hash.wrap(accountTrie.getRootHash());
     }
@@ -240,11 +224,8 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
       if (!accountDeleted) {
         sink.commitTrie(
             storageTrie,
-            (location, nodeHash, value) -> {
-              committedNodes.addStorageNode(nodeHash, value);
-              return u ->
-                  u.putAccountStorageTrieNode(updatedAddressHash, location, nodeHash, value);
-            });
+            (location, nodeHash, value) ->
+                u -> u.putAccountStorageTrieNode(updatedAddressHash, location, nodeHash, value));
       }
       return accountDeleted ? Hash.EMPTY_TRIE_HASH : Hash.wrap(storageTrie.getRootHash());
     }

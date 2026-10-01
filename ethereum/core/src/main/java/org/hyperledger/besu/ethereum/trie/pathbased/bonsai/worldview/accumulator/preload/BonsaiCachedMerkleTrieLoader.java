@@ -45,7 +45,7 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
   private static final int ACCOUNT_CACHE_SIZE = 100_000;
   private static final int STORAGE_CACHE_SIZE = 200_000;
 
-  // Guava locks a segment per write; the default of 4 serialises the trie pools
+  // Guava locks a segment per write, and the preload walks write from many threads at once
   private static final int CACHE_CONCURRENCY =
       Math.max(4, Runtime.getRuntime().availableProcessors());
 
@@ -146,25 +146,6 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
     }
   }
 
-  /** Returns a batch for collecting the nodes committed by one state root computation. */
-  public CommittedNodeBatch newCommittedNodeBatch() {
-    return new CommittedNodeBatch();
-  }
-
-  /** Adds the batch to the node cache on a background thread. */
-  public void cacheCommittedNodes(final CommittedNodeBatch batch) {
-    if (batch.isEmpty()) {
-      return;
-    }
-    VIRTUAL_POOL.execute(() -> cacheCommittedNodesNow(batch));
-  }
-
-  @VisibleForTesting
-  void cacheCommittedNodesNow(final CommittedNodeBatch batch) {
-    batch.accountNodes().forEach(node -> accountNodes.put(node.getKey(), node.getValue()));
-    batch.storageNodes().forEach(node -> storageNodes.put(node.getKey(), node.getValue()));
-  }
-
   public Optional<Bytes> getAccountStateTrieNode(
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
       final Bytes location,
@@ -173,7 +154,10 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
       return Optional.of(MerkleTrie.EMPTY_TRIE_NODE);
     } else {
       return Optional.ofNullable(accountNodes.getIfPresent(nodeHash))
-          .or(() -> worldStateKeyValueStorage.getAccountStateTrieNode(location, nodeHash));
+          .or(
+              () ->
+                  worldStateKeyValueStorage.getAccountStateTrieNodeFromCacheOrStorage(
+                      location, nodeHash));
     }
   }
 
@@ -188,7 +172,7 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
       return Optional.ofNullable(storageNodes.getIfPresent(nodeHash))
           .or(
               () ->
-                  worldStateKeyValueStorage.getAccountStorageTrieNode(
+                  worldStateKeyValueStorage.getAccountStorageTrieNodeFromCacheOrStorage(
                       accountHash, location, nodeHash));
     }
   }

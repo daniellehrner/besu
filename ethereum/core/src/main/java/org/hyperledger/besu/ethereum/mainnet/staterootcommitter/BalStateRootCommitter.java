@@ -29,7 +29,6 @@ import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiWorldStateUpdateAccumulator;
-import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.CommittedNodeBatch;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateQueryParams;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.plugin.data.BlockHeader;
@@ -226,9 +225,6 @@ public final class BalStateRootCommitter implements StateRootCommitter {
     private final ConcurrentLinkedQueue<StateRootComputations.UpdaterWrite> writes =
         new ConcurrentLinkedQueue<>();
 
-    /** Committed trie nodes, handed to the node cache once the computation is done. */
-    private final CommittedNodeBatch committedNodes;
-
     /** Populated during account resolution once storage futures complete. */
     private final Map<Address, Hash> storageRoots = new ConcurrentHashMap<>();
 
@@ -245,7 +241,6 @@ public final class BalStateRootCommitter implements StateRootCommitter {
       this.worldState = worldState;
       this.accountLookup = accountLookup;
       this.sink = storageFrozen ? new FrozenSink() : new PersistingSink(writes);
-      this.committedNodes = worldState.newCommittedNodeBatch();
     }
 
     /**
@@ -289,11 +284,7 @@ public final class BalStateRootCommitter implements StateRootCommitter {
       // Step 3: commit the account trie.
       sink.commitTrie(
           accountTrie,
-          (location, hash, value) -> {
-            committedNodes.addAccountNode(hash, value);
-            return u -> u.putAccountStateTrieNode(location, hash, value);
-          });
-      worldState.cacheCommittedNodes(committedNodes);
+          (location, hash, value) -> u -> u.putAccountStateTrieNode(location, hash, value));
       return new BackgroundResult(
           Hash.wrap(accountTrie.getRootHash()), new ArrayList<>(writes), storageRoots);
     }
@@ -394,10 +385,8 @@ public final class BalStateRootCommitter implements StateRootCommitter {
 
       sink.commitTrie(
           storageTrie,
-          (location, nodeHash, value) -> {
-            committedNodes.addStorageNode(nodeHash, value);
-            return u -> u.putAccountStorageTrieNode(accountHash, location, nodeHash, value);
-          });
+          (location, nodeHash, value) ->
+              u -> u.putAccountStorageTrieNode(accountHash, location, nodeHash, value));
       return Hash.wrap(storageTrie.getRootHash());
     }
 
