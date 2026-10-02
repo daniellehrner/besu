@@ -20,8 +20,10 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
+import org.hyperledger.besu.plugin.services.storage.SegmentBulkLoad;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SortedSegmentWriter;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBMetrics;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBMetricsFactory;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDbIterator;
@@ -414,6 +416,8 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
                                               + segment.getName()));
                       return new RocksDbSegmentIdentifier(getDB(), columnHandle);
                     }));
+    // the database is open, so no other process can be writing sorted files for it
+    RocksDBSortedSegmentWriter.deleteLeftovers(configuration.getDatabaseDir());
     try {
       RocksDBSegmentRewrite.completeInterrupted(this);
     } catch (final RuntimeException e) {
@@ -677,6 +681,18 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
       final List<Pair<byte[], byte[]>> additions) {
     throwIfClosed();
     new RocksDBSegmentRewrite(this, segmentIdentifier).run(transform, additions);
+  }
+
+  @Override
+  public SortedSegmentWriter sortedWriter(final SegmentIdentifier segmentIdentifier) {
+    throwIfClosed();
+    return new RocksDBSortedSegmentWriter(this, segmentIdentifier);
+  }
+
+  @Override
+  public SegmentBulkLoad startBulkLoad(final List<SegmentIdentifier> segmentIdentifiers) {
+    throwIfClosed();
+    return new RocksDBSegmentBulkLoad(this, segmentIdentifiers);
   }
 
   @Override

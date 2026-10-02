@@ -27,15 +27,18 @@ import static org.mockito.Mockito.when;
 import org.hyperledger.besu.kvstore.AbstractKeyValueStorageTest;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.metrics.ObservableMetricsSystem;
+import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.SegmentBulkLoad;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
+import org.hyperledger.besu.plugin.services.storage.SortedSegmentWriter;
 import org.hyperledger.besu.services.kvstore.SegmentedKeyValueStorageAdapter;
 
 import java.io.IOException;
@@ -43,10 +46,12 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.stream.IntStream;
@@ -57,6 +62,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.rocksdb.RocksDBException;
 
 public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValueStorageTest {
 
@@ -115,6 +121,268 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
     assertThat(result).isEmpty();
 
     store.close();
+  }
+
+  @Test
+  public void sortedWriterEntriesBecomeVisibleWhenFinished() throws Exception {
+    final SegmentedKeyValueStorage store = createSegmentedStore();
+
+    try (SortedSegmentWriter writer = store.sortedWriter(TestSegment.FOO)) {
+      writer.put(bytesOf(1), bytesOf(10));
+      writer.put(bytesOf(2), bytesOf(20));
+
+      assertThat(store.get(TestSegment.FOO, bytesOf(1))).isEmpty();
+      assertThat(writer.size()).isEqualTo(4);
+
+      writer.finish();
+    }
+
+    assertThat(store.get(TestSegment.FOO, bytesOf(1))).contains(bytesOf(10));
+    assertThat(store.get(TestSegment.FOO, bytesOf(2))).contains(bytesOf(20));
+    assertThat(store.get(TestSegment.BAR, bytesOf(1))).isEmpty();
+
+    store.close();
+  }
+
+  @Test
+  public void sortedWriterReplacesEntriesTheSegmentAlreadyHolds() throws Exception {
+    final SegmentedKeyValueStorage store = createSegmentedStore();
+    final SegmentedKeyValueStorageTransaction tx = store.startTransaction();
+    tx.put(TestSegment.FOO, bytesOf(1), bytesOf(10));
+    tx.put(TestSegment.FOO, bytesOf(3), bytesOf(30));
+    tx.commit();
+
+    try (SortedSegmentWriter writer = store.sortedWriter(TestSegment.FOO)) {
+      writer.put(bytesOf(1), bytesOf(11));
+      writer.put(bytesOf(2), bytesOf(21));
+      writer.finish();
+    }
+
+    assertThat(store.get(TestSegment.FOO, bytesOf(1))).contains(bytesOf(11));
+    assertThat(store.get(TestSegment.FOO, bytesOf(2))).contains(bytesOf(21));
+    assertThat(store.get(TestSegment.FOO, bytesOf(3))).contains(bytesOf(30));
+
+    store.close();
+  }
+
+  @Test
+  public void entriesWrittenAfterASortedWriterFinishedReplaceItsEntries() throws Exception {
+    final SegmentedKeyValueStorage store = createSegmentedStore();
+
+    try (SortedSegmentWriter writer = store.sortedWriter(TestSegment.FOO)) {
+      writer.put(bytesOf(1), bytesOf(10));
+      writer.finish();
+    }
+    final SegmentedKeyValueStorageTransaction tx = store.startTransaction();
+    tx.put(TestSegment.FOO, bytesOf(1), bytesOf(12));
+    tx.commit();
+
+    assertThat(store.get(TestSegment.FOO, bytesOf(1))).contains(bytesOf(12));
+
+    store.close();
+  }
+
+  @Test
+  public void sortedWriterClosedWithoutFinishLeavesNothingBehind(@TempDir final Path testPath)
+      throws Exception {
+    final SegmentedKeyValueStorage store =
+        createSegmentedStore(
+            testPath,
+            new NoOpMetricsSystem(),
+            Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO),
+            List.of());
+
+    try (SortedSegmentWriter writer = store.sortedWriter(TestSegment.FOO)) {
+      writer.put(bytesOf(1), bytesOf(10));
+    }
+
+    assertThat(store.get(TestSegment.FOO, bytesOf(1))).isEmpty();
+    assertThat(sortedStagingFiles(testPath)).isEmpty();
+
+    store.close();
+  }
+
+  @Test
+  public void sortedWriterWithoutEntriesCanBeFinished() throws Exception {
+    final SegmentedKeyValueStorage store = createSegmentedStore();
+
+    try (SortedSegmentWriter writer = store.sortedWriter(TestSegment.FOO)) {
+      writer.finish();
+    }
+
+    assertThat(store.stream(TestSegment.FOO)).isEmpty();
+
+    store.close();
+  }
+
+  @Test
+  public void sortedWriterRejectsKeysThatAreNotAscending() throws Exception {
+    final SegmentedKeyValueStorage store = createSegmentedStore();
+
+    try (SortedSegmentWriter writer = store.sortedWriter(TestSegment.FOO)) {
+      writer.put(bytesOf(2), bytesOf(20));
+
+      assertThatThrownBy(() -> writer.put(bytesOf(1), bytesOf(10)))
+          .isInstanceOf(StorageException.class);
+    }
+
+    store.close();
+  }
+
+  @Test
+  public void unfinishedSortedFilesAreRemovedWhenTheStorageIsOpened(@TempDir final Path testPath)
+      throws Exception {
+    final List<SegmentIdentifier> segments = Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO);
+    final SegmentedKeyValueStorage store =
+        createSegmentedStore(testPath, new NoOpMetricsSystem(), segments, List.of());
+    // the writer is abandoned, as it would be by a process that stops
+    final SortedSegmentWriter abandoned = store.sortedWriter(TestSegment.FOO);
+    abandoned.put(bytesOf(1), bytesOf(10));
+    assertThat(sortedStagingFiles(testPath)).hasSize(1);
+    store.close();
+
+    final SegmentedKeyValueStorage reopened =
+        createSegmentedStore(testPath, new NoOpMetricsSystem(), segments, List.of());
+
+    assertThat(sortedStagingFiles(testPath)).isEmpty();
+    assertThat(reopened.get(TestSegment.FOO, bytesOf(1))).isEmpty();
+
+    reopened.close();
+  }
+
+  @Test
+  public void sortedFilesWithDisjointKeyRangesLandInTheBottomLevel() throws Exception {
+    final RocksDBColumnarKeyValueStorage store =
+        (RocksDBColumnarKeyValueStorage) createSegmentedStore();
+
+    // written out of order on purpose: neither file holds a key inside the range of the other
+    for (final int first : List.of(10, 1, 20)) {
+      try (SortedSegmentWriter writer = store.sortedWriter(TestSegment.FOO)) {
+        writer.put(bytesOf(first), bytesOf(first));
+        writer.put(bytesOf(first + 1), bytesOf(first));
+        writer.finish();
+      }
+    }
+
+    assertThat(filesAtLevel(store, TestSegment.FOO, 0)).isZero();
+    assertThat(filesAtLevel(store, TestSegment.FOO, BOTTOM_LEVEL)).isEqualTo(3);
+
+    store.close();
+  }
+
+  @Test
+  public void sortedFileOverlappingExistingKeysIsPlacedAboveThem() throws Exception {
+    final RocksDBColumnarKeyValueStorage store =
+        (RocksDBColumnarKeyValueStorage) createSegmentedStore();
+
+    try (SortedSegmentWriter writer = store.sortedWriter(TestSegment.FOO)) {
+      writer.put(bytesOf(1), bytesOf(10));
+      writer.put(bytesOf(5), bytesOf(50));
+      writer.finish();
+    }
+    try (SortedSegmentWriter writer = store.sortedWriter(TestSegment.FOO)) {
+      writer.put(bytesOf(5), bytesOf(51));
+      writer.put(bytesOf(9), bytesOf(90));
+      writer.finish();
+    }
+
+    assertThat(filesAtLevel(store, TestSegment.FOO, BOTTOM_LEVEL)).isEqualTo(1);
+    assertThat(store.get(TestSegment.FOO, bytesOf(5))).contains(bytesOf(51));
+
+    store.close();
+  }
+
+  @Test
+  public void bulkLoadHoldsBackCompactionUntilItIsClosed() throws Exception {
+    final RocksDBColumnarKeyValueStorage store =
+        (RocksDBColumnarKeyValueStorage) createSegmentedStore();
+    // more files than the number in level 0 at which RocksDB stops all writes
+    final int overlappingFiles = 50;
+
+    try (SegmentBulkLoad bulkLoad = store.startBulkLoad(List.of(TestSegment.FOO))) {
+      assertThat(isAutoCompactionDisabled(store, TestSegment.FOO)).isTrue();
+      assertThat(isAutoCompactionDisabled(store, TestSegment.BAR)).isFalse();
+      for (int i = 0; i < overlappingFiles; i++) {
+        try (SortedSegmentWriter writer = store.sortedWriter(TestSegment.FOO)) {
+          writer.put(bytesOf(1), bytesOf(i));
+          writer.put(bytesOf(100), bytesOf(i));
+          writer.finish();
+        }
+      }
+
+      // every file but the first holds keys of the files before it, and none was merged away
+      assertThat(filesAtLevel(store, TestSegment.FOO, 0)).isEqualTo(overlappingFiles - 1);
+
+      // the files in level 0 do not stop a regular write
+      final SegmentedKeyValueStorageTransaction tx = store.startTransaction();
+      tx.put(TestSegment.FOO, bytesOf(50), bytesOf(5));
+      assertThat(CompletableFuture.runAsync(tx::commit)).succeedsWithin(Duration.ofSeconds(30));
+    }
+
+    assertThat(isAutoCompactionDisabled(store, TestSegment.FOO)).isFalse();
+    // closing waited for RocksDB to merge the files down, with its limits on level 0 lifted
+    assertThat(filesAtLevel(store, TestSegment.FOO, 0)).isLessThan(LEVEL0_SLOWDOWN_TRIGGER);
+    assertThat(level0SlowdownTrigger(store, TestSegment.FOO)).isEqualTo(LEVEL0_SLOWDOWN_TRIGGER);
+    assertThat(level0StopTrigger(store, TestSegment.FOO)).isEqualTo(LEVEL0_STOP_TRIGGER);
+    assertThat(store.get(TestSegment.FOO, bytesOf(1))).contains(bytesOf(overlappingFiles - 1));
+    assertThat(store.get(TestSegment.FOO, bytesOf(50))).contains(bytesOf(5));
+    assertThat(store.get(TestSegment.FOO, bytesOf(100))).contains(bytesOf(overlappingFiles - 1));
+
+    store.close();
+  }
+
+  @Test
+  public void bulkLoadLeavesTheBottomLevelAsItIsWhenClosed() throws Exception {
+    final RocksDBColumnarKeyValueStorage store =
+        (RocksDBColumnarKeyValueStorage) createSegmentedStore();
+
+    try (SegmentBulkLoad bulkLoad = store.startBulkLoad(List.of(TestSegment.FOO))) {
+      for (final int first : List.of(10, 20, 30)) {
+        try (SortedSegmentWriter writer = store.sortedWriter(TestSegment.FOO)) {
+          writer.put(bytesOf(first), bytesOf(first));
+          writer.put(bytesOf(first + 5), bytesOf(first));
+          writer.finish();
+        }
+      }
+      // holds a key inside the range of the first file, so it cannot join it in the bottom level
+      try (SortedSegmentWriter writer = store.sortedWriter(TestSegment.FOO)) {
+        writer.put(bytesOf(12), bytesOf(1));
+        writer.finish();
+      }
+    }
+
+    assertThat(isAutoCompactionDisabled(store, TestSegment.FOO)).isFalse();
+    // a compaction of the whole segment would have merged the file above into the bottom level
+    assertThat(filesAtLevel(store, TestSegment.FOO, BOTTOM_LEVEL)).isEqualTo(3);
+    assertThat(filesAtLevel(store, TestSegment.FOO, 0)).isEqualTo(1);
+    assertThat(level0SlowdownTrigger(store, TestSegment.FOO)).isEqualTo(LEVEL0_SLOWDOWN_TRIGGER);
+    assertThat(store.get(TestSegment.FOO, bytesOf(12))).contains(bytesOf(1));
+
+    store.close();
+  }
+
+  @Test
+  public void bulkLoadCanBeClosedTwice() throws Exception {
+    final RocksDBColumnarKeyValueStorage store =
+        (RocksDBColumnarKeyValueStorage) createSegmentedStore();
+    final SegmentBulkLoad bulkLoad = store.startBulkLoad(List.of(TestSegment.FOO));
+
+    bulkLoad.close();
+    bulkLoad.close();
+
+    assertThat(isAutoCompactionDisabled(store, TestSegment.FOO)).isFalse();
+
+    store.close();
+  }
+
+  @Test
+  public void bulkLoadClosedAfterTheStorageDoesNothing() throws Exception {
+    final RocksDBColumnarKeyValueStorage store =
+        (RocksDBColumnarKeyValueStorage) createSegmentedStore();
+    final SegmentBulkLoad bulkLoad = store.startBulkLoad(List.of(TestSegment.FOO));
+    store.close();
+
+    bulkLoad.close();
   }
 
   @Test
@@ -837,5 +1105,48 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
   @Override
   protected KeyValueStorage createStore() throws Exception {
     return new SegmentedKeyValueStorageAdapter(TestSegment.FOO, createSegmentedStore());
+  }
+
+  private static final int BOTTOM_LEVEL = 6;
+
+  private static long filesAtLevel(
+      final RocksDBColumnarKeyValueStorage store, final SegmentIdentifier segment, final int level)
+      throws RocksDBException {
+    return Long.parseLong(
+        store
+            .getDB()
+            .getProperty(store.safeColumnHandle(segment), "rocksdb.num-files-at-level" + level));
+  }
+
+  private static boolean isAutoCompactionDisabled(
+      final RocksDBColumnarKeyValueStorage store, final SegmentIdentifier segment)
+      throws RocksDBException {
+    return store.getDB().getOptions(store.safeColumnHandle(segment)).disableAutoCompactions();
+  }
+
+  // the limits of RocksDB, which the storage does not change
+  private static final int LEVEL0_SLOWDOWN_TRIGGER = 20;
+  private static final int LEVEL0_STOP_TRIGGER = 36;
+
+  private static int level0SlowdownTrigger(
+      final RocksDBColumnarKeyValueStorage store, final SegmentIdentifier segment)
+      throws RocksDBException {
+    return store.getDB().getOptions(store.safeColumnHandle(segment)).level0SlowdownWritesTrigger();
+  }
+
+  private static int level0StopTrigger(
+      final RocksDBColumnarKeyValueStorage store, final SegmentIdentifier segment)
+      throws RocksDBException {
+    return store.getDB().getOptions(store.safeColumnHandle(segment)).level0StopWritesTrigger();
+  }
+
+  private static List<Path> sortedStagingFiles(final Path databaseDir) throws IOException {
+    final Path directory = RocksDBSortedSegmentWriter.stagingDirectory(databaseDir);
+    if (!Files.isDirectory(directory)) {
+      return List.of();
+    }
+    try (Stream<Path> files = Files.list(directory)) {
+      return files.toList();
+    }
   }
 }
