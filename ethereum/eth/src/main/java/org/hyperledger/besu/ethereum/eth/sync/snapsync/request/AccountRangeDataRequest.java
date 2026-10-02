@@ -160,8 +160,10 @@ public class AccountRangeDataRequest extends SnapDataRequest {
       final NavigableMap<Bytes32, Bytes> accounts,
       final ArrayDeque<Bytes> proofs) {
     if (!accounts.isEmpty() || !proofs.isEmpty()) {
-      if (!worldStateProofProvider.isValidRangeProof(
-          startKeyHash, endKeyHash, Bytes32.wrap(getRootHash().getBytes()), proofs, accounts)) {
+      final WorldStateProofProvider.RangeProofValidation validation =
+          worldStateProofProvider.validateRangeProof(
+              startKeyHash, endKeyHash, Bytes32.wrap(getRootHash().getBytes()), proofs, accounts);
+      if (!validation.isValid()) {
         // this happens on repivot and on bad proofs
         LOG.atTrace()
             .setMessage("invalid range proof received for account range {} {}")
@@ -170,7 +172,7 @@ public class AccountRangeDataRequest extends SnapDataRequest {
             .log();
         isProofValid = Optional.of(false);
       } else {
-        stackTrie.addElement(startKeyHash, proofs, accounts);
+        stackTrie.addElement(startKeyHash, proofs, accounts, validation.rangeTrie());
         isProofValid = Optional.of(true);
         LOG.atDebug()
             .setMessage("{} accounts received during sync for account range {} {}")

@@ -150,8 +150,10 @@ public class StorageRangeDataRequest extends SnapDataRequest {
       final NavigableMap<Bytes32, Bytes> slots,
       final ArrayDeque<Bytes> proofs) {
     if (!slots.isEmpty() || !proofs.isEmpty()) {
-      if (!worldStateProofProvider.isValidRangeProof(
-          startKeyHash, endKeyHash, storageRoot, proofs, slots)) {
+      final WorldStateProofProvider.RangeProofValidation validation =
+          worldStateProofProvider.validateRangeProof(
+              startKeyHash, endKeyHash, storageRoot, proofs, slots);
+      if (!validation.isValid()) {
         // If the proof is invalid, it means that the storage will be a mix of several blocks.
         // Therefore, it will be necessary to heal the account's storage subsequently
         LOG.atDebug()
@@ -170,7 +172,7 @@ public class StorageRangeDataRequest extends SnapDataRequest {
         downloadState.enqueueRequest(accountRefreshRequest);
         isProofValid = Optional.of(false);
       } else {
-        stackTrie.addElement(startKeyHash, proofs, slots);
+        stackTrie.addElement(startKeyHash, proofs, slots, validation.rangeTrie());
         isProofValid = Optional.of(true);
       }
     }

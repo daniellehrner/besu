@@ -48,6 +48,8 @@ import org.immutables.value.Value;
  */
 public class StackTrie {
 
+  private static final Optional<MerkleTrie<Bytes, Bytes>> NO_TRIE = Optional.empty();
+
   private final Bytes32 rootHash;
   private final AtomicInteger nbSegments;
   private final int maxSegments;
@@ -76,9 +78,27 @@ public class StackTrie {
       final Bytes32 taskIdentifier,
       final List<Bytes> proofs,
       final NavigableMap<Bytes32, Bytes> keys) {
+    addElement(taskIdentifier, proofs, keys, Optional.empty());
+  }
+
+  /**
+   * Adds the keys of a response, with the trie that was built to validate them.
+   *
+   * @param taskIdentifier identifies the response
+   * @param proofs the proof nodes of the response
+   * @param keys the keys and values of the response
+   * @param rangeTrie the trie of the proof nodes and the keys, if the validation of the response
+   *     left one. It is committed as it is, which saves building it again.
+   */
+  public void addElement(
+      final Bytes32 taskIdentifier,
+      final List<Bytes> proofs,
+      final NavigableMap<Bytes32, Bytes> keys,
+      final Optional<MerkleTrie<Bytes, Bytes>> rangeTrie) {
     this.elementsCount.addAndGet(keys.size());
     this.elements.put(
-        taskIdentifier, ImmutableTaskElement.builder().proofs(proofs).keys(keys).build());
+        taskIdentifier,
+        ImmutableTaskElement.builder().proofs(proofs).keys(keys).rangeTrie(rangeTrie).build());
   }
 
   public void removeElement(final Bytes32 taskIdentifier) {
@@ -121,29 +141,11 @@ public class StackTrie {
         return; // empty range we can ignore it
       }
 
-      final Map<Bytes32, Bytes> proofsEntries = new HashMap<>();
-      for (Bytes proof : proofs) {
-        proofsEntries.put(Bytes32.wrap(Hash.hash(proof).getBytes()), proof);
-      }
-
       if (!keys.isEmpty()) {
-        final InnerNodeDiscoveryManager<Bytes> snapStoredNodeFactory =
-            new InnerNodeDiscoveryManager<>(
-                (location, hash) -> Optional.ofNullable(proofsEntries.get(hash)),
-                Function.identity(),
-                Function.identity(),
-                startKeyHash,
-                proofs.isEmpty() ? RangeManager.MAX_RANGE : keys.lastKey(),
-                true);
-
+        // The trie that validated a single response is the trie of exactly these keys and proofs.
         final MerkleTrie<Bytes, Bytes> trie =
-            new StoredMerklePatriciaTrie<>(
-                snapStoredNodeFactory,
-                proofs.isEmpty() ? MerkleTrie.EMPTY_TRIE_NODE_HASH : rootHash);
-
-        for (Map.Entry<Bytes32, Bytes> entry : keys.entrySet()) {
-          trie.put(entry.getKey(), entry.getValue());
-        }
+            (elements.size() == 1 ? elements.values().iterator().next().rangeTrie() : NO_TRIE)
+                .orElseGet(() -> buildTrie(proofs, keys));
 
         keys.forEach(flatDatabaseUpdater::update);
 
@@ -162,6 +164,32 @@ public class StackTrie {
             }));
       }
     }
+  }
+
+  private MerkleTrie<Bytes, Bytes> buildTrie(
+      final List<Bytes> proofs, final NavigableMap<Bytes32, Bytes> keys) {
+    final Map<Bytes32, Bytes> proofsEntries = new HashMap<>();
+    for (Bytes proof : proofs) {
+      proofsEntries.put(Bytes32.wrap(Hash.hash(proof).getBytes()), proof);
+    }
+
+    final InnerNodeDiscoveryManager<Bytes> snapStoredNodeFactory =
+        new InnerNodeDiscoveryManager<>(
+            (location, hash) -> Optional.ofNullable(proofsEntries.get(hash)),
+            Function.identity(),
+            Function.identity(),
+            startKeyHash,
+            proofs.isEmpty() ? RangeManager.MAX_RANGE : keys.lastKey(),
+            true);
+
+    final MerkleTrie<Bytes, Bytes> trie =
+        new StoredMerklePatriciaTrie<>(
+            snapStoredNodeFactory, proofs.isEmpty() ? MerkleTrie.EMPTY_TRIE_NODE_HASH : rootHash);
+
+    for (Map.Entry<Bytes32, Bytes> entry : keys.entrySet()) {
+      trie.put(entry.getKey(), entry.getValue());
+    }
+    return trie;
   }
 
   public void clear() {
@@ -199,5 +227,12 @@ public class StackTrie {
     public NavigableMap<Bytes32, Bytes> keys() {
       return new TreeMap<>();
     }
+
+    /**
+     * The trie of the proofs and keys, if validating them left one.
+     *
+     * @return the trie that holds the keys between the nodes of the proofs
+     */
+    public abstract Optional<MerkleTrie<Bytes, Bytes>> rangeTrie();
   }
 }

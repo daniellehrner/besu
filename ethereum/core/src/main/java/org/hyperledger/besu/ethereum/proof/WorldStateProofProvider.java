@@ -22,9 +22,9 @@ import org.hyperledger.besu.ethereum.trie.InnerNodeDiscoveryManager.InnerNode;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.Proof;
+import org.hyperledger.besu.ethereum.trie.RangeManager;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.patricia.RemoveVisitor;
-import org.hyperledger.besu.ethereum.trie.patricia.SimpleMerklePatriciaTrie;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 
@@ -161,6 +161,23 @@ public class WorldStateProofProvider {
   }
 
   /**
+   * What validating a range proof found.
+   *
+   * @param isValid whether the keys are the whole content of the range in the trie with the given
+   *     root
+   * @param rangeTrie the trie that was built for the validation, if the range is valid and holds
+   *     keys: the nodes of the proof with those of the range between them. Whoever stores the range
+   *     can commit it instead of building the trie of the range a second time.
+   */
+  public record RangeProofValidation(
+      boolean isValid, Optional<MerkleTrie<Bytes, Bytes>> rangeTrie) {
+    private static final RangeProofValidation INVALID =
+        new RangeProofValidation(false, Optional.empty());
+    private static final RangeProofValidation VALID_WITHOUT_KEYS =
+        new RangeProofValidation(true, Optional.empty());
+  }
+
+  /**
    * Checks if a range proof is valid for a given range of keys.
    *
    * @param startKeyHash The hash of the starting key in the range.
@@ -176,27 +193,56 @@ public class WorldStateProofProvider {
       final Bytes32 rootHash,
       final List<Bytes> proofs,
       final SortedMap<Bytes32, Bytes> keys) {
+    return validateRangeProof(startKeyHash, endKeyHash, rootHash, proofs, keys).isValid();
+  }
+
+  /**
+   * Checks if a range proof is valid for a given range of keys, and hands out the trie of the range
+   * that the check builds.
+   *
+   * @param startKeyHash The hash of the starting key in the range.
+   * @param endKeyHash The hash of the ending key in the range.
+   * @param rootHash The root hash of the Merkle Trie.
+   * @param proofs The list of proofs for the keys in the range.
+   * @param keys The TreeMap of key-value pairs representing the range.
+   * @return whether the range proof is valid, with the trie of the range if it is and holds keys
+   */
+  public RangeProofValidation validateRangeProof(
+      final Bytes32 startKeyHash,
+      final Bytes32 endKeyHash,
+      final Bytes32 rootHash,
+      final List<Bytes> proofs,
+      final SortedMap<Bytes32, Bytes> keys) {
 
     // check if it's monotonic increasing
     if (keys.size() > 1 && !Ordering.natural().isOrdered(keys.keySet())) {
-      return false;
+      return RangeProofValidation.INVALID;
     }
 
     // when proof is empty and we requested the full range, we should
     // have all the keys to reconstruct the trie
     if (proofs.isEmpty()) {
       if (startKeyHash.equals(Bytes32.ZERO)) {
-        final MerkleTrie<Bytes, Bytes> trie = new SimpleMerklePatriciaTrie<>(Function.identity());
+        final MerkleTrie<Bytes, Bytes> trie =
+            new StoredMerklePatriciaTrie<>(
+                new InnerNodeDiscoveryManager<>(
+                    (location, hash) -> Optional.empty(),
+                    Function.identity(),
+                    Function.identity(),
+                    startKeyHash,
+                    RangeManager.MAX_RANGE,
+                    true),
+                MerkleTrie.EMPTY_TRIE_NODE_HASH);
         // add the received keys in the trie
         for (Map.Entry<Bytes32, Bytes> key : keys.entrySet()) {
           trie.put(key.getKey(), key.getValue());
         }
-        return rootHash.equals(trie.getRootHash());
+        return validated(rootHash, trie, keys);
       } else {
         // TODO: possibly accept a node loader so we can verify this with already
         //  completed partial storage requests
         LOG.info("failing proof due to incomplete range without proofs");
-        return false;
+        return RangeProofValidation.INVALID;
       }
     }
 
@@ -223,12 +269,12 @@ public class WorldStateProofProvider {
         // @see org.hyperledger.besu.ethereum.trie.StoredNode#load()
         final var found = trie.entriesFrom(startKeyHash, Integer.MAX_VALUE);
         if (!found.isEmpty()) {
-          return false;
+          return RangeProofValidation.INVALID;
         }
       } catch (MerkleTrieException e) {
-        return false;
+        return RangeProofValidation.INVALID;
       }
-      return true;
+      return RangeProofValidation.VALID_WITHOUT_KEYS;
     }
 
     // search inner nodes in the range created by the proofs and remove
@@ -256,6 +302,18 @@ public class WorldStateProofProvider {
     }
 
     // check if the generated root hash is valid
-    return rootHash.equals(trie.getRootHash());
+    return validated(rootHash, trie, keys);
+  }
+
+  private static RangeProofValidation validated(
+      final Bytes32 rootHash,
+      final MerkleTrie<Bytes, Bytes> trie,
+      final SortedMap<Bytes32, Bytes> keys) {
+    if (!rootHash.equals(trie.getRootHash())) {
+      return RangeProofValidation.INVALID;
+    }
+    return keys.isEmpty()
+        ? RangeProofValidation.VALID_WITHOUT_KEYS
+        : new RangeProofValidation(true, Optional.of(trie));
   }
 }
