@@ -79,6 +79,35 @@ public class RangeManager {
     return 1;
   }
 
+  /**
+   * The number of ranges to split the rest of a range into, once a response has shown how much of
+   * the range a single response covers.
+   *
+   * <p>The ranges of a storage are downloaded one response after the other, each range on its own.
+   * A range that needs many more responses is therefore split again, so that the rest of it is
+   * downloaded side by side as well. A range that is nearly done is left alone: every split leaves
+   * the trie nodes on its boundaries to the healing.
+   *
+   * @param rangeStart the start of the requested range
+   * @param nextStart the first key after what the response covered
+   * @param rangeEnd the end of the requested range
+   * @return {@link #MAX_RANGE_COUNT} if the rest of the range would take at least that many more
+   *     responses, otherwise 1
+   */
+  public static int getRemainingRangeCount(
+      final Bytes32 rangeStart, final Bytes32 nextStart, final Bytes32 rangeEnd) {
+    final BigInteger covered =
+        nextStart.toUnsignedBigInteger().subtract(rangeStart.toUnsignedBigInteger());
+    final BigInteger remaining =
+        rangeEnd.toUnsignedBigInteger().subtract(nextStart.toUnsignedBigInteger());
+    if (covered.signum() <= 0 || remaining.signum() <= 0) {
+      return 1;
+    }
+    return remaining.divide(covered).compareTo(BigInteger.valueOf(MAX_RANGE_COUNT)) >= 0
+        ? MAX_RANGE_COUNT
+        : 1;
+  }
+
   public static Map<Bytes32, Bytes32> generateAllRanges(final int sizeRange) {
     if (sizeRange == 1) {
       return Map.ofEntries(Map.entry(MIN_RANGE, MAX_RANGE));

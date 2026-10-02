@@ -19,6 +19,7 @@ import static org.hyperledger.besu.ethereum.eth.sync.snapsync.StackTrie.FlatData
 import static org.hyperledger.besu.ethereum.trie.RangeManager.MIN_RANGE;
 import static org.hyperledger.besu.ethereum.trie.RangeManager.findNewBeginElementInRange;
 import static org.hyperledger.besu.ethereum.trie.RangeManager.getRangeCount;
+import static org.hyperledger.besu.ethereum.trie.RangeManager.getRemainingRangeCount;
 import static org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator.applyForStrategy;
 
 import org.hyperledger.besu.datatypes.Hash;
@@ -59,9 +60,18 @@ public class StorageRangeDataRequest extends SnapDataRequest {
   private final Bytes32 storageRoot;
   private final Bytes32 startKeyHash;
   private final Bytes32 endKeyHash;
+  // how many times the storage was split to get to this range
+  private final int splitDepth;
 
   private final StackTrie stackTrie;
   private Optional<Boolean> isProofValid;
+
+  /**
+   * The ranges a storage is split into are split once more if they turn out to be large. That gives
+   * the storage of the largest contracts up to {@code MAX_RANGE_COUNT} squared ranges to download
+   * side by side, instead of leaving it as the last thing the download waits for.
+   */
+  private static final int MAX_SPLIT_DEPTH = 2;
 
   protected StorageRangeDataRequest(
       final Hash rootHash,
@@ -69,7 +79,18 @@ public class StorageRangeDataRequest extends SnapDataRequest {
       final Bytes32 storageRoot,
       final Bytes32 startKeyHash,
       final Bytes32 endKeyHash) {
+    this(rootHash, accountHash, storageRoot, startKeyHash, endKeyHash, 0);
+  }
+
+  protected StorageRangeDataRequest(
+      final Hash rootHash,
+      final Bytes32 accountHash,
+      final Bytes32 storageRoot,
+      final Bytes32 startKeyHash,
+      final Bytes32 endKeyHash,
+      final int splitDepth) {
     super(STORAGE_RANGE, rootHash);
+    this.splitDepth = splitDepth;
     this.accountHash = Hash.wrap(accountHash);
     this.storageRoot = storageRoot;
     this.startKeyHash = startKeyHash;
@@ -186,7 +207,8 @@ public class StorageRangeDataRequest extends SnapDataRequest {
             storageRoot, taskElement.proofs(), taskElement.keys(), startKeyHash, endKeyHash)
         .ifPresent(
             missingRightElement -> {
-              final int nbRanges = getRangeCount(startKeyHash, endKeyHash, taskElement.keys());
+              final int nbRanges = rangeCount(missingRightElement, taskElement.keys());
+              final int childSplitDepth = nbRanges > 1 ? splitDepth + 1 : splitDepth;
               RangeManager.generateRanges(missingRightElement, endKeyHash, nbRanges)
                   .forEach(
                       (key, value) -> {
@@ -196,7 +218,8 @@ public class StorageRangeDataRequest extends SnapDataRequest {
                                 Bytes32.wrap(accountHash.getBytes()),
                                 storageRoot,
                                 key,
-                                value);
+                                value,
+                                childSplitDepth);
                         childRequests.add(storageRangeDataRequest);
                       });
             });
@@ -207,6 +230,18 @@ public class StorageRangeDataRequest extends SnapDataRequest {
     }
 
     return childRequests.stream();
+  }
+
+  /** The number of ranges the rest of this range is requested in. */
+  private int rangeCount(
+      final Bytes32 missingRightElement, final NavigableMap<Bytes32, Bytes> receivedSlots) {
+    if (startKeyHash.equals(MIN_RANGE) && endKeyHash.equals(RangeManager.MAX_RANGE)) {
+      return getRangeCount(startKeyHash, endKeyHash, receivedSlots);
+    }
+    if (splitDepth >= MAX_SPLIT_DEPTH || receivedSlots.isEmpty()) {
+      return 1;
+    }
+    return getRemainingRangeCount(startKeyHash, missingRightElement, endKeyHash);
   }
 
   public Hash getAccountHash() {

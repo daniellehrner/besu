@@ -150,6 +150,16 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
 
   public static class Builder {
 
+    /**
+     * The storage of the large contracts is most of the storage of a network and is downloaded a
+     * response of one range at a time, so it is what the range download ends up waiting for. It
+     * gets more requests in flight than the other pipelines, and more than one thread to build the
+     * tries of its responses.
+     */
+    private static final int LARGE_STORAGE_REQUEST_FACTOR = 3;
+
+    private static final int LARGE_STORAGE_PERSIST_THREADS = 4;
+
     private SnapSyncConfiguration snapSyncConfiguration;
     private int maxOutstandingRequests;
     private SnapWorldDownloadState downloadState;
@@ -320,16 +330,22 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
                     pivotBlockManager.check(doNothingOnPivotChange);
                     return tasks;
                   })
-              .thenProcessAsyncOrdered(
+              // Each of these requests is for one range of one contract, and the next request for
+              // that range is only created when its response is persisted. So no two responses in
+              // here depend on each other: they need not leave in the order they were requested,
+              // which would make all of them wait for the slowest peer, and they can be persisted
+              // side by side.
+              .thenProcessAsync(
                   "batchDownloadLargeStorageData",
                   requestTask -> requestDataStep.requestStorage(List.of(requestTask)),
-                  maxOutstandingRequests)
-              .thenProcess(
+                  maxOutstandingRequests * LARGE_STORAGE_REQUEST_FACTOR)
+              .thenProcessInParallel(
                   "batchPersistLargeStorageData",
                   task -> {
                     persistDataStep.persist(task);
                     return task;
-                  })
+                  },
+                  LARGE_STORAGE_PERSIST_THREADS)
               .andFinishWith(
                   "batchLargeStorageDataDownloaded",
                   tasks -> tasks.forEach(requestsToComplete::put));

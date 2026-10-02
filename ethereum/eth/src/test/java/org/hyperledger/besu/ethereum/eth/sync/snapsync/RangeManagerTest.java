@@ -106,6 +106,36 @@ public final class RangeManagerTest {
   }
 
   @Test
+  public void testRemainingRangeCountSplitsARangeThatNeedsManyMoreResponses() {
+    final Bytes32 start = Bytes32.rightPad(Bytes.of(0x10));
+    final Bytes32 end = Bytes32.rightPad(Bytes.of(0x20));
+    // the response covered a sixteenth of the range and a bit, fifteen more would not be enough
+    final Bytes32 nextStart = Bytes32.rightPad(Bytes.of(0x10, 0xf0));
+
+    assertThat(RangeManager.getRemainingRangeCount(start, nextStart, end))
+        .isEqualTo(RangeManager.MAX_RANGE_COUNT);
+  }
+
+  @Test
+  public void testRemainingRangeCountLeavesARangeAloneThatIsNearlyDone() {
+    final Bytes32 start = Bytes32.rightPad(Bytes.of(0x10));
+    final Bytes32 end = Bytes32.rightPad(Bytes.of(0x20));
+    // the response covered an eighth of the range
+    final Bytes32 nextStart = Bytes32.rightPad(Bytes.of(0x12));
+
+    assertThat(RangeManager.getRemainingRangeCount(start, nextStart, end)).isEqualTo(1);
+  }
+
+  @Test
+  public void testRemainingRangeCountOfAResponseThatCoveredNothingOrEverything() {
+    final Bytes32 start = Bytes32.rightPad(Bytes.of(0x10));
+    final Bytes32 end = Bytes32.rightPad(Bytes.of(0x20));
+
+    assertThat(RangeManager.getRemainingRangeCount(start, start, end)).isEqualTo(1);
+    assertThat(RangeManager.getRemainingRangeCount(start, end, end)).isEqualTo(1);
+  }
+
+  @Test
   public void testGenerateAllRangesWithSize1() {
     final Map<Bytes32, Bytes32> expectedResult = new HashMap<>();
     expectedResult.put(

@@ -96,6 +96,17 @@ public abstract class SnapDataRequest implements TasksPriorityProvider {
         rootHash, accountHash, storageRoot, startKeyHash, endKeyHash);
   }
 
+  public static StorageRangeDataRequest createStorageRangeDataRequest(
+      final Hash rootHash,
+      final Bytes32 accountHash,
+      final Bytes32 storageRoot,
+      final Bytes32 startKeyHash,
+      final Bytes32 endKeyHash,
+      final int splitDepth) {
+    return new StorageRangeDataRequest(
+        rootHash, accountHash, storageRoot, startKeyHash, endKeyHash, splitDepth);
+  }
+
   public static AccountTrieNodeHealingRequest createAccountTrieNodeDataRequest(
       final Hash hash, final Bytes location, final Set<Bytes> inconsistentAccounts) {
     return new AccountTrieNodeHealingRequest(hash, hash, location, inconsistentAccounts);
