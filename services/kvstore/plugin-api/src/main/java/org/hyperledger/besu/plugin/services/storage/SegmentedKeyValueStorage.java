@@ -301,6 +301,23 @@ public interface SegmentedKeyValueStorage extends Closeable {
   }
 
   /**
+   * Finishes sorted writers of this storage together, which does for every one of them what {@link
+   * SortedSegmentWriter#finish()} does. Where several writers of a segment hold an entry under the
+   * same key, the one of the writer that comes last in the list is kept.
+   *
+   * <p>The default implementation finishes them one by one. A storage for which taking in a run
+   * costs the same whether it is one run or many overrides it.
+   *
+   * @param writers the writers to finish, each of them opened with {@link #sortedWriter}
+   * @throws StorageException if the entries cannot be added to their segments. Some of the writers
+   *     may be finished by then.
+   */
+  default void finishSortedWriters(final List<SortedSegmentWriter> writers)
+      throws StorageException {
+    writers.forEach(SortedSegmentWriter::finish);
+  }
+
+  /**
    * Tells the storage that a large amount of data is about to be loaded into the segments, mostly
    * through {@link #sortedWriter}. Until the returned load is closed the storage may hold back the
    * background work that reorganises the segments: during the load that work rewrites entries over
