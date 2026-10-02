@@ -49,6 +49,7 @@ import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -397,18 +398,21 @@ public class RequestDataStep {
         (AccountFlatDatabaseHealingRangeRequest) requestTask.getData();
     final BlockHeader blockHeader = fastSyncState.getPivotBlockHeader().get();
 
-    // retrieve accounts from flat database
-    final TreeMap<Bytes32, Bytes> accounts = new TreeMap<>();
+    // Retrieve accounts from flat database. The map that comes back is used as it is: copying it
+    // into another one would sort its entries a second time.
+    final AtomicReference<NavigableMap<Bytes32, Bytes>> localAccounts =
+        new AtomicReference<>(new TreeMap<>());
 
     worldStateStorageCoordinator.applyOnMatchingFlatMode(
         FlatDbMode.FULL,
         onBonsai -> {
-          accounts.putAll(
+          localAccounts.set(
               onBonsai.streamFlatAccounts(
                   accountDataRequest.getStartKeyHash(),
                   accountDataRequest.getEndKeyHash(),
                   snapSyncConfiguration.getLocalFlatAccountCountToHealPerRequest()));
         });
+    final NavigableMap<Bytes32, Bytes> accounts = localAccounts.get();
 
     final List<Bytes> proofs = new ArrayList<>();
     if (!accounts.isEmpty()) {
@@ -453,18 +457,20 @@ public class RequestDataStep {
 
     storageDataRequest.setRootHash(blockHeader.getStateRoot());
 
-    // retrieve slots from flat database
-    final TreeMap<Bytes32, Bytes> slots = new TreeMap<>();
+    // retrieve slots from flat database, and use the map that comes back as it is
+    final AtomicReference<NavigableMap<Bytes32, Bytes>> localSlots =
+        new AtomicReference<>(new TreeMap<>());
     worldStateStorageCoordinator.applyOnMatchingFlatMode(
         FlatDbMode.FULL,
         onBonsai -> {
-          slots.putAll(
+          localSlots.set(
               onBonsai.streamFlatStorages(
                   storageDataRequest.getAccountHash(),
                   storageDataRequest.getStartKeyHash(),
                   storageDataRequest.getEndKeyHash(),
                   snapSyncConfiguration.getLocalFlatStorageCountToHealPerRequest()));
         });
+    final NavigableMap<Bytes32, Bytes> slots = localSlots.get();
 
     final List<Bytes> proofs = new ArrayList<>();
     if (!slots.isEmpty()) {
