@@ -269,4 +269,19 @@ public class StackTrieTest {
     Assertions.assertThat(recreatedWorldStateStorage.getAccountStateTrieNode(trie.getRootHash()))
         .isPresent();
   }
+
+  @Test
+  public void shouldLetGoOfItsElementsAndKeepTheNumberOfTheirKeys() {
+    final StackTrie stackTrie = new StackTrie(Hash.EMPTY_TRIE_HASH, lastAccount);
+    final Bytes32 taskIdentifier = Bytes32.random();
+    final TreeMap<Bytes32, Bytes> keys = new TreeMap<>();
+    keys.put(Bytes32.random(), Bytes.of(1));
+    keys.put(Bytes32.random(), Bytes.of(2));
+    stackTrie.addElement(taskIdentifier, new ArrayList<>(), keys);
+
+    stackTrie.releaseElements();
+
+    Assertions.assertThat(stackTrie.getElement(taskIdentifier)).isNull();
+    Assertions.assertThat(stackTrie.getElementsCount().get()).isEqualTo(2);
+  }
 }

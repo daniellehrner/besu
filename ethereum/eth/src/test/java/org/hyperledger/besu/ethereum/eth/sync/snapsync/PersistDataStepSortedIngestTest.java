@@ -39,6 +39,7 @@ import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.services.tasks.Task;
 
 import java.util.List;
+import java.util.NavigableMap;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -77,6 +78,9 @@ public class PersistDataStepSortedIngestTest {
   private final StorageRangeDataRequest storageRequest =
       (StorageRangeDataRequest) tasks.get(1).getData();
   private final BytecodeRequest codeRequest = (BytecodeRequest) tasks.get(2).getData();
+  // the requests let go of their responses once those are with the ingest
+  private final NavigableMap<Bytes32, Bytes> accounts = accountRequest.getAccounts();
+  private final NavigableMap<Bytes32, Bytes> slots = storageRequest.getSlots();
 
   @BeforeEach
   public void setUp() {
@@ -102,8 +106,32 @@ public class PersistDataStepSortedIngestTest {
     persistDataStep.persist(tasks);
 
     assertThat(worldStateStorage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE))
-        .hasSameSizeAs(accountRequest.getAccounts().entrySet());
+        .hasSameSizeAs(accounts.entrySet());
     verify(downloadState).onRequestStored(accountRequest);
+  }
+
+  @Test
+  public void shouldLetGoOfTheResponsesThatWaitForTheirFile() {
+    final AccountRangeDataRequest account = spy(accountRequest);
+    final StorageRangeDataRequest storage = spy(storageRequest);
+
+    persistDataStep.persist(List.of(new StubTask(account), new StubTask(storage)));
+
+    // the storage is not stored yet, and its request is held until it is
+    verify(downloadState, never()).onRequestStored(storage);
+    final InOrder inOrder = inOrder(account, storage);
+    inOrder.verify(account).persist(any(), any(), any(), any(), any());
+    inOrder.verify(account).releaseResponse();
+    inOrder.verify(storage).persist(any(), any(), any(), any(), any());
+    inOrder.verify(storage).releaseResponse();
+    // which leaves them complete for the step that follows
+    assertThat(account.isResponseReceived()).isTrue();
+    assertThat(storage.isResponseReceived()).isTrue();
+
+    sortedIngest.finishAll();
+
+    assertAccountsAndStoragePersisted();
+    verify(downloadState).onRequestStored(storage);
   }
 
   @Test
@@ -154,14 +182,12 @@ public class PersistDataStepSortedIngestTest {
             Bytes32.wrap(accountRequest.getRootHash().getBytes()),
             b -> b,
             b -> b);
-    assertThat(accountRequest.getAccounts()).isNotEmpty();
-    accountRequest
-        .getAccounts()
-        .forEach(
-            (key, value) -> {
-              assertThat(accountTrie.get(key)).isPresent();
-              assertThat(worldStateStorage.getAccount(Hash.wrap(key))).isPresent();
-            });
+    assertThat(accounts).isNotEmpty();
+    accounts.forEach(
+        (key, value) -> {
+          assertThat(accountTrie.get(key)).isPresent();
+          assertThat(worldStateStorage.getAccount(Hash.wrap(key))).isPresent();
+        });
 
     final StoredMerklePatriciaTrie<Bytes, Bytes> storageTrie =
         new StoredMerklePatriciaTrie<>(
@@ -171,9 +197,9 @@ public class PersistDataStepSortedIngestTest {
             storageRequest.getStorageRoot(),
             b -> b,
             b -> b);
-    assertThat(storageRequest.getSlots()).isNotEmpty();
-    storageRequest.getSlots().forEach((key, value) -> assertThat(storageTrie.get(key)).isPresent());
+    assertThat(slots).isNotEmpty();
+    slots.forEach((key, value) -> assertThat(storageTrie.get(key)).isPresent());
     assertThat(worldStateStorage.getComposedWorldStateStorage().stream(ACCOUNT_STORAGE_STORAGE))
-        .hasSameSizeAs(storageRequest.getSlots().entrySet());
+        .hasSameSizeAs(slots.entrySet());
   }
 }
