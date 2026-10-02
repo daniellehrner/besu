@@ -15,9 +15,11 @@
 package org.hyperledger.besu.ethereum.eth.sync.snapsync;
 
 import static org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest.createAccountFlatHealingRangeRequest;
+import static org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest.createAccountRangeDataRequest;
 import static org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest.createAccountTrieNodeDataRequest;
 import static org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator.applyForStrategy;
 
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.chain.BlockAddedObserver;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -52,8 +54,10 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
@@ -67,6 +71,12 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
     implements SnapRequestContext {
 
   private static final Logger LOG = LoggerFactory.getLogger(SnapWorldDownloadState.class);
+
+  // Account ranges stop being requested once the storage or code requests they spawn back up to
+  // the high watermark, and are requested again when every one of those queues is below the low one
+  static final long CHILD_QUEUE_HIGH_WATERMARK = 10_000;
+  static final long CHILD_QUEUE_LOW_WATERMARK = 5_000;
+  static final long RESUME_POINT_PERSIST_INTERVAL_MILLIS = 5_000;
 
   protected final InMemoryTaskQueue<SnapDataRequest> pendingAccountRequests =
       new InMemoryTaskQueue<>();
@@ -99,6 +109,12 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
   // metrics around the snapsync
   private final SnapSyncMetricsManager metricsManager;
 
+  private final AccountRangeResumeTracker accountRangeResumeTracker =
+      new AccountRangeResumeTracker();
+  private final Clock clock;
+  private boolean accountRequestsPaused;
+  private Optional<Long> lastResumePointPersistMillis = Optional.empty();
+
   private final AtomicBoolean trieHealStartedBefore = new AtomicBoolean(false);
   private final AtomicBoolean worldStateHealFinishedNotified = new AtomicBoolean(false);
 
@@ -127,6 +143,7 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
     this.metricsManager = metricsManager;
     this.blockObserverId = blockchain.observeBlockAdded(createBlockchainObserver());
     this.ethContext = ethContext;
+    this.clock = clock;
 
     final MetricsSystem metricsSystem = metricsManager.getMetricsSystem();
     metricsSystem.createLongGauge(
@@ -261,6 +278,7 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
       syncDurationMetrics.startTimer(SyncDurationMetrics.Labels.SNAP_WORLD_STATE_HEALING_DURATION);
     }
     snapContext.clearAccountRangeTasks();
+    accountRangeResumeTracker.clear();
     snapSyncState.setHealTrieStatus(true);
     // Try to find a new pivot block before starting the healing process
     pivotBlockSelector.switchToNewPivotBlock(
@@ -308,6 +326,7 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
   @Override
   public synchronized void enqueueRequest(final SnapDataRequest request) {
     if (!internalFuture.isDone()) {
+      trackEnqueuedForResume(request);
       if (request instanceof BytecodeRequest) {
         pendingCodeRequests.add(request);
       } else if (request instanceof StorageRangeDataRequest storageRangeDataRequest) {
@@ -395,11 +414,97 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
     return null;
   }
 
+  /**
+   * Waits for the next request of the given queue, without handing one out while the pause
+   * condition holds.
+   */
+  private synchronized Task<SnapDataRequest> dequeueRequestBlocking(
+      final BooleanSupplier pauseCondition, final TaskCollection<SnapDataRequest> queue) {
+    while (!internalFuture.isDone()) {
+      if (!pauseCondition.getAsBoolean()) {
+        final Task<SnapDataRequest> task = queue.remove();
+        if (task != null) {
+          return task;
+        }
+      }
+      try {
+        wait();
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return null;
+      }
+    }
+    return null;
+  }
+
   public synchronized Task<SnapDataRequest> dequeueAccountRequestBlocking() {
-    return dequeueRequestBlocking(
-        List.of(pendingStorageRequests, pendingLargeStorageRequests, pendingCodeRequests),
-        pendingAccountRequests,
-        unused -> snapContext.updatePersistedTasks(pendingAccountRequests.asList()));
+    final Task<SnapDataRequest> task =
+        dequeueRequestBlocking(this::shouldPauseAccountRequests, pendingAccountRequests);
+    if (task != null) {
+      persistResumePointIfDue();
+    }
+    return task;
+  }
+
+  /**
+   * Bounded backpressure with hysteresis: account ranges pause once any queue of the requests they
+   * spawn backs up to the high watermark and flow again only after every one of those queues has
+   * drained below the low watermark.
+   */
+  private boolean shouldPauseAccountRequests() {
+    final long watermark =
+        accountRequestsPaused ? CHILD_QUEUE_LOW_WATERMARK : CHILD_QUEUE_HIGH_WATERMARK;
+    accountRequestsPaused =
+        pendingStorageRequests.size() >= watermark
+            || pendingLargeStorageRequests.size() >= watermark
+            || pendingCodeRequests.size() >= watermark;
+    return accountRequestsPaused;
+  }
+
+  private void trackEnqueuedForResume(final SnapDataRequest request) {
+    if (request instanceof AccountRangeDataRequest accountRangeDataRequest
+        && accountRangeDataRequest.isRangeDownload()) {
+      accountRangeResumeTracker.accountRequestEnqueued(
+          accountRangeDataRequest.getStartKeyHash(), accountRangeDataRequest.getEndKeyHash());
+    } else {
+      request.getAccountRangeOrigin().ifPresent(accountRangeResumeTracker::childEnqueued);
+    }
+  }
+
+  @Override
+  public void onRequestStored(final SnapDataRequest request) {
+    if (request instanceof AccountRangeDataRequest accountRangeDataRequest
+        && accountRangeDataRequest.isRangeDownload()) {
+      accountRangeResumeTracker.accountRequestCompleted(
+          accountRangeDataRequest.getStartKeyHash(), accountRangeDataRequest.getEndKeyHash());
+    } else {
+      request.getAccountRangeOrigin().ifPresent(accountRangeResumeTracker::childCompleted);
+    }
+  }
+
+  private void persistResumePointIfDue() {
+    final long now = clock.millis();
+    if (snapSyncState.isHealTrieInProgress()
+        || lastResumePointPersistMillis
+            .filter(last -> now - last < RESUME_POINT_PERSIST_INTERVAL_MILLIS)
+            .isPresent()) {
+      return;
+    }
+    final Optional<Hash> maybeStateRoot =
+        snapSyncState.getPivotBlockHeader().map(BlockHeader::getStateRoot);
+    final List<AccountRangeResumeTracker.ResumeRange> resumeRanges =
+        accountRangeResumeTracker.resumeRanges();
+    // an empty list would be read as a finished range download on restart
+    if (maybeStateRoot.isEmpty() || resumeRanges.isEmpty()) {
+      return;
+    }
+    lastResumePointPersistMillis = Optional.of(now);
+    snapContext.updatePersistedTasks(
+        resumeRanges.stream()
+            .map(
+                range ->
+                    createAccountRangeDataRequest(maybeStateRoot.get(), range.start(), range.end()))
+            .toList());
   }
 
   public synchronized Task<SnapDataRequest> dequeueLargeStorageRequestBlocking() {
@@ -411,7 +516,7 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
   }
 
   public synchronized Task<SnapDataRequest> dequeueCodeRequestBlocking() {
-    return dequeueRequestBlocking(List.of(pendingStorageRequests), pendingCodeRequests, __ -> {});
+    return dequeueRequestBlocking(Collections.emptyList(), pendingCodeRequests, __ -> {});
   }
 
   public synchronized Task<SnapDataRequest> dequeueTrieNodeRequestBlocking() {

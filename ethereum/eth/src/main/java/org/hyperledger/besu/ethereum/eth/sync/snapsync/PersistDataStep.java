@@ -18,6 +18,7 @@ import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.can
 import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.errorCountAtThreshold;
 import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.getRetryableErrorCounter;
 
+import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.AccountRangeDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapRequestContext;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.heal.TrieNodeHealingRequest;
@@ -27,7 +28,9 @@ import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import org.hyperledger.besu.services.tasks.Task;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 import org.slf4j.Logger;
@@ -56,16 +59,17 @@ public class PersistDataStep {
   public List<Task<SnapDataRequest>> persist(final List<Task<SnapDataRequest>> tasks) {
     try {
       final WorldStateKeyValueStorage.Updater updater = worldStateStorageCoordinator.updater();
+      final List<SnapDataRequest> writtenByUpdater = new ArrayList<>();
       for (Task<SnapDataRequest> task : tasks) {
-        if (task.getData().isResponseReceived()) {
+        final SnapDataRequest request = task.getData();
+        if (request.isResponseReceived()) {
           // enqueue child requests
           final Stream<SnapDataRequest> childRequests =
-              task.getData()
-                  .getChildRequests(downloadState, worldStateStorageCoordinator, snapSyncState);
-          if (!(task.getData() instanceof TrieNodeHealingRequest)) {
-            enqueueChildren(childRequests);
+              request.getChildRequests(downloadState, worldStateStorageCoordinator, snapSyncState);
+          if (!(request instanceof TrieNodeHealingRequest)) {
+            enqueueChildren(withAccountRangeOrigin(request, childRequests));
           } else {
-            if (!task.getData().isExpired(snapSyncState)) {
+            if (!request.isExpired(snapSyncState)) {
               enqueueChildren(childRequests);
             } else {
               continue;
@@ -74,15 +78,15 @@ public class PersistDataStep {
 
           // persist nodes
           final int persistedNodes =
-              task.getData()
-                  .persist(
-                      worldStateStorageCoordinator,
-                      updater,
-                      downloadState,
-                      snapSyncState,
-                      snapSyncConfiguration);
+              request.persist(
+                  worldStateStorageCoordinator,
+                  updater,
+                  downloadState,
+                  snapSyncState,
+                  snapSyncConfiguration);
+          writtenByUpdater.add(request);
           if (persistedNodes > 0) {
-            if (task.getData() instanceof TrieNodeHealingRequest) {
+            if (request instanceof TrieNodeHealingRequest) {
               downloadState.getMetricsManager().notifyTrieNodesHealed(persistedNodes);
             } else {
               downloadState.getMetricsManager().notifyNodesGenerated(persistedNodes);
@@ -91,6 +95,7 @@ public class PersistDataStep {
         }
       }
       updater.commit();
+      writtenByUpdater.forEach(downloadState::onRequestStored);
     } catch (StorageException storageException) {
       if (canRetryOnError(storageException)) {
         // We reset the task by setting it to null. This way, it is considered as failed by the
@@ -148,5 +153,37 @@ public class PersistDataStep {
 
   private void enqueueChildren(final Stream<SnapDataRequest> childRequests) {
     downloadState.enqueueRequests(childRequests);
+  }
+
+  /**
+   * Marks the storage and code requests spawned by a request of the range download with the account
+   * range response they descend from, so the download state knows which account ranges still have
+   * unfinished children.
+   */
+  private Stream<SnapDataRequest> withAccountRangeOrigin(
+      final SnapDataRequest parent, final Stream<SnapDataRequest> childRequests) {
+    final Optional<AccountRangeResumeTracker.Origin> origin =
+        isAccountRangeDownload(parent)
+            ? Optional.of(
+                new AccountRangeResumeTracker.Origin(
+                    ((AccountRangeDataRequest) parent).getEndKeyHash(),
+                    ((AccountRangeDataRequest) parent).getStartKeyHash()))
+            : parent.getAccountRangeOrigin();
+    if (origin.isEmpty()) {
+      return childRequests;
+    }
+    return childRequests.map(
+        child -> {
+          // the next account range request of the partition is not a child of this response
+          if (!isAccountRangeDownload(child)) {
+            child.setAccountRangeOrigin(origin.get());
+          }
+          return child;
+        });
+  }
+
+  private static boolean isAccountRangeDownload(final SnapDataRequest request) {
+    return request instanceof AccountRangeDataRequest accountRangeDataRequest
+        && accountRangeDataRequest.isRangeDownload();
   }
 }

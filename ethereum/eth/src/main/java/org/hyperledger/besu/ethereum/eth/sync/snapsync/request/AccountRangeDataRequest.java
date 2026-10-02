@@ -239,6 +239,16 @@ public class AccountRangeDataRequest extends SnapDataRequest {
     return childRequests.stream();
   }
 
+  /**
+   * Whether this request downloads a range of the account trie, as opposed to refreshing a single
+   * account to continue the download of its storage with another root hash.
+   *
+   * @return true if this request is part of the account range download
+   */
+  public boolean isRangeDownload() {
+    return startStorageRange.isEmpty() || endStorageRange.isEmpty();
+  }
+
   public Bytes32 getStartKeyHash() {
     return startKeyHash;
   }
