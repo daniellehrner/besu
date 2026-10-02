@@ -47,6 +47,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -289,6 +290,89 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
     assertThat(filesAtLevel(store, TestSegment.FOO, BOTTOM_LEVEL)).isEqualTo(1);
     assertThat(store.get(TestSegment.FOO, bytesOf(5))).contains(bytesOf(51));
 
+    store.close();
+  }
+
+  @Test
+  public void sortedWritersFinishedTogetherBecomeVisibleInTheirSegments() throws Exception {
+    final RocksDBColumnarKeyValueStorage store =
+        (RocksDBColumnarKeyValueStorage) createSegmentedStore();
+    final List<SortedSegmentWriter> writers = new ArrayList<>();
+    // out of key order on purpose, and with a writer that got nothing in between
+    for (final int first : List.of(10, 1, 20)) {
+      final SortedSegmentWriter foo = store.sortedWriter(TestSegment.FOO);
+      foo.put(bytesOf(first), bytesOf(first));
+      foo.put(bytesOf(first + 1), bytesOf(first));
+      writers.add(foo);
+      writers.add(store.sortedWriter(TestSegment.FOO));
+      final SortedSegmentWriter bar = store.sortedWriter(TestSegment.BAR);
+      bar.put(bytesOf(first), bytesOf(first + 100));
+      writers.add(bar);
+    }
+    assertThat(store.get(TestSegment.FOO, bytesOf(1))).isEmpty();
+
+    store.finishSortedWriters(writers);
+    writers.forEach(SortedSegmentWriter::close);
+
+    for (final int first : List.of(10, 1, 20)) {
+      assertThat(store.get(TestSegment.FOO, bytesOf(first))).contains(bytesOf(first));
+      assertThat(store.get(TestSegment.FOO, bytesOf(first + 1))).contains(bytesOf(first));
+      assertThat(store.get(TestSegment.BAR, bytesOf(first))).contains(bytesOf(first + 100));
+    }
+    // no file holds a key inside the range of another, so every one of them is kept as it is
+    assertThat(filesAtLevel(store, TestSegment.FOO, 0)).isZero();
+    assertThat(filesAtLevel(store, TestSegment.FOO, BOTTOM_LEVEL)).isEqualTo(3);
+    assertThat(filesAtLevel(store, TestSegment.BAR, BOTTOM_LEVEL)).isEqualTo(3);
+
+    store.close();
+  }
+
+  @Test
+  public void ofSortedWritersFinishedTogetherTheLaterOneCountsWhereTheirKeysOverlap()
+      throws Exception {
+    final RocksDBColumnarKeyValueStorage store =
+        (RocksDBColumnarKeyValueStorage) createSegmentedStore();
+    final SortedSegmentWriter first = store.sortedWriter(TestSegment.FOO);
+    first.put(bytesOf(1), bytesOf(10));
+    first.put(bytesOf(5), bytesOf(50));
+    final SortedSegmentWriter apart = store.sortedWriter(TestSegment.FOO);
+    apart.put(bytesOf(20), bytesOf(20));
+    final SortedSegmentWriter second = store.sortedWriter(TestSegment.FOO);
+    second.put(bytesOf(5), bytesOf(51));
+    second.put(bytesOf(9), bytesOf(90));
+
+    store.finishSortedWriters(List.of(first, apart, second));
+    List.of(first, apart, second).forEach(SortedSegmentWriter::close);
+
+    assertThat(store.get(TestSegment.FOO, bytesOf(1))).contains(bytesOf(10));
+    assertThat(store.get(TestSegment.FOO, bytesOf(5))).contains(bytesOf(51));
+    assertThat(store.get(TestSegment.FOO, bytesOf(9))).contains(bytesOf(90));
+    assertThat(store.get(TestSegment.FOO, bytesOf(20))).contains(bytesOf(20));
+    // the two files that do not overlap are in the bottom level, the third one above the first
+    assertThat(filesAtLevel(store, TestSegment.FOO, BOTTOM_LEVEL)).isEqualTo(2);
+
+    store.close();
+  }
+
+  @Test
+  public void sortedWritersOfAnotherStorageAreNotFinishedTogether(@TempDir final Path otherPath)
+      throws Exception {
+    final SegmentedKeyValueStorage store = createSegmentedStore();
+    final SegmentedKeyValueStorage other =
+        createSegmentedStore(
+            otherPath,
+            new NoOpMetricsSystem(),
+            Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO),
+            List.of());
+
+    try (SortedSegmentWriter writer = other.sortedWriter(TestSegment.FOO)) {
+      writer.put(bytesOf(1), bytesOf(10));
+
+      assertThatThrownBy(() -> store.finishSortedWriters(List.of(writer)))
+          .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    other.close();
     store.close();
   }
 

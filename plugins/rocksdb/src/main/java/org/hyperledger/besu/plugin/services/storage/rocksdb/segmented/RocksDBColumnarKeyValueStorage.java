@@ -710,6 +710,12 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   }
 
   @Override
+  public void finishSortedWriters(final List<SortedSegmentWriter> writers) {
+    throwIfClosed();
+    RocksDBSortedSegmentWriter.finishTogether(this, writers);
+  }
+
+  @Override
   public SegmentBulkLoad startBulkLoad(final List<SegmentIdentifier> segmentIdentifiers) {
     throwIfClosed();
     return new RocksDBSegmentBulkLoad(this, segmentIdentifiers);
