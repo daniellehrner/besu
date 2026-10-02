@@ -16,6 +16,8 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -29,6 +31,7 @@ import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.BytecodeRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.StorageRangeDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.heal.AccountTrieNodeHealingRequest;
+import org.hyperledger.besu.ethereum.trie.RangeManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
@@ -36,8 +39,10 @@ import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import org.hyperledger.besu.services.tasks.Task;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Stream;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -135,6 +140,31 @@ public class PersistDataStepTest {
           "NullPointerException occurred during persist step, taskElement might be null: "
               + e.getMessage());
     }
+  }
+
+  @Test
+  public void shouldMarkStorageAndCodeRequestsWithTheAccountRangeTheyDescendFrom() {
+    final List<SnapDataRequest> enqueued = new ArrayList<>();
+    doAnswer(
+            invocation -> {
+              invocation.<Stream<SnapDataRequest>>getArgument(0).forEach(enqueued::add);
+              return null;
+            })
+        .when(downloadState)
+        .enqueueRequests(any());
+    final Task<SnapDataRequest> accountTask =
+        TaskGenerator.createAccountRequest(true, false).get(0);
+
+    persistDataStep.persist(List.of(accountTask));
+
+    assertThat(enqueued).isNotEmpty();
+    assertThat(enqueued)
+        .allSatisfy(
+            child ->
+                assertThat(child.getAccountRangeOrigin())
+                    .contains(
+                        new AccountRangeResumeTracker.Origin(
+                            RangeManager.MAX_RANGE, RangeManager.MIN_RANGE)));
   }
 
   private void assertDataPersisted(final List<Task<SnapDataRequest>> tasks) {

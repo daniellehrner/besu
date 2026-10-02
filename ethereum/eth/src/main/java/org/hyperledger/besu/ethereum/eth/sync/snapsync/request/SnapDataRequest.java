@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.eth.sync.snapsync.request;
 
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.eth.sync.snapsync.AccountRangeResumeTracker;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.RequestType;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncConfiguration;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncProcessState;
@@ -48,6 +49,8 @@ public abstract class SnapDataRequest implements TasksPriorityProvider {
 
   private final RequestType requestType;
   private Hash rootHash;
+  // the account range response this request descends from, when it is part of the range download
+  private volatile Optional<AccountRangeResumeTracker.Origin> accountRangeOrigin = Optional.empty();
 
   protected SnapDataRequest(final RequestType requestType, final Hash originalRootHash) {
     this.requestType = requestType;
@@ -186,6 +189,14 @@ public abstract class SnapDataRequest implements TasksPriorityProvider {
 
   public void setRootHash(final Hash rootHash) {
     this.rootHash = rootHash;
+  }
+
+  public Optional<AccountRangeResumeTracker.Origin> getAccountRangeOrigin() {
+    return accountRangeOrigin;
+  }
+
+  public void setAccountRangeOrigin(final AccountRangeResumeTracker.Origin accountRangeOrigin) {
+    this.accountRangeOrigin = Optional.of(accountRangeOrigin);
   }
 
   @Override

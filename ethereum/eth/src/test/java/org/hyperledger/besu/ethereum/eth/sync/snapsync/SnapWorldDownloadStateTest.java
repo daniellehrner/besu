@@ -38,6 +38,7 @@ import org.hyperledger.besu.ethereum.eth.manager.EthContext;
 import org.hyperledger.besu.ethereum.eth.manager.EthScheduler;
 import org.hyperledger.besu.ethereum.eth.manager.task.EthTask;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.context.SnapSyncStatePersistenceManager;
+import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.AccountRangeDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.BytecodeRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.worldstate.StalledDownloadException;
@@ -53,10 +54,13 @@ import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 import org.hyperledger.besu.services.tasks.InMemoryTasksPriorityQueues;
+import org.hyperledger.besu.services.tasks.Task;
 import org.hyperledger.besu.testutil.TestClock;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
@@ -70,6 +74,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.ArgumentsProvider;
 import org.junit.jupiter.params.provider.ArgumentsSource;
+import org.mockito.ArgumentCaptor;
 
 @SuppressWarnings("unchecked")
 public class SnapWorldDownloadStateTest {
@@ -548,5 +553,148 @@ public class SnapWorldDownloadStateTest {
     downloadState.requestComplete(false);
 
     assertThat(future).isNotCompleted();
+  }
+
+  @ParameterizedTest
+  @ArgumentsSource(SnapWorldDownloadStateTestArguments.class)
+  public void shouldDequeueAccountRequestWhileStorageAndCodeRequestsArePending(
+      final DataStorageFormat storageFormat, final boolean isFlatDbHealingEnabled) {
+    setUp(storageFormat);
+    when(snapSyncState.getPivotBlockHeader()).thenReturn(Optional.of(header));
+    final AccountRangeDataRequest accountRequest = accountRangeRequest(RangeManager.MIN_RANGE);
+    downloadState.enqueueRequest(accountRequest);
+    downloadState.enqueueRequest(storageRequest());
+    downloadState.enqueueRequest(codeRequest());
+
+    assertThat(CompletableFuture.supplyAsync(downloadState::dequeueAccountRequestBlocking))
+        .succeedsWithin(Duration.ofSeconds(5))
+        .extracting(Task::getData)
+        .isSameAs(accountRequest);
+  }
+
+  @ParameterizedTest
+  @ArgumentsSource(SnapWorldDownloadStateTestArguments.class)
+  public void shouldDequeueCodeRequestWhileStorageRequestsArePending(
+      final DataStorageFormat storageFormat, final boolean isFlatDbHealingEnabled) {
+    setUp(storageFormat);
+    final BytecodeRequest codeRequest = codeRequest();
+    downloadState.enqueueRequest(storageRequest());
+    downloadState.enqueueRequest(codeRequest);
+
+    assertThat(CompletableFuture.supplyAsync(downloadState::dequeueCodeRequestBlocking))
+        .succeedsWithin(Duration.ofSeconds(5))
+        .extracting(Task::getData)
+        .isSameAs(codeRequest);
+  }
+
+  @ParameterizedTest
+  @ArgumentsSource(SnapWorldDownloadStateTestArguments.class)
+  public void shouldPauseAccountRequestsAtHighWatermarkUntilBelowLowWatermark(
+      final DataStorageFormat storageFormat, final boolean isFlatDbHealingEnabled)
+      throws InterruptedException {
+    setUp(storageFormat);
+    when(snapSyncState.getPivotBlockHeader()).thenReturn(Optional.of(header));
+    downloadState.enqueueRequest(accountRangeRequest(RangeManager.MIN_RANGE));
+    for (long i = 0; i < SnapWorldDownloadState.CHILD_QUEUE_HIGH_WATERMARK; i++) {
+      downloadState.enqueueRequest(codeRequest());
+    }
+
+    final CompletableFuture<Task<SnapDataRequest>> dequeued =
+        CompletableFuture.supplyAsync(downloadState::dequeueAccountRequestBlocking);
+    Thread.sleep(200);
+    assertThat(dequeued).isNotDone();
+
+    // draining to just below the high watermark is not enough to resume
+    downloadState.dequeueCodeRequestBlocking();
+    downloadState.notifyTaskAvailable();
+    Thread.sleep(200);
+    assertThat(dequeued).isNotDone();
+
+    while (downloadState.pendingCodeRequests.size()
+        >= SnapWorldDownloadState.CHILD_QUEUE_LOW_WATERMARK) {
+      downloadState.dequeueCodeRequestBlocking();
+    }
+    downloadState.notifyTaskAvailable();
+
+    assertThat(dequeued).succeedsWithin(Duration.ofSeconds(5));
+  }
+
+  @SuppressWarnings("unchecked")
+  @ParameterizedTest
+  @ArgumentsSource(SnapWorldDownloadStateTestArguments.class)
+  public void shouldPersistResumePointBehindAccountRangeWithUnfinishedChildren(
+      final DataStorageFormat storageFormat, final boolean isFlatDbHealingEnabled) {
+    setUp(storageFormat);
+    when(snapSyncState.getPivotBlockHeader()).thenReturn(Optional.of(header));
+    final Bytes32 secondStart = Bytes32.fromHexStringLenient("0x02");
+    final Bytes32 thirdStart = Bytes32.fromHexStringLenient("0x03");
+    final ArgumentCaptor<List<? extends SnapDataRequest>> persisted =
+        ArgumentCaptor.forClass(List.class);
+
+    // the first account range is requested
+    final AccountRangeDataRequest firstRequest = accountRangeRequest(RangeManager.MIN_RANGE);
+    downloadState.enqueueRequest(firstRequest);
+    downloadState.dequeueAccountRequestBlocking();
+
+    // its response spawns a storage request and the next account range request
+    final SnapDataRequest storageRequest = storageRequest();
+    storageRequest.setAccountRangeOrigin(
+        new AccountRangeResumeTracker.Origin(RangeManager.MAX_RANGE, RangeManager.MIN_RANGE));
+    downloadState.enqueueRequest(storageRequest);
+    final AccountRangeDataRequest secondRequest = accountRangeRequest(secondStart);
+    downloadState.enqueueRequest(secondRequest);
+    downloadState.onRequestStored(firstRequest);
+
+    // the second account range is requested while the storage request is still outstanding
+    clock.stepMillis(SnapWorldDownloadState.RESUME_POINT_PERSIST_INTERVAL_MILLIS);
+    downloadState.dequeueAccountRequestBlocking();
+
+    // the storage request and the second account range complete, the third one is requested
+    downloadState.enqueueRequest(accountRangeRequest(thirdStart));
+    downloadState.onRequestStored(secondRequest);
+    downloadState.onRequestStored(storageRequest);
+    clock.stepMillis(SnapWorldDownloadState.RESUME_POINT_PERSIST_INTERVAL_MILLIS);
+    downloadState.dequeueAccountRequestBlocking();
+
+    verify(snapContext, times(3)).updatePersistedTasks(persisted.capture());
+    assertThat(persisted.getAllValues())
+        .extracting(requests -> ((AccountRangeDataRequest) requests.getFirst()).getStartKeyHash())
+        .containsExactly(RangeManager.MIN_RANGE, RangeManager.MIN_RANGE, thirdStart);
+    assertThat(persisted.getAllValues()).allSatisfy(requests -> assertThat(requests).hasSize(1));
+  }
+
+  @ParameterizedTest
+  @ArgumentsSource(SnapWorldDownloadStateTestArguments.class)
+  public void shouldNotPersistResumePointMoreOftenThanInterval(
+      final DataStorageFormat storageFormat, final boolean isFlatDbHealingEnabled) {
+    setUp(storageFormat);
+    when(snapSyncState.getPivotBlockHeader()).thenReturn(Optional.of(header));
+    downloadState.enqueueRequest(accountRangeRequest(RangeManager.MIN_RANGE));
+    downloadState.enqueueRequest(accountRangeRequest(Bytes32.fromHexStringLenient("0x02")));
+
+    downloadState.dequeueAccountRequestBlocking();
+    clock.stepMillis(SnapWorldDownloadState.RESUME_POINT_PERSIST_INTERVAL_MILLIS - 1);
+    downloadState.dequeueAccountRequestBlocking();
+
+    verify(snapContext, times(1)).updatePersistedTasks(any());
+  }
+
+  private AccountRangeDataRequest accountRangeRequest(final Bytes32 startKeyHash) {
+    return SnapDataRequest.createAccountRangeDataRequest(
+        ROOT_NODE_HASH, startKeyHash, RangeManager.MAX_RANGE);
+  }
+
+  private SnapDataRequest storageRequest() {
+    return SnapDataRequest.createStorageRangeDataRequest(
+        ROOT_NODE_HASH,
+        Bytes32.random(),
+        Bytes32.wrap(Hash.EMPTY_TRIE_HASH.getBytes()),
+        RangeManager.MIN_RANGE,
+        RangeManager.MAX_RANGE);
+  }
+
+  private BytecodeRequest codeRequest() {
+    return SnapDataRequest.createBytecodeRequest(
+        Bytes32.random(), ROOT_NODE_HASH, Bytes32.random());
   }
 }

@@ -37,4 +37,11 @@ public interface SnapRequestContext {
   SnapSyncMetricsManager getMetricsManager();
 
   void addAccountToHealingList(Bytes account);
+
+  /**
+   * Called once everything a request writes is part of the storage.
+   *
+   * @param request the request whose response was stored
+   */
+  default void onRequestStored(final SnapDataRequest request) {}
 }
