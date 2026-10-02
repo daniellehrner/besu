@@ -311,7 +311,11 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
                     pivotBlockManager.check(doNothingOnPivotChange);
                     return tasks;
                   })
-              .thenProcessAsyncOrdered(
+              // The storage of an account depends on no other account. The batches are handed on
+              // as their requests complete, so that a slow peer does not hold up the answers of
+              // the others. The sorted ingest, which needs the accounts of a partition in order,
+              // is told that order when the accounts arrive.
+              .thenProcessAsync(
                   "batchDownloadStorageData",
                   requestTask -> requestDataStep.requestStorage(requestTask),
                   maxOutstandingRequests)
