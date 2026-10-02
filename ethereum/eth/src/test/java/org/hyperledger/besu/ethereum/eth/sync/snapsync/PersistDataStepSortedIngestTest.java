@@ -17,8 +17,11 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -42,6 +45,7 @@ import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 public class PersistDataStepSortedIngestTest {
 
@@ -100,6 +104,25 @@ public class PersistDataStepSortedIngestTest {
     assertThat(worldStateStorage.getComposedWorldStateStorage().stream(ACCOUNT_INFO_STATE))
         .hasSameSizeAs(accountRequest.getAccounts().entrySet());
     verify(downloadState).onRequestStored(accountRequest);
+  }
+
+  @Test
+  public void shouldAnnounceTheStorageOfAnAccountRangeBeforeItIsRequested() {
+    final WorldStateSortedIngest ingest = spy(sortedIngest);
+    final PersistDataStep persistStep =
+        new PersistDataStep(
+            snapSyncState,
+            worldStateStorageCoordinator,
+            downloadState,
+            snapSyncConfiguration,
+            Optional.of(ingest));
+
+    persistStep.persist(List.of(tasks.get(0)));
+
+    // once the request is queued its response can arrive, and has to find its place
+    final InOrder inOrder = inOrder(ingest, downloadState);
+    inOrder.verify(ingest).announceStorage(List.of(storageRequest.getAccountHash().getBytes()));
+    inOrder.verify(downloadState).enqueueRequests(any());
   }
 
   @Test

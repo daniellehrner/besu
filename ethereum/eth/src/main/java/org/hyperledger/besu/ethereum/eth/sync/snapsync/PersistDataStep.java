@@ -110,6 +110,10 @@ public class PersistDataStep {
           if (!(request instanceof TrieNodeHealingRequest)) {
             // whether a range is continued decides what the sorted ingest does with its response
             children = childRequests.toList();
+            if (isAccountRangeDownload(request) && isWrittenBySortedIngest(request)) {
+              // before any of the storage can arrive, which is as soon as its requests are queued
+              announceStorage(children);
+            }
             enqueueChildren(withAccountRangeOrigin(request, children.stream()));
           } else {
             children = List.of();
@@ -208,6 +212,20 @@ public class PersistDataStep {
   private boolean isWrittenBySortedIngest(final SnapDataRequest request) {
     return sortedIngest.filter(WorldStateSortedIngest::isActive).isPresent()
         && (isAccountRangeDownload(request) || request instanceof StorageRangeDataRequest);
+  }
+
+  /**
+   * Tells the sorted ingest which accounts of an account range response get their storage
+   * requested, in the order of the accounts.
+   */
+  private void announceStorage(final List<SnapDataRequest> children) {
+    sortedIngest
+        .orElseThrow()
+        .announceStorage(
+            children.stream()
+                .filter(StorageRangeDataRequest.class::isInstance)
+                .map(child -> ((StorageRangeDataRequest) child).getAccountHash().getBytes())
+                .toList());
   }
 
   private int persistWithSortedIngest(

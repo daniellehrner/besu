@@ -266,6 +266,120 @@ public class WorldStateSortedIngestTest {
   }
 
   @Test
+  public void shouldWriteAnnouncedAccountsInKeyOrderWhateverOrderTheirStorageArrivesIn() {
+    ingest.announceStorage(List.of(ACCOUNT_1, ACCOUNT_2, ACCOUNT_3));
+
+    ingest.writeStorageStart(ACCOUNT_3, WHOLE_STORAGE, slots("three", ACCOUNT_3, 0x01), List.of());
+    ingest.writeStorageStart(ACCOUNT_2, WHOLE_STORAGE, slots("two", ACCOUNT_2, 0x01), List.of());
+    ingest.writeStorageStart(ACCOUNT_1, WHOLE_STORAGE, slots("one", ACCOUNT_1, 0x01), List.of());
+
+    assertThat(storage.events).isEmpty();
+
+    ingest.finishAll();
+
+    assertThat(storage.events)
+        .containsExactly("file ACCOUNT_STORAGE_STORAGE [11:01, 12:01, 13:01]");
+    assertThat(stored).containsExactly("one", "two", "three");
+  }
+
+  @Test
+  public void shouldKeepWhatArrivesAheadOfAnAnnouncedAccountOutOfTheFileUntilThatOneArrives() {
+    ingest.announceStorage(List.of(ACCOUNT_1, ACCOUNT_2));
+    // enough to store a file at once, if it were its turn
+    ingest.writeStorageStart(
+        ACCOUNT_2,
+        WHOLE_STORAGE,
+        batch("large", ACCOUNT_STORAGE_STORAGE, LIMITS.targetFileSize(), ACCOUNT_2),
+        List.of());
+
+    assertThat(storage.events).isEmpty();
+
+    ingest.writeStorageStart(ACCOUNT_1, WHOLE_STORAGE, slots("one", ACCOUNT_1, 0x01), List.of());
+
+    assertThat(storage.events)
+        .containsExactly(
+            "file ACCOUNT_STORAGE_STORAGE [11:01, " + ACCOUNT_2.toUnprefixedHexString() + "]");
+    assertThat(stored).containsExactly("one", "large");
+  }
+
+  @Test
+  public void shouldStoreWhatArrivedWhenAnAnnouncedAccountNeverDoes() {
+    ingest.announceStorage(List.of(ACCOUNT_1, ACCOUNT_2));
+    ingest.writeStorageStart(ACCOUNT_2, WHOLE_STORAGE, slots("two", ACCOUNT_2, 0x01), List.of());
+
+    ingest.finishAll();
+
+    assertThat(storage.events).containsExactly("file ACCOUNT_STORAGE_STORAGE [12:01]");
+    assertThat(stored).containsExactly("two");
+  }
+
+  @Test
+  public void shouldStopWaitingForAnAnnouncedAccountWhenTooMuchIsHeldInMemory() {
+    final List<Bytes> announced = new ArrayList<>();
+    for (int account = 0x11; account < 0x20; account++) {
+      announced.add(account(account));
+    }
+    ingest.announceStorage(announced);
+
+    // the storage of the first account does not arrive, that of the accounts behind it does
+    final long valueSize = LIMITS.targetFileSize() - Bytes32.SIZE - 1;
+    int account = 0x12;
+    for (long held = 0; held <= LIMITS.bufferLimit(); held += valueSize + Bytes32.SIZE) {
+      assertThat(storage.events).isEmpty();
+      ingest.writeStorageStart(
+          account(account),
+          WHOLE_STORAGE,
+          batch("held " + account, ACCOUNT_STORAGE_STORAGE, valueSize, account(account)),
+          List.of());
+      account++;
+    }
+
+    assertThat(storage.events).isNotEmpty().allMatch(event -> event.startsWith("file "));
+    assertThat(stored).startsWith("held 18");
+
+    // when it arrives after all, the file of the partition has moved past it
+    ingest.writeStorageStart(ACCOUNT_1, WHOLE_STORAGE, slots("one", ACCOUNT_1, 0x01), List.of());
+
+    assertThat(storage.events).last().isEqualTo("direct ACCOUNT_STORAGE_STORAGE [11:01]");
+  }
+
+  @Test
+  public void shouldNotGiveAnAccountThatIsAnnouncedAgainItsPlaceBack() {
+    ingest.announceStorage(List.of(ACCOUNT_1, ACCOUNT_2));
+    ingest.writeStorageStart(ACCOUNT_1, WHOLE_STORAGE, slots("one", ACCOUNT_1, 0x01), List.of());
+    ingest.writeStorageStart(ACCOUNT_2, WHOLE_STORAGE, slots("two", ACCOUNT_2, 0x01), List.of());
+
+    // the account changed and is downloaded again
+    ingest.announceStorage(List.of(ACCOUNT_1));
+    ingest.writeStorageStart(
+        ACCOUNT_1, WHOLE_STORAGE, slots("one again", ACCOUNT_1, 0x02), List.of());
+
+    ingest.finishAll();
+
+    assertThat(storage.events)
+        .containsExactly(
+            "file ACCOUNT_STORAGE_STORAGE [11:01, 12:01]",
+            "direct ACCOUNT_STORAGE_STORAGE [11:02]");
+    assertThat(stored).containsExactly("one", "two", "one again");
+  }
+
+  @Test
+  public void shouldWaitForTheRangesOfAnAnnouncedAccountThatArrivesLast() {
+    ingest.announceStorage(List.of(ACCOUNT_1, ACCOUNT_2));
+    ingest.writeStorageStart(ACCOUNT_2, WHOLE_STORAGE, slots("two", ACCOUNT_2, 0x01), List.of());
+    ingest.writeStorageStart(
+        ACCOUNT_1, WHOLE_STORAGE, slots("start", ACCOUNT_1, 0x01), List.of(RANGE_END));
+    ingest.writeStorageContinuation(
+        ACCOUNT_1, ANY_START, RANGE_END, slots("range", ACCOUNT_1, 0x05), List.of());
+
+    ingest.finishAll();
+
+    assertThat(storage.events)
+        .containsExactly("file ACCOUNT_STORAGE_STORAGE [11:01, 11:05, 12:01]");
+    assertThat(stored).containsExactly("start", "range", "two");
+  }
+
+  @Test
   public void shouldWriteStorageOfAnAccountBeforeTheOpenFileAtOnce() {
     ingest.writeStorageStart(
         ACCOUNT_2,

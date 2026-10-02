@@ -34,6 +34,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.Optional;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
@@ -63,10 +64,16 @@ import org.slf4j.LoggerFactory;
  * file holds is not waited for: the file of the partition ends with its first response, so that no
  * file spans the account, and its ranges are stored as files of their own.
  *
- * <p>What does not arrive in order, the storage of an account that had to be requested again, is
- * held back until the file that spans its account is stored, and then takes the regular write path.
- * Putting it into the storage first would leave keys inside the key range of that file, and a file
- * that is not alone in its range cannot be kept as it is.
+ * <p>The storage of the accounts of a partition does not arrive in the order of the accounts: the
+ * requests for it are answered side by side, and one that fails is sent again later. So the
+ * accounts whose storage is to come are announced when their account range arrives, which is in key
+ * order, and the storage that arrives ahead of an earlier account waits in memory for it.
+ *
+ * <p>What is not announced, the storage of an account that is downloaded again because it changed,
+ * and what arrives after its account was given up waiting for, is held back until the file that
+ * spans its account is stored, and then takes the regular write path. Putting it into the storage
+ * first would leave keys inside the key range of that file, and a file that is not alone in its
+ * range cannot be kept as it is.
  *
  * <p>A peer answers a range request with one entry more than the range holds, the first one after
  * its end, as the proof that nothing is missing in between. That entry belongs to the stream of the
@@ -89,7 +96,8 @@ public class WorldStateSortedIngest {
    * @param queuedAccountLimit how much of the storage of an account may wait in memory for the rest
    *     of it. An account with more than this is a contract with files of its own.
    * @param bufferLimit what may wait in memory altogether. Beyond it the partition holding the most
-   *     stops waiting for the account it waits for.
+   *     stops waiting for the account it waits for, whether its storage has started to arrive or
+   *     not.
    */
   record Limits(
       long targetFileSize, long rangeFileThreshold, long queuedAccountLimit, long bufferLimit) {
@@ -312,9 +320,11 @@ public class WorldStateSortedIngest {
 
   private record StorageRangeKey(Bytes account, Bytes32 rangeEnd) {}
 
-  /** The storage of an account that arrived in order and is not in the file of its partition. */
+  /** The storage of an account that is not in the file of its partition yet. */
   private static final class QueuedAccount {
     private final byte[] account;
+    // whether the first response for the storage is here
+    private boolean arrived;
     // null once it is in the file, which it is as soon as nothing is ahead of the account
     private Batch start;
     // the ranges that continue the storage, by their end key and with that in key order
@@ -322,13 +332,12 @@ public class WorldStateSortedIngest {
     // what the ranges hold in memory
     private long rangesSize;
 
-    private QueuedAccount(final byte[] account, final Batch start) {
+    private QueuedAccount(final byte[] account) {
       this.account = account;
-      this.start = start;
     }
 
     private boolean isComplete() {
-      return ranges.values().stream().allMatch(range -> range.complete);
+      return arrived && ranges.values().stream().allMatch(range -> range.complete);
     }
   }
 
@@ -340,10 +349,13 @@ public class WorldStateSortedIngest {
     private final Run main = new Run();
     // the first account in the open file of the main stream, null while it has none
     private byte[] openFirstAccount;
-    private byte[] lastAccount;
+    // the last account that joined the queue
+    private byte[] lastQueuedAccount;
     // The accounts that are not in the file yet, in key order. They wait for the first of them,
     // whose storage is still being downloaded.
     private final Deque<QueuedAccount> queue = new ArrayDeque<>();
+    // the accounts of the queue whose storage has not started to arrive
+    private final Map<Bytes, QueuedAccount> announcedAccounts = new HashMap<>();
     private final Map<Bytes, QueuedAccount> continuedAccounts = new HashMap<>();
     // what the queue holds in memory, read without the lock to find the fullest partition
     private final AtomicLong queuedSize = new AtomicLong();
@@ -455,6 +467,39 @@ public class WorldStateSortedIngest {
   }
 
   /**
+   * Announces the accounts whose storage is requested next, in key order: those of an account range
+   * response, before any of their storage can arrive. The storage of each of them goes into the
+   * file of its partition in this order, whatever order it arrives in.
+   *
+   * @param accountHashes the hashes of the accounts, ascending
+   */
+  public void announceStorage(final List<Bytes> accountHashes) {
+    for (final Bytes accountHash : accountHashes) {
+      final StoragePartition partition = storagePartitionOf(accountHash);
+      synchronized (partition) {
+        // An account that is behind the last one of the queue is downloaded again. It cannot get
+        // its place back, its storage is written when the file that spans it is stored.
+        queueAccount(partition, accountHash)
+            .ifPresent(queued -> partition.announcedAccounts.put(accountHash, queued));
+      }
+    }
+  }
+
+  /** Puts an account at the end of the queue of its partition, unless it belongs before that. */
+  private Optional<QueuedAccount> queueAccount(
+      final StoragePartition partition, final Bytes accountHash) {
+    final byte[] account = accountHash.toArrayUnsafe();
+    if (partition.lastQueuedAccount != null
+        && Arrays.compareUnsigned(account, partition.lastQueuedAccount) <= 0) {
+      return Optional.empty();
+    }
+    partition.lastQueuedAccount = account;
+    final QueuedAccount queued = new QueuedAccount(account);
+    partition.queue.addLast(queued);
+    return Optional.of(queued);
+  }
+
+  /**
    * Writes the first storage range response of an account, which holds its whole storage unless
    * that is more than fits one response.
    *
@@ -472,9 +517,13 @@ public class WorldStateSortedIngest {
     final byte[] account = accountHash.toArrayUnsafe();
     final Batch batch = withoutEntriesOfNextRange(accountHash, rangeEnd, response);
     synchronized (partition) {
-      if (partition.lastAccount != null
-          && Arrays.compareUnsigned(account, partition.lastAccount) <= 0) {
-        // requested again after the main stream went on, its ranges are not waited for either
+      // an account that was not announced takes the place it arrives at
+      final Optional<QueuedAccount> waitedFor =
+          Optional.ofNullable(partition.announcedAccounts.remove(accountHash))
+              .or(() -> queueAccount(partition, accountHash));
+      if (waitedFor.isEmpty()) {
+        // Downloaded again, or no longer waited for: the main stream went on without it, and its
+        // ranges are not waited for either.
         if (batch.isEmpty()) {
           batch.onStored.run();
         } else {
@@ -482,10 +531,10 @@ public class WorldStateSortedIngest {
         }
         return;
       }
-      partition.lastAccount = account;
-      final QueuedAccount queued = new QueuedAccount(account, batch);
+      final QueuedAccount queued = waitedFor.get();
+      queued.arrived = true;
+      queued.start = batch;
       continuationEnds.forEach(end -> queued.ranges.put(end, new StorageRange()));
-      partition.queue.addLast(queued);
       if (!continuationEnds.isEmpty()) {
         partition.continuedAccounts.put(accountHash, queued);
       }
@@ -611,6 +660,7 @@ public class WorldStateSortedIngest {
       synchronized (partition) {
         partition.main.discard();
         partition.queue.clear();
+        partition.announcedAccounts.clear();
         partition.continuedAccounts.clear();
         partition.queuedSize.set(0);
         partition.waiting.clear();
@@ -676,12 +726,23 @@ public class WorldStateSortedIngest {
   /**
    * Moves the accounts at the head of the queue into the file of the partition, up to the first one
    * whose storage is not complete. That one is given up waiting for if it holds too much, or if
-   * told to.
+   * told to. One that has not arrived holds nothing, so only being told to ends the wait for it.
    */
   private void drain(final StoragePartition partition, final boolean stopWaitingForHead) {
     boolean stopWaiting = stopWaitingForHead;
     while (!partition.queue.isEmpty()) {
       final QueuedAccount head = partition.queue.peekFirst();
+      if (!head.arrived) {
+        if (!stopWaiting) {
+          return;
+        }
+        // Nothing of the account is in a file. Whenever its storage arrives, it is written like
+        // that of an account that is downloaded again.
+        removeHead(partition);
+        runWaiting(partition, false);
+        stopWaiting = false;
+        continue;
+      }
       if (head.start != null) {
         final Batch start = head.start;
         head.start = null;
@@ -729,6 +790,7 @@ public class WorldStateSortedIngest {
 
   private void removeHead(final StoragePartition partition) {
     final QueuedAccount head = partition.queue.pollFirst();
+    partition.announcedAccounts.remove(Bytes.wrap(head.account));
     partition.continuedAccounts.remove(Bytes.wrap(head.account));
     partition.queuedSize.addAndGet(-head.rangesSize);
   }
