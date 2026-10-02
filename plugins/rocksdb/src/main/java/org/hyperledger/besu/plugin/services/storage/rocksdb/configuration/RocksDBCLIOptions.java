@@ -55,6 +55,13 @@ public class RocksDBCLIOptions {
   /** The default value indicating whether the startup table cache warm-up is enabled. */
   public static final boolean DEFAULT_IS_TABLE_CACHE_WARMUP_ENABLED = true;
 
+  /** The default value indicating whether the write-ahead log is compressed. */
+  public static final boolean DEFAULT_IS_WAL_COMPRESSION_ENABLED = false;
+
+  /** The constant WAL_COMPRESSION_ENABLED_FLAG. */
+  public static final String WAL_COMPRESSION_ENABLED_FLAG =
+      "--Xplugin-rocksdb-wal-compression-enabled";
+
   /** The constant MAX_OPEN_FILES_FLAG. */
   public static final String MAX_OPEN_FILES_FLAG = "--Xplugin-rocksdb-max-open-files";
 
@@ -129,6 +136,15 @@ public class RocksDBCLIOptions {
           "At startup, open the table readers of all live SST files to populate the RocksDB table cache with their footers, indexes and filters (default: ${DEFAULT-VALUE})")
   boolean isTableCacheWarmupEnabled = DEFAULT_IS_TABLE_CACHE_WARMUP_ENABLED;
 
+  /** Compresses the write-ahead log. */
+  @CommandLine.Option(
+      names = {WAL_COMPRESSION_ENABLED_FLAG},
+      hidden = true,
+      paramLabel = "<BOOLEAN>",
+      description =
+          "Compress the write-ahead log with ZSTD. Everything written goes through it before it is written again to its table or blob file, so this cuts the bytes written to disk at the price of some CPU time (default: ${DEFAULT-VALUE})")
+  boolean isWalCompressionEnabled = DEFAULT_IS_WAL_COMPRESSION_ENABLED;
+
   /** The Blob blockchain garbage collection enabled. */
   @CommandLine.Option(
       names = {BLOB_BLOCKCHAIN_GARBAGE_COLLECTION_ENABLED},
@@ -190,6 +206,7 @@ public class RocksDBCLIOptions {
     options.backgroundThreadCount = config.getBackgroundThreadCount();
     options.isHighSpec = config.isHighSpec();
     options.isTableCacheWarmupEnabled = config.isTableCacheWarmupEnabled();
+    options.isWalCompressionEnabled = config.isWalCompressionEnabled();
     options.isBlockchainGarbageCollectionEnabled = config.isBlockchainGarbageCollectionEnabled();
     options.blobGarbageCollectionAgeCutoff = config.getBlobGarbageCollectionAgeCutoff();
     options.blobGarbageCollectionForceThreshold = config.getBlobGarbageCollectionForceThreshold();
@@ -210,7 +227,8 @@ public class RocksDBCLIOptions {
         isTableCacheWarmupEnabled,
         isBlockchainGarbageCollectionEnabled,
         blobGarbageCollectionAgeCutoff,
-        blobGarbageCollectionForceThreshold);
+        blobGarbageCollectionForceThreshold,
+        isWalCompressionEnabled);
   }
 
   private int resolveMaxOpenFiles() {
@@ -292,6 +310,7 @@ public class RocksDBCLIOptions {
         .add("backgroundThreadCount", backgroundThreadCount)
         .add("isHighSpec", isHighSpec)
         .add("isTableCacheWarmupEnabled", isTableCacheWarmupEnabled)
+        .add("isWalCompressionEnabled", isWalCompressionEnabled)
         .add("isBlockchainGarbageCollectionEnabled", isBlockchainGarbageCollectionEnabled)
         .add("blobGarbageCollectionAgeCutoff", blobGarbageCollectionAgeCutoff)
         .add("blobGarbageCollectionForceThreshold", blobGarbageCollectionForceThreshold)
