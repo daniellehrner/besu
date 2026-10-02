@@ -96,6 +96,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
       "--snapsync-synchronizer-transaction-indexing-enabled";
   private static final String SNAP_SORTED_INGEST_ENABLED_FLAG =
       "--Xsnapsync-synchronizer-sorted-ingest-enabled";
+  private static final String SNAP_HISTORY_BACKFILL_ENABLED_FLAG =
+      "--Xsnapsync-synchronizer-history-backfill-enabled";
 
   private static final String SNAP_FLAT_ACCOUNT_HEALED_COUNT_PER_REQUEST_FLAG =
       "--Xsnapsync-synchronizer-flat-account-healed-count-per-request";
@@ -451,6 +453,16 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
   private Boolean snapSortedIngestEnabled =
       SnapSyncConfiguration.DEFAULT_SNAP_SYNC_SORTED_INGEST_ENABLED;
 
+  @CommandLine.Option(
+      names = SNAP_HISTORY_BACKFILL_ENABLED_FLAG,
+      hidden = true,
+      paramLabel = "<Boolean>",
+      arity = "0..1",
+      description =
+          "Complete SNAP sync as soon as the world state and the newest blocks are there, and download the bodies and receipts of the chain history while the node follows the chain. (default: ${DEFAULT-VALUE})")
+  private Boolean snapHistoryBackfillEnabled =
+      SnapSyncConfiguration.DEFAULT_SNAP_SYNC_HISTORY_BACKFILL_ENABLED;
+
   /**
    * @deprecated No longer used. Accepted for backwards compatibility. The flag will be removed in a
    *     future release.
@@ -584,6 +596,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
     options.snapTransactionIndexingEnabled =
         config.getSnapSyncConfiguration().isSnapSyncTransactionIndexingEnabled();
     options.snapSortedIngestEnabled = config.getSnapSyncConfiguration().isSortedIngestEnabled();
+    options.snapHistoryBackfillEnabled =
+        config.getSnapSyncConfiguration().isHistoryBackfillEnabled();
     options.era1ImportPrepipelineEnabled = config.era1ImportPrepipelineEnabled();
     options.era1DataUri = config.era1DataUri();
     options.era1ImportPrepipelineConcurrency = config.era1ImportPrepipelineConcurrency();
@@ -631,6 +645,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
             .maxConcurrentSnapRequestsGlobal(snapsyncServerMaxConcurrentRequests)
             .isSnapSyncTransactionIndexingEnabled(snapTransactionIndexingEnabled)
             .isSortedIngestEnabled(snapSortedIngestEnabled)
+            .isHistoryBackfillEnabled(snapHistoryBackfillEnabled)
             .build());
     builder.receiptsDownloadStepTimeoutMillis(receiptsDownloadStepTimeoutMillis);
     builder.backwardHeadersDownloadStepTimeoutMillis(backwardHeadersDownloadStepTimeoutMillis);
@@ -712,6 +727,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
             OptionParser.format(snapTransactionIndexingEnabled),
             SNAP_SORTED_INGEST_ENABLED_FLAG,
             OptionParser.format(snapSortedIngestEnabled),
+            SNAP_HISTORY_BACKFILL_ENABLED_FLAG,
+            OptionParser.format(snapHistoryBackfillEnabled),
             ERA1_IMPORT_PREPIPELINE_ENABLED_FLAG,
             OptionParser.format(era1ImportPrepipelineEnabled),
             ERA1_DATA_URI_FLAG,

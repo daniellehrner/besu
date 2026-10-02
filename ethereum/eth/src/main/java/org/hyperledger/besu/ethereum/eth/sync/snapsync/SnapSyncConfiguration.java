@@ -75,6 +75,7 @@ public class SnapSyncConfiguration {
 
   public static final Boolean DEFAULT_SNAP_SYNC_TRANSACTION_INDEXING_ENABLED = Boolean.FALSE;
   public static final Boolean DEFAULT_SNAP_SYNC_SORTED_INGEST_ENABLED = Boolean.FALSE;
+  public static final Boolean DEFAULT_SNAP_SYNC_HISTORY_BACKFILL_ENABLED = Boolean.FALSE;
   public static final Boolean DEFAULT_SNAP_SYNC_SAVE_PRE_MERGE_HEADERS_ONLY_ENABLED = Boolean.TRUE;
 
   public static SnapSyncConfiguration getDefault() {
@@ -144,5 +145,10 @@ public class SnapSyncConfiguration {
   @Value.Default
   public Boolean isSortedIngestEnabled() {
     return DEFAULT_SNAP_SYNC_SORTED_INGEST_ENABLED;
+  }
+
+  @Value.Default
+  public Boolean isHistoryBackfillEnabled() {
+    return DEFAULT_SNAP_SYNC_HISTORY_BACKFILL_ENABLED;
   }
 }
