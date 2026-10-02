@@ -29,6 +29,7 @@ import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.worldstate.WorldStateDownloader;
 import org.hyperledger.besu.ethereum.trie.RangeManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
+import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.metrics.BesuMetricCategory;
 import org.hyperledger.besu.metrics.SyncDurationMetrics;
@@ -212,6 +213,21 @@ public class SnapWorldStateDownloader implements WorldStateDownloader {
                     createAccountRangeDataRequest(stateRoot, key, value)));
       }
 
+      // the entries of the archive flat database are not keyed in the order they are downloaded
+      final Optional<WorldStateSortedIngest> sortedIngest =
+          snapSyncConfiguration.isSortedIngestEnabled()
+                  && worldStateStorageCoordinator.isMatchingFlatMode(FlatDbMode.FULL)
+              ? Optional.of(
+                  new WorldStateSortedIngest(
+                      worldStateStorageCoordinator
+                          .getStrategy(BonsaiWorldStateKeyValueStorage.class)
+                          .getComposedWorldStateStorage(),
+                      ethContext.getScheduler()::executeServiceTask))
+              : Optional.empty();
+      newDownloadState.setSortedIngest(sortedIngest);
+      LOG.info(
+          "World state sorted ingest is {}", sortedIngest.isPresent() ? "enabled" : "disabled");
+
       Optional<CompleteTaskStep> maybeCompleteTask =
           Optional.of(new CompleteTaskStep(snapSyncState, metricsSystem));
 
@@ -248,7 +264,8 @@ public class SnapWorldStateDownloader implements WorldStateDownloader {
                       snapSyncState,
                       worldStateStorageCoordinator,
                       newDownloadState,
-                      snapSyncConfiguration))
+                      snapSyncConfiguration,
+                      sortedIngest))
               .completeTaskStep(maybeCompleteTask.get())
               .downloadState(newDownloadState)
               .fastSyncState(snapSyncState)

@@ -257,6 +257,66 @@ public interface SegmentedKeyValueStorage extends Closeable {
   }
 
   /**
+   * Opens a writer for a run of entries of a segment that are handed over in ascending key order.
+   * See {@link SortedSegmentWriter} for what the caller gives up in exchange.
+   *
+   * <p>The default implementation collects the entries in a transaction, which is correct for every
+   * storage but gains nothing. A storage that can write a sorted run directly overrides it.
+   *
+   * @param segmentIdentifier the segment identifier
+   * @return a writer that has to be finished or closed
+   */
+  default SortedSegmentWriter sortedWriter(final SegmentIdentifier segmentIdentifier) {
+    final SegmentedKeyValueStorageTransaction transaction = startTransaction();
+    return new SortedSegmentWriter() {
+      private long size;
+      private boolean done;
+
+      @Override
+      public void put(final byte[] key, final byte[] value) {
+        transaction.put(segmentIdentifier, key, value);
+        size += key.length + value.length;
+      }
+
+      @Override
+      public long size() {
+        return size;
+      }
+
+      @Override
+      public void finish() {
+        done = true;
+        transaction.commit();
+      }
+
+      @Override
+      public void close() {
+        if (!done) {
+          done = true;
+          // a transaction that is never committed keeps what the implementation holds for it
+          transaction.rollback();
+        }
+      }
+    };
+  }
+
+  /**
+   * Tells the storage that a large amount of data is about to be loaded into the segments, mostly
+   * through {@link #sortedWriter}. Until the returned load is closed the storage may hold back the
+   * background work that reorganises the segments: during the load that work rewrites entries over
+   * and over that are about to be put where they belong anyway.
+   *
+   * <p>Reads and regular writes keep working during the load, but may be slower than usual. The
+   * default implementation does nothing.
+   *
+   * @param segmentIdentifiers the segments that are loaded
+   * @return the bulk load, which has to be closed when the data is in
+   */
+  default SegmentBulkLoad startBulkLoad(final List<SegmentIdentifier> segmentIdentifiers) {
+    return () -> {};
+  }
+
+  /**
    * Whether the underlying storage is closed.
    *
    * @return boolean indicating whether the underlying storage is closed.

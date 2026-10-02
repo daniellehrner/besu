@@ -91,6 +91,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
       "--Xsnapsync-synchronizer-trienode-count-per-request";
   private static final String SNAP_TRANSACTION_INDEXING_ENABLED_FLAG =
       "--snapsync-synchronizer-transaction-indexing-enabled";
+  private static final String SNAP_SORTED_INGEST_ENABLED_FLAG =
+      "--Xsnapsync-synchronizer-sorted-ingest-enabled";
 
   private static final String SNAP_FLAT_ACCOUNT_HEALED_COUNT_PER_REQUEST_FLAG =
       "--Xsnapsync-synchronizer-flat-account-healed-count-per-request";
@@ -421,6 +423,16 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
   private Boolean snapTransactionIndexingEnabled =
       SnapSyncConfiguration.DEFAULT_SNAP_SYNC_TRANSACTION_INDEXING_ENABLED;
 
+  @CommandLine.Option(
+      names = SNAP_SORTED_INGEST_ENABLED_FLAG,
+      hidden = true,
+      paramLabel = "<Boolean>",
+      arity = "0..1",
+      description =
+          "Write the world state downloaded by SNAP sync as sorted files that the storage keeps as they are, instead of through its regular write path. Needs the Bonsai full flat database. (default: ${DEFAULT-VALUE})")
+  private Boolean snapSortedIngestEnabled =
+      SnapSyncConfiguration.DEFAULT_SNAP_SYNC_SORTED_INGEST_ENABLED;
+
   /**
    * @deprecated No longer used. Accepted for backwards compatibility. The flag will be removed in a
    *     future release.
@@ -553,6 +565,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
         config.getSnapSyncConfiguration().getMaxConcurrentSnapRequestsGlobal();
     options.snapTransactionIndexingEnabled =
         config.getSnapSyncConfiguration().isSnapSyncTransactionIndexingEnabled();
+    options.snapSortedIngestEnabled = config.getSnapSyncConfiguration().isSortedIngestEnabled();
     options.era1ImportPrepipelineEnabled = config.era1ImportPrepipelineEnabled();
     options.era1DataUri = config.era1DataUri();
     options.era1ImportPrepipelineConcurrency = config.era1ImportPrepipelineConcurrency();
@@ -599,6 +612,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
             .maxConcurrentSnapRequestsPerPeer(snapsyncServerMaxConcurrentRequestsPerPeer)
             .maxConcurrentSnapRequestsGlobal(snapsyncServerMaxConcurrentRequests)
             .isSnapSyncTransactionIndexingEnabled(snapTransactionIndexingEnabled)
+            .isSortedIngestEnabled(snapSortedIngestEnabled)
             .build());
     builder.receiptsDownloadStepTimeoutMillis(receiptsDownloadStepTimeoutMillis);
     builder.backwardHeadersDownloadStepTimeoutMillis(backwardHeadersDownloadStepTimeoutMillis);
@@ -678,6 +692,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
             OptionParser.format(snapsyncServerMaxConcurrentRequests),
             SNAP_TRANSACTION_INDEXING_ENABLED_FLAG,
             OptionParser.format(snapTransactionIndexingEnabled),
+            SNAP_SORTED_INGEST_ENABLED_FLAG,
+            OptionParser.format(snapSortedIngestEnabled),
             ERA1_IMPORT_PREPIPELINE_ENABLED_FLAG,
             OptionParser.format(era1ImportPrepipelineEnabled),
             ERA1_DATA_URI_FLAG,

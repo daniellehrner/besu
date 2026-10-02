@@ -39,7 +39,8 @@ public interface SnapRequestContext {
   void addAccountToHealingList(Bytes account);
 
   /**
-   * Called once everything a request writes is part of the storage.
+   * Called once everything a request writes is part of the storage. With the sorted ingest that is
+   * later than the request passing the persist step.
    *
    * @param request the request whose response was stored
    */

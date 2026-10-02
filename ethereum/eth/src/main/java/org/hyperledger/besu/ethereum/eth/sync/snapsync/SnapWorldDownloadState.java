@@ -112,6 +112,7 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
   private final AccountRangeResumeTracker accountRangeResumeTracker =
       new AccountRangeResumeTracker();
   private final Clock clock;
+  private Optional<WorldStateSortedIngest> sortedIngest = Optional.empty();
   private boolean accountRequestsPaused;
   private Optional<Long> lastResumePointPersistMillis = Optional.empty();
 
@@ -200,6 +201,8 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
 
       // if all snapsync tasks are completed and the healing process was not running
       if (!snapSyncState.isHealTrieInProgress()) {
+        // the healing reads the state back, so all of it has to be in the storage by now
+        sortedIngest.ifPresent(WorldStateSortedIngest::finishAll);
         // Start the healing process
         startTrieHeal();
       }
@@ -262,6 +265,7 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
   @Override
   protected synchronized void cleanupQueues() {
     super.cleanupQueues();
+    sortedIngest.ifPresent(WorldStateSortedIngest::close);
     pendingAccountRequests.clear();
     pendingStorageRequests.clear();
     pendingLargeStorageRequests.clear();
@@ -552,6 +556,10 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
   @Override
   public SnapSyncMetricsManager getMetricsManager() {
     return metricsManager;
+  }
+
+  public void setSortedIngest(final Optional<WorldStateSortedIngest> sortedIngest) {
+    this.sortedIngest = sortedIngest;
   }
 
   public void setPivotBlockSelector(final DynamicPivotBlockSelector pivotBlockSelector) {

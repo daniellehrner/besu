@@ -21,10 +21,13 @@ import static org.hyperledger.besu.ethereum.eth.sync.StorageExceptionManager.get
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.AccountRangeDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.SnapRequestContext;
+import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.StorageRangeDataRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.heal.TrieNodeHealingRequest;
+import org.hyperledger.besu.ethereum.trie.RangeManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateStorageCoordinator;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
+import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import org.hyperledger.besu.services.tasks.Task;
 
@@ -33,11 +36,31 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
 
+import org.apache.tuweni.bytes.Bytes32;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class PersistDataStep {
   private static final Logger LOG = LoggerFactory.getLogger(PersistDataStep.class);
+
+  // the range download writes no trie logs
+  private static final KeyValueStorageTransaction NO_TRIE_LOG_TRANSACTION =
+      new KeyValueStorageTransaction() {
+        @Override
+        public void put(final byte[] key, final byte[] value) {}
+
+        @Override
+        public void remove(final byte[] key) {}
+
+        @Override
+        public void commit() {}
+
+        @Override
+        public void rollback() {}
+
+        @Override
+        public void close() {}
+      };
 
   private final SnapSyncProcessState snapSyncState;
   private final WorldStateStorageCoordinator worldStateStorageCoordinator;
@@ -45,15 +68,32 @@ public class PersistDataStep {
 
   private final SnapSyncConfiguration snapSyncConfiguration;
 
+  private final Optional<WorldStateSortedIngest> sortedIngest;
+
   public PersistDataStep(
       final SnapSyncProcessState snapSyncState,
       final WorldStateStorageCoordinator worldStateStorageCoordinator,
       final SnapRequestContext downloadState,
       final SnapSyncConfiguration snapSyncConfiguration) {
+    this(
+        snapSyncState,
+        worldStateStorageCoordinator,
+        downloadState,
+        snapSyncConfiguration,
+        Optional.empty());
+  }
+
+  public PersistDataStep(
+      final SnapSyncProcessState snapSyncState,
+      final WorldStateStorageCoordinator worldStateStorageCoordinator,
+      final SnapRequestContext downloadState,
+      final SnapSyncConfiguration snapSyncConfiguration,
+      final Optional<WorldStateSortedIngest> sortedIngest) {
     this.snapSyncState = snapSyncState;
     this.worldStateStorageCoordinator = worldStateStorageCoordinator;
     this.downloadState = downloadState;
     this.snapSyncConfiguration = snapSyncConfiguration;
+    this.sortedIngest = sortedIngest;
   }
 
   public List<Task<SnapDataRequest>> persist(final List<Task<SnapDataRequest>> tasks) {
@@ -66,9 +106,13 @@ public class PersistDataStep {
           // enqueue child requests
           final Stream<SnapDataRequest> childRequests =
               request.getChildRequests(downloadState, worldStateStorageCoordinator, snapSyncState);
+          final List<SnapDataRequest> children;
           if (!(request instanceof TrieNodeHealingRequest)) {
-            enqueueChildren(withAccountRangeOrigin(request, childRequests));
+            // whether a range is continued decides what the sorted ingest does with its response
+            children = childRequests.toList();
+            enqueueChildren(withAccountRangeOrigin(request, children.stream()));
           } else {
+            children = List.of();
             if (!request.isExpired(snapSyncState)) {
               enqueueChildren(childRequests);
             } else {
@@ -77,14 +121,19 @@ public class PersistDataStep {
           }
 
           // persist nodes
-          final int persistedNodes =
-              request.persist(
-                  worldStateStorageCoordinator,
-                  updater,
-                  downloadState,
-                  snapSyncState,
-                  snapSyncConfiguration);
-          writtenByUpdater.add(request);
+          final int persistedNodes;
+          if (isWrittenBySortedIngest(request)) {
+            persistedNodes = persistWithSortedIngest(request, children);
+          } else {
+            persistedNodes =
+                request.persist(
+                    worldStateStorageCoordinator,
+                    updater,
+                    downloadState,
+                    snapSyncState,
+                    snapSyncConfiguration);
+            writtenByUpdater.add(request);
+          }
           if (persistedNodes > 0) {
             if (request instanceof TrieNodeHealingRequest) {
               downloadState.getMetricsManager().notifyTrieNodesHealed(persistedNodes);
@@ -153,6 +202,64 @@ public class PersistDataStep {
 
   private void enqueueChildren(final Stream<SnapDataRequest> childRequests) {
     downloadState.enqueueRequests(childRequests);
+  }
+
+  /** The account and storage ranges of the range download are what arrives in key order. */
+  private boolean isWrittenBySortedIngest(final SnapDataRequest request) {
+    return sortedIngest.filter(WorldStateSortedIngest::isActive).isPresent()
+        && (isAccountRangeDownload(request) || request instanceof StorageRangeDataRequest);
+  }
+
+  private int persistWithSortedIngest(
+      final SnapDataRequest request, final List<SnapDataRequest> children) {
+    final BonsaiWorldStateKeyValueStorage worldStateStorage =
+        worldStateStorageCoordinator.getStrategy(BonsaiWorldStateKeyValueStorage.class);
+    // the request writes into a transaction that only collects its entries
+    final SortedIngestTransaction collected = new SortedIngestTransaction();
+    final int persistedNodes =
+        request.persist(
+            worldStateStorageCoordinator,
+            new BonsaiWorldStateKeyValueStorage.Updater(
+                collected,
+                NO_TRIE_LOG_TRANSACTION,
+                worldStateStorage.getFlatDbStrategy(),
+                worldStateStorage.getComposedWorldStateStorage(),
+                worldStateStorage.getTrieNodeStrategy()),
+            downloadState,
+            snapSyncState,
+            snapSyncConfiguration);
+    final WorldStateSortedIngest.Batch batch =
+        collected.toBatch(() -> downloadState.onRequestStored(request));
+    final WorldStateSortedIngest ingest = sortedIngest.orElseThrow();
+    if (request instanceof AccountRangeDataRequest accountRequest) {
+      ingest.writeAccountRange(
+          accountRequest.getEndKeyHash(),
+          batch,
+          children.stream().noneMatch(PersistDataStep::isAccountRangeDownload));
+    } else {
+      final StorageRangeDataRequest storageRequest = (StorageRangeDataRequest) request;
+      // the ranges the rest of the storage is requested in
+      final List<Bytes32> continuationEnds =
+          children.stream()
+              .filter(StorageRangeDataRequest.class::isInstance)
+              .map(child -> ((StorageRangeDataRequest) child).getEndKeyHash())
+              .toList();
+      if (storageRequest.getStartKeyHash().equals(RangeManager.MIN_RANGE)) {
+        ingest.writeStorageStart(
+            storageRequest.getAccountHash().getBytes(),
+            storageRequest.getEndKeyHash(),
+            batch,
+            continuationEnds);
+      } else {
+        ingest.writeStorageContinuation(
+            storageRequest.getAccountHash().getBytes(),
+            storageRequest.getStartKeyHash(),
+            storageRequest.getEndKeyHash(),
+            batch,
+            continuationEnds);
+      }
+    }
+    return persistedNodes;
   }
 
   /**
