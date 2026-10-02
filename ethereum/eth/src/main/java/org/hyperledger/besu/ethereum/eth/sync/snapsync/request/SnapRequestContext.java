@@ -20,6 +20,7 @@ import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncMetricsManager;
 import java.util.stream.Stream;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.bytes.Bytes32;
 
 /** Context needed by snap requests to enqueue follow-up work and report progress. */
 public interface SnapRequestContext {
@@ -45,4 +46,16 @@ public interface SnapRequestContext {
    * @param request the request whose response was stored
    */
   default void onRequestStored(final SnapDataRequest request) {}
+
+  /**
+   * Announces that the code with the given hash is about to be requested for the range download.
+   * Where code is stored by its hash it only has to be downloaded once, however many accounts use
+   * it.
+   *
+   * @param codeHash the hash of the code
+   * @return false if a request for that code is already under way, and so no other is needed
+   */
+  default boolean startCodeDownload(final Bytes32 codeHash) {
+    return true;
+  }
 }

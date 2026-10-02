@@ -56,6 +56,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -111,6 +112,8 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
 
   private final AccountRangeResumeTracker accountRangeResumeTracker =
       new AccountRangeResumeTracker();
+  // the hashes of the codes the range download has requested and not stored yet
+  private final Set<Bytes32> codeDownloadsUnderWay = ConcurrentHashMap.newKeySet();
   private final Clock clock;
   private Optional<WorldStateSortedIngest> sortedIngest = Optional.empty();
   private boolean accountRequestsPaused;
@@ -271,6 +274,7 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
     pendingLargeStorageRequests.clear();
     pendingCodeRequests.clear();
     pendingTrieNodeRequests.clear();
+    codeDownloadsUnderWay.clear();
   }
 
   /** Method to start the healing process of the trie */
@@ -476,7 +480,16 @@ public class SnapWorldDownloadState extends WorldDownloadState<SnapDataRequest>
   }
 
   @Override
+  public boolean startCodeDownload(final Bytes32 codeHash) {
+    return codeDownloadsUnderWay.add(codeHash);
+  }
+
+  @Override
   public void onRequestStored(final SnapDataRequest request) {
+    if (request instanceof BytecodeRequest bytecodeRequest) {
+      // from here on the storage tells that the code needs no request
+      codeDownloadsUnderWay.remove(bytecodeRequest.getCodeHash());
+    }
     if (request instanceof AccountRangeDataRequest accountRangeDataRequest
         && accountRangeDataRequest.isRangeDownload()) {
       accountRangeResumeTracker.accountRequestCompleted(

@@ -228,7 +228,12 @@ public class AccountRangeDataRequest extends SnapDataRequest {
                 startStorageRange.orElse(MIN_RANGE),
                 endStorageRange.orElse(MAX_RANGE)));
       }
-      if (!accountValue.getCodeHash().equals(Hash.EMPTY)) {
+      if (!accountValue.getCodeHash().equals(Hash.EMPTY)
+          && isCodeMissing(
+              downloadState,
+              worldStateStorageCoordinator,
+              Hash.wrap(account.getKey()),
+              accountValue.getCodeHash())) {
         childRequests.add(
             createBytecodeRequest(
                 account.getKey(),
@@ -237,6 +242,27 @@ public class AccountRangeDataRequest extends SnapDataRequest {
       }
     }
     return childRequests.stream();
+  }
+
+  /**
+   * Whether the code of an account still has to be requested. Most contracts share their code with
+   * many others, and where the code is stored by its hash one copy serves them all: it is not
+   * requested again when it is already stored, or when the request of another account for it is
+   * under way.
+   */
+  private static boolean isCodeMissing(
+      final SnapRequestContext downloadState,
+      final WorldStateStorageCoordinator worldStateStorageCoordinator,
+      final Hash accountHash,
+      final Hash codeHash) {
+    final boolean isStoredByCodeHash =
+        worldStateStorageCoordinator.applyForStrategy(
+            bonsai -> bonsai.getFlatDbStrategy().isCodeByCodeHash(), forest -> true);
+    if (!isStoredByCodeHash) {
+      return true;
+    }
+    return worldStateStorageCoordinator.getCode(codeHash, accountHash).isEmpty()
+        && downloadState.startCodeDownload(Bytes32.wrap(codeHash.getBytes()));
   }
 
   /**

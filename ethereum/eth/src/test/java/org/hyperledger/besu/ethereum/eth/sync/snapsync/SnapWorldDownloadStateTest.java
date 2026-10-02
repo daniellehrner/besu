@@ -679,6 +679,24 @@ public class SnapWorldDownloadStateTest {
     verify(snapContext, times(1)).updatePersistedTasks(any());
   }
 
+  @ParameterizedTest
+  @ArgumentsSource(SnapWorldDownloadStateTestArguments.class)
+  public void shouldLetACodeBeRequestedOnceUntilItIsStored(
+      final DataStorageFormat storageFormat, final boolean isFlatDbHealingEnabled) {
+    setUp(storageFormat);
+    final Bytes32 codeHash = Bytes32.fromHexStringLenient("0x0c");
+    final BytecodeRequest codeRequest =
+        SnapDataRequest.createBytecodeRequest(Bytes32.ZERO, ROOT_NODE_HASH, codeHash);
+
+    assertThat(downloadState.startCodeDownload(codeHash)).isTrue();
+    // another account with the same code, while the request is under way
+    assertThat(downloadState.startCodeDownload(codeHash)).isFalse();
+
+    // once stored the storage answers for the code, and it is not tracked here any more
+    downloadState.onRequestStored(codeRequest);
+    assertThat(downloadState.startCodeDownload(codeHash)).isTrue();
+  }
+
   private AccountRangeDataRequest accountRangeRequest(final Bytes32 startKeyHash) {
     return SnapDataRequest.createAccountRangeDataRequest(
         ROOT_NODE_HASH, startKeyHash, RangeManager.MAX_RANGE);
