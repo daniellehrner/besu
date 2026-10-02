@@ -190,6 +190,13 @@ public abstract class SnapDataRequest implements TasksPriorityProvider {
 
   public void clear() {}
 
+  /**
+   * Lets go of the response once it is persisted. The request can stay referenced long after that,
+   * by what waits for its data to reach the storage for instance, and the response is most of what
+   * it holds. It still tells that the response was received.
+   */
+  public void releaseResponse() {}
+
   public RequestType getRequestType() {
     return requestType;
   }

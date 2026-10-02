@@ -296,6 +296,11 @@ public class AccountRangeDataRequest extends SnapDataRequest {
     isProofValid = Optional.of(false);
   }
 
+  @Override
+  public void releaseResponse() {
+    stackTrie.releaseElements();
+  }
+
   public Bytes serialize() {
     return RLP.encode(
         out -> {

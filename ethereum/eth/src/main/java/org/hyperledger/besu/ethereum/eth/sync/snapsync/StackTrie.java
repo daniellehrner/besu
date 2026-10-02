@@ -197,6 +197,14 @@ public class StackTrie {
     this.elementsCount = new AtomicLong();
   }
 
+  /**
+   * Lets go of the elements, which nothing reads once they are committed: the keys and proofs of
+   * the responses and the tries built from them. The number of their keys stays.
+   */
+  public void releaseElements() {
+    this.elements = new LinkedHashMap<>();
+  }
+
   public boolean addSegment() {
     if (nbSegments.get() > maxSegments) {
       return false;

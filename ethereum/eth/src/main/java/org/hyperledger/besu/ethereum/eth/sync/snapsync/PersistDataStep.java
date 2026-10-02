@@ -246,6 +246,10 @@ public class PersistDataStep {
             downloadState,
             snapSyncState,
             snapSyncConfiguration);
+    // The request is held until its entries are stored, which is when the file they go into is
+    // complete, and by then that of many thousands of requests after it. Its response, and the
+    // trie that was built from it, would stay in memory with it for no use.
+    request.releaseResponse();
     final WorldStateSortedIngest.Batch batch =
         collected.toBatch(() -> downloadState.onRequestStored(request));
     final WorldStateSortedIngest ingest = sortedIngest.orElseThrow();
