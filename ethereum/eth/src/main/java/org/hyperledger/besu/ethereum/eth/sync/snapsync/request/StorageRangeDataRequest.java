@@ -165,9 +165,11 @@ public class StorageRangeDataRequest extends SnapDataRequest {
 
         downloadState.addAccountToHealingList(CompactEncoding.bytesToPath(accountHash.getBytes()));
         // We will request the new storage root of the account because it is apparently no longer
-        // valid with the new pivot block.
+        // valid with the new pivot block. The range stays as deep in the splits as it is: counted
+        // from zero again, it would be split further with every pivot block its storage changes in.
         final AccountRangeDataRequest accountRefreshRequest =
-            createAccountDataRequest(getRootHash(), accountHash, startKeyHash, endKeyHash);
+            createAccountDataRequest(
+                getRootHash(), accountHash, startKeyHash, endKeyHash, splitDepth);
         getAccountRangeOrigin().ifPresent(accountRefreshRequest::setAccountRangeOrigin);
         downloadState.enqueueRequest(accountRefreshRequest);
         isProofValid = Optional.of(false);

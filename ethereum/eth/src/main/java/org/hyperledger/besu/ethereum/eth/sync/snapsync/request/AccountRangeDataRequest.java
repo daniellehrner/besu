@@ -61,6 +61,8 @@ public class AccountRangeDataRequest extends SnapDataRequest {
   protected final Bytes32 endKeyHash;
   protected final Optional<Bytes32> startStorageRange;
   protected final Optional<Bytes32> endStorageRange;
+  // how many times the storage was split to get to the range above
+  private final int storageSplitDepth;
 
   protected final StackTrie stackTrie;
   private Optional<Boolean> isProofValid;
@@ -71,11 +73,22 @@ public class AccountRangeDataRequest extends SnapDataRequest {
       final Bytes32 endKeyHash,
       final Optional<Bytes32> startStorageRange,
       final Optional<Bytes32> endStorageRange) {
+    this(rootHash, startKeyHash, endKeyHash, startStorageRange, endStorageRange, 0);
+  }
+
+  private AccountRangeDataRequest(
+      final Hash rootHash,
+      final Bytes32 startKeyHash,
+      final Bytes32 endKeyHash,
+      final Optional<Bytes32> startStorageRange,
+      final Optional<Bytes32> endStorageRange,
+      final int storageSplitDepth) {
     super(ACCOUNT_RANGE, rootHash);
     this.startKeyHash = startKeyHash;
     this.endKeyHash = endKeyHash;
     this.startStorageRange = startStorageRange;
     this.endStorageRange = endStorageRange;
+    this.storageSplitDepth = storageSplitDepth;
     this.isProofValid = Optional.empty();
     this.stackTrie = new StackTrie(rootHash, startKeyHash);
     LOG.trace(
@@ -95,12 +108,22 @@ public class AccountRangeDataRequest extends SnapDataRequest {
       final Hash accountHash,
       final Bytes32 startStorageRange,
       final Bytes32 endStorageRange) {
+    this(rootHash, accountHash, startStorageRange, endStorageRange, 0);
+  }
+
+  protected AccountRangeDataRequest(
+      final Hash rootHash,
+      final Hash accountHash,
+      final Bytes32 startStorageRange,
+      final Bytes32 endStorageRange,
+      final int storageSplitDepth) {
     this(
         rootHash,
         Bytes32.wrap(accountHash.getBytes()),
         Bytes32.wrap(accountHash.getBytes()),
         Optional.of(startStorageRange),
-        Optional.of(endStorageRange));
+        Optional.of(endStorageRange),
+        storageSplitDepth);
   }
 
   @Override
@@ -228,7 +251,8 @@ public class AccountRangeDataRequest extends SnapDataRequest {
                 account.getKey(),
                 Bytes32.wrap(accountValue.getStorageRoot().getBytes()),
                 startStorageRange.orElse(MIN_RANGE),
-                endStorageRange.orElse(MAX_RANGE)));
+                endStorageRange.orElse(MAX_RANGE),
+                storageSplitDepth));
       }
       if (!accountValue.getCodeHash().equals(Hash.EMPTY)
           && isCodeMissing(

@@ -83,7 +83,27 @@ public abstract class SnapDataRequest implements TasksPriorityProvider {
       final Hash accountHash,
       final Bytes32 startStorageRange,
       final Bytes32 endStorageRange) {
-    return new AccountRangeDataRequest(rootHash, accountHash, startStorageRange, endStorageRange);
+    return createAccountDataRequest(rootHash, accountHash, startStorageRange, endStorageRange, 0);
+  }
+
+  /**
+   * Requests an account again whose storage changed while a range of it was being downloaded.
+   *
+   * @param rootHash the root hash of the world state to read the account from
+   * @param accountHash the hash of the account
+   * @param startStorageRange the start of the storage range to request with the new storage root
+   * @param endStorageRange the end of that range
+   * @param storageSplitDepth how many times the storage was split to get to that range
+   * @return the request
+   */
+  public static AccountRangeDataRequest createAccountDataRequest(
+      final Hash rootHash,
+      final Hash accountHash,
+      final Bytes32 startStorageRange,
+      final Bytes32 endStorageRange,
+      final int storageSplitDepth) {
+    return new AccountRangeDataRequest(
+        rootHash, accountHash, startStorageRange, endStorageRange, storageSplitDepth);
   }
 
   public static StorageRangeDataRequest createStorageRangeDataRequest(

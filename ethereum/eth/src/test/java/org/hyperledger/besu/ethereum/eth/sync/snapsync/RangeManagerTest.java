@@ -109,11 +109,22 @@ public final class RangeManagerTest {
   public void testRemainingRangeCountSplitsARangeThatNeedsManyMoreResponses() {
     final Bytes32 start = Bytes32.rightPad(Bytes.of(0x10));
     final Bytes32 end = Bytes32.rightPad(Bytes.of(0x20));
-    // the response covered a sixteenth of the range and a bit, fifteen more would not be enough
-    final Bytes32 nextStart = Bytes32.rightPad(Bytes.of(0x10, 0xf0));
+    // the response covered 15 of the 4096 parts of the range: 272 more like it are needed, which
+    // is at least sixteen for each of sixteen ranges
+    final Bytes32 nextStart = Bytes32.rightPad(Bytes.of(0x10, 0x0f));
 
     assertThat(RangeManager.getRemainingRangeCount(start, nextStart, end))
         .isEqualTo(RangeManager.MAX_RANGE_COUNT);
+  }
+
+  @Test
+  public void testRemainingRangeCountLeavesARangeAloneWhoseRangesWouldTakeAFewResponses() {
+    final Bytes32 start = Bytes32.rightPad(Bytes.of(0x10));
+    final Bytes32 end = Bytes32.rightPad(Bytes.of(0x20));
+    // the response covered 17 of the 4096 parts: 239 more like it, fewer than sixteen per range
+    final Bytes32 nextStart = Bytes32.rightPad(Bytes.of(0x10, 0x11));
+
+    assertThat(RangeManager.getRemainingRangeCount(start, nextStart, end)).isEqualTo(1);
   }
 
   @Test

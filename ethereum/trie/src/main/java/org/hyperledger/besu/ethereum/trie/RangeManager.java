@@ -52,6 +52,12 @@ public class RangeManager {
    */
   public static final int MAX_RANGE_COUNT = 16;
 
+  /**
+   * How many responses each of the ranges has to take at least for a range to be split again. With
+   * fewer, a storage of a few hundred megabytes ends up as hundreds of ranges of a megabyte each.
+   */
+  public static final int MIN_RESPONSES_PER_SPLIT_RANGE = 16;
+
   private RangeManager() {}
 
   public static int getRangeCount(
@@ -85,14 +91,15 @@ public class RangeManager {
    *
    * <p>The ranges of a storage are downloaded one response after the other, each range on its own.
    * A range that needs many more responses is therefore split again, so that the rest of it is
-   * downloaded side by side as well. A range that is nearly done is left alone: every split leaves
-   * the trie nodes on its boundaries to the healing.
+   * downloaded side by side as well. A range is left alone if the ranges it would be split into
+   * took only a few responses each: every split leaves the trie nodes on its boundaries to the
+   * healing, and every range is a piece of its own for whoever stores the storage in key order.
    *
    * @param rangeStart the start of the requested range
    * @param nextStart the first key after what the response covered
    * @param rangeEnd the end of the requested range
-   * @return {@link #MAX_RANGE_COUNT} if the rest of the range would take at least that many more
-   *     responses, otherwise 1
+   * @return {@link #MAX_RANGE_COUNT} if each of that many ranges would take at least {@link
+   *     #MIN_RESPONSES_PER_SPLIT_RANGE} more responses, otherwise 1
    */
   public static int getRemainingRangeCount(
       final Bytes32 rangeStart, final Bytes32 nextStart, final Bytes32 rangeEnd) {
@@ -103,7 +110,11 @@ public class RangeManager {
     if (covered.signum() <= 0 || remaining.signum() <= 0) {
       return 1;
     }
-    return remaining.divide(covered).compareTo(BigInteger.valueOf(MAX_RANGE_COUNT)) >= 0
+    return remaining
+                .divide(covered)
+                .compareTo(
+                    BigInteger.valueOf((long) MAX_RANGE_COUNT * MIN_RESPONSES_PER_SPLIT_RANGE))
+            >= 0
         ? MAX_RANGE_COUNT
         : 1;
   }

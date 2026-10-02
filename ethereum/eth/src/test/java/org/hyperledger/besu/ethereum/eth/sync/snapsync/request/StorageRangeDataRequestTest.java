@@ -16,9 +16,13 @@ package org.hyperledger.besu.ethereum.eth.sync.snapsync.request;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
+import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapSyncMetricsManager;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.SnapWorldDownloadState;
 import org.hyperledger.besu.ethereum.proof.WorldStateProofProvider;
 import org.hyperledger.besu.ethereum.rlp.RLP;
@@ -26,6 +30,7 @@ import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.RangeManager;
 import org.hyperledger.besu.ethereum.trie.RangeStorageEntriesCollector;
 import org.hyperledger.besu.ethereum.trie.TrieIterator;
+import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredNodeFactory;
@@ -44,11 +49,12 @@ import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 public class StorageRangeDataRequestTest {
 
-  private static final int SLOT_COUNT = 4_000;
-  // a sixteenth of the storage, which holds about 250 of the slots
+  private static final int SLOT_COUNT = 64_000;
+  // a sixteenth of the storage, which holds about 4,000 of the slots
   private static final Bytes32 RANGE_START = Bytes32.rightPad(Bytes.of(0x10));
   private static final Bytes32 RANGE_END =
       Bytes32.wrap(Bytes.concatenate(Bytes.of(0x1f), Bytes.repeat((byte) 0xff, 31)));
@@ -64,6 +70,8 @@ public class StorageRangeDataRequestTest {
   private final WorldStateProofProvider worldStateProofProvider =
       new WorldStateProofProvider(worldStateStorageCoordinator);
   private final SnapWorldDownloadState downloadState = mock(SnapWorldDownloadState.class);
+
+  private final TreeMap<Bytes32, Bytes> accountWithStorage = new TreeMap<>();
 
   private MerkleTrie<Bytes, Bytes> storageTrie;
 
@@ -105,10 +113,10 @@ public class StorageRangeDataRequestTest {
   }
 
   @Test
-  public void shouldNotSplitARangeAgainThatIsNearlyDone() {
+  public void shouldNotSplitARangeAgainIntoRangesOfAFewResponses() {
     final StorageRangeDataRequest request = rangeRequest(1);
-    // more than a sixteenth of the slots of the range
-    respondWithSlots(request, 40);
+    // the rest takes about 30 more responses like this one, which sixteen ranges would share
+    respondWithSlots(request, 130);
 
     final List<StorageRangeDataRequest> children = childRequests(request);
 
@@ -138,7 +146,7 @@ public class StorageRangeDataRequestTest {
     final List<StorageRangeDataRequest> ranges = childRequests(wholeStorage);
     assertThat(ranges).hasSize(RangeManager.MAX_RANGE_COUNT);
 
-    // each of them holds about 250 slots, of which a response with three covers very little
+    // each of them holds about 4,000 slots, of which a response with three covers very little
     final StorageRangeDataRequest range = ranges.get(1);
     respondWithSlots(range, 3);
     final List<StorageRangeDataRequest> rangesOfRange = childRequests(range);
@@ -148,6 +156,48 @@ public class StorageRangeDataRequestTest {
     final StorageRangeDataRequest rangeOfRange = rangesOfRange.getFirst();
     respondWithSlots(rangeOfRange, 1);
     assertThat(childRequests(rangeOfRange)).hasSizeLessThanOrEqualTo(1);
+  }
+
+  @Test
+  public void shouldKeepTheSplitDepthOfARangeThatIsRequestedAgain() {
+    when(downloadState.getMetricsManager()).thenReturn(mock(SnapSyncMetricsManager.class));
+    final Hash stateRoot = accountWithTheStorage();
+    final StorageRangeDataRequest request =
+        SnapDataRequest.createStorageRangeDataRequest(
+            stateRoot,
+            Bytes32.wrap(accountHash.getBytes()),
+            storageTrie.getRootHash(),
+            RANGE_START,
+            RANGE_END,
+            2);
+
+    // the storage changed with a new pivot block: what the peer sends no longer fits the root
+    respondWithSlotsOfAnotherStorage(request);
+
+    // so the account is requested again, and with its answer the range
+    final ArgumentCaptor<SnapDataRequest> requestedAgain =
+        ArgumentCaptor.forClass(SnapDataRequest.class);
+    verify(downloadState).enqueueRequest(requestedAgain.capture());
+    final AccountRangeDataRequest accountRequest =
+        (AccountRangeDataRequest) requestedAgain.getValue();
+    accountRequest.addResponse(
+        worldStateProofProvider,
+        accountWithStorage,
+        new ArrayDeque<>(
+            worldStateProofProvider.getAccountProofRelatedNodes(
+                stateRoot, Bytes32.wrap(accountHash.getBytes()))));
+    final List<StorageRangeDataRequest> rangeAgain =
+        accountRequest
+            .getChildRequests(downloadState, worldStateStorageCoordinator, null)
+            .map(StorageRangeDataRequest.class::cast)
+            .toList();
+    assertThat(rangeAgain).hasSize(1);
+    assertThat(rangeAgain.getFirst().getStartKeyHash()).isEqualTo(RANGE_START);
+    assertThat(rangeAgain.getFirst().getEndKeyHash()).isEqualTo(RANGE_END);
+
+    // a range that was split twice is not split again, however little of it a response covers
+    respondWithSlots(rangeAgain.getFirst(), 3);
+    assertThat(childRequests(rangeAgain.getFirst())).hasSize(1);
   }
 
   private StorageRangeDataRequest rangeRequest(final int splitDepth) {
@@ -181,6 +231,38 @@ public class StorageRangeDataRequestTest {
             storageTrie.getRootHash(), Bytes32.wrap(accountHash.getBytes()), slots.lastKey()));
     request.addResponse(downloadState, worldStateProofProvider, slots, new ArrayDeque<>(proofs));
     assertThat(request.isResponseReceived()).isTrue();
+  }
+
+  /** Answers the request with slots that the storage root of the request does not cover. */
+  private void respondWithSlotsOfAnotherStorage(final StorageRangeDataRequest request) {
+    final TreeMap<Bytes32, Bytes> slots = new TreeMap<>();
+    slots.put(RANGE_START, RLP.encode(out -> out.writeBytes(UInt256.valueOf(2).toMinimalBytes())));
+    request.addResponse(downloadState, worldStateProofProvider, slots, new ArrayDeque<>());
+    assertThat(request.isResponseReceived()).isTrue();
+  }
+
+  /**
+   * Puts the account that holds the storage into a state trie of its own.
+   *
+   * @return the root of that state trie
+   */
+  private Hash accountWithTheStorage() {
+    final MerkleTrie<Bytes, Bytes> accountTrie =
+        new StoredMerklePatriciaTrie<>(
+            new StoredNodeFactory<>(
+                worldStateStorage::getAccountStateTrieNode,
+                Function.identity(),
+                Function.identity()),
+            MerkleTrie.EMPTY_TRIE_NODE_HASH);
+    final PmtStateTrieAccountValue account =
+        new PmtStateTrieAccountValue(1, Wei.ONE, Hash.wrap(storageTrie.getRootHash()), Hash.EMPTY);
+    final Bytes encodedAccount = RLP.encode(account::writeTo);
+    accountTrie.put(accountHash.getBytes(), encodedAccount);
+    final BonsaiWorldStateKeyValueStorage.Updater updater = worldStateStorage.updater();
+    accountTrie.commit(updater::putAccountStateTrieNode);
+    updater.commit();
+    accountWithStorage.put(Bytes32.wrap(accountHash.getBytes()), encodedAccount);
+    return Hash.wrap(accountTrie.getRootHash());
   }
 
   private List<StorageRangeDataRequest> childRequests(final StorageRangeDataRequest request) {
