@@ -27,7 +27,6 @@ public class RocksDBFactoryConfiguration {
   private final boolean isBlockchainGarbageCollectionEnabled;
   private final Optional<Double> blobGarbageCollectionAgeCutoff;
   private final Optional<Double> blobGarbageCollectionForceThreshold;
-  private final boolean isWalCompressionEnabled;
 
   /**
    * Instantiates a new RocksDb factory configuration.
@@ -51,43 +50,6 @@ public class RocksDBFactoryConfiguration {
       final boolean isBlockchainGarbageCollectionEnabled,
       final Optional<Double> blobGarbageCollectionAgeCutoff,
       final Optional<Double> blobGarbageCollectionForceThreshold) {
-    this(
-        maxOpenFiles,
-        backgroundThreadCount,
-        cacheCapacity,
-        isHighSpec,
-        isTableCacheWarmupEnabled,
-        isBlockchainGarbageCollectionEnabled,
-        blobGarbageCollectionAgeCutoff,
-        blobGarbageCollectionForceThreshold,
-        RocksDBCLIOptions.DEFAULT_IS_WAL_COMPRESSION_ENABLED);
-  }
-
-  /**
-   * Instantiates a new RocksDb factory configuration.
-   *
-   * @param maxOpenFiles the max open files
-   * @param backgroundThreadCount the background thread count
-   * @param cacheCapacity the cache capacity
-   * @param isHighSpec the is high spec
-   * @param isTableCacheWarmupEnabled whether the startup table cache warm-up is enabled
-   * @param isBlockchainGarbageCollectionEnabled is garbage collection enabled for the BLOCKCHAIN
-   *     column family
-   * @param blobGarbageCollectionAgeCutoff the blob garbage collection age cutoff
-   * @param blobGarbageCollectionForceThreshold the blob garbage collection force threshold
-   * @param isWalCompressionEnabled whether the write-ahead log is compressed
-   */
-  public RocksDBFactoryConfiguration(
-      final int maxOpenFiles,
-      final int backgroundThreadCount,
-      final long cacheCapacity,
-      final boolean isHighSpec,
-      final boolean isTableCacheWarmupEnabled,
-      final boolean isBlockchainGarbageCollectionEnabled,
-      final Optional<Double> blobGarbageCollectionAgeCutoff,
-      final Optional<Double> blobGarbageCollectionForceThreshold,
-      final boolean isWalCompressionEnabled) {
-    this.isWalCompressionEnabled = isWalCompressionEnabled;
     this.backgroundThreadCount = backgroundThreadCount;
     this.maxOpenFiles = maxOpenFiles;
     this.cacheCapacity = cacheCapacity;
@@ -141,15 +103,6 @@ public class RocksDBFactoryConfiguration {
    */
   public boolean isTableCacheWarmupEnabled() {
     return isTableCacheWarmupEnabled;
-  }
-
-  /**
-   * Is the write-ahead log compressed.
-   *
-   * @return the boolean
-   */
-  public boolean isWalCompressionEnabled() {
-    return isWalCompressionEnabled;
   }
 
   /**

@@ -30,7 +30,6 @@ public class RocksDBConfiguration {
   private final boolean isBlockchainGarbageCollectionEnabled;
   private final Optional<Double> blobGarbageCollectionAgeCutoff;
   private final Optional<Double> blobGarbageCollectionForceThreshold;
-  private final boolean isWalCompressionEnabled;
 
   /**
    * Instantiates a new RocksDb configuration.
@@ -46,7 +45,6 @@ public class RocksDBConfiguration {
    *     column family
    * @param blobGarbageCollectionAgeCutoff the blob garbage collection age cutoff
    * @param blobGarbageCollectionForceThreshold the blob garbage collection force threshold
-   * @param isWalCompressionEnabled whether the write-ahead log is compressed
    */
   public RocksDBConfiguration(
       final Path databaseDir,
@@ -58,9 +56,7 @@ public class RocksDBConfiguration {
       final boolean isTableCacheWarmupEnabled,
       final boolean isBlockchainGarbageCollectionEnabled,
       final Optional<Double> blobGarbageCollectionAgeCutoff,
-      final Optional<Double> blobGarbageCollectionForceThreshold,
-      final boolean isWalCompressionEnabled) {
-    this.isWalCompressionEnabled = isWalCompressionEnabled;
+      final Optional<Double> blobGarbageCollectionForceThreshold) {
     this.backgroundThreadCount = backgroundThreadCount;
     this.databaseDir = databaseDir;
     this.maxOpenFiles = maxOpenFiles;
@@ -134,15 +130,6 @@ public class RocksDBConfiguration {
    */
   public boolean isTableCacheWarmupEnabled() {
     return isTableCacheWarmupEnabled;
-  }
-
-  /**
-   * Is the write-ahead log compressed.
-   *
-   * @return the boolean
-   */
-  public boolean isWalCompressionEnabled() {
-    return isWalCompressionEnabled;
   }
 
   /**

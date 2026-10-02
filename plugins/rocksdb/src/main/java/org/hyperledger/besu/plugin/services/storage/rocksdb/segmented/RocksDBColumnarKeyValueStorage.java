@@ -40,7 +40,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -105,9 +104,6 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
 
   /** Number of threads used to parallelize table cache warm-up seeks */
   private static final int TABLE_CACHE_WARMUP_THREAD_COUNT = 8;
-
-  private static final String WAL_COMPRESSION_OPTION = "wal_compression";
-  private static final String WAL_COMPRESSION_ZSTD = "kZSTD";
 
   static {
     RocksDbUtil.loadNativeLibrary();
@@ -328,7 +324,7 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
    * @param stats The statistics object
    */
   private void setGlobalOptions(final RocksDBConfiguration configuration, final Statistics stats) {
-    options = configuration.isWalCompressionEnabled() ? compressedWalOptions() : new DBOptions();
+    options = new DBOptions();
     options
         .setCreateIfMissing(true)
         .setMaxOpenFiles(configuration.getMaxOpenFiles())
@@ -343,22 +339,6 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         .setEnv(Env.getDefault().setBackgroundThreads(configuration.getBackgroundThreadCount()))
         .setMaxTotalWalSize(WAL_MAX_TOTAL_SIZE)
         .setRecycleLogFileNum(WAL_MAX_TOTAL_SIZE / EXPECTED_WAL_FILE_SIZE);
-  }
-
-  /**
-   * Everything written goes through the write-ahead log before a flush writes it again to a table
-   * or blob file, where it is compressed. Compressing the log as well cuts what a write-heavy phase
-   * such as the initial sync writes to disk, at the price of the CPU time of the compression.
-   */
-  private static DBOptions compressedWalOptions() {
-    // RocksJava has no setter for this option
-    final Properties properties = new Properties();
-    properties.setProperty(WAL_COMPRESSION_OPTION, WAL_COMPRESSION_ZSTD);
-    final DBOptions options = DBOptions.getDBOptionsFromProps(properties);
-    if (options == null) {
-      throw new StorageException("RocksDB does not accept the write-ahead log compression option");
-    }
-    return options;
   }
 
   /**

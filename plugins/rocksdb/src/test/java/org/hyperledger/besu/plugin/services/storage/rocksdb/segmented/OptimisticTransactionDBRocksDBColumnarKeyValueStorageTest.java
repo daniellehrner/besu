@@ -22,21 +22,16 @@ import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBMetricsFactory;
-import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBConfiguration;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBConfigurationBuilder;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
-import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.api.io.TempDir;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
@@ -110,80 +105,6 @@ public class OptimisticTransactionDBRocksDBColumnarKeyValueStorageTest
     } finally {
       snapshot.close();
       store.close();
-    }
-  }
-
-  @Test
-  public void shouldCompressTheWriteAheadLogWhenEnabled(@TempDir final Path path) throws Exception {
-    final RocksDBConfiguration configuration =
-        new RocksDBConfigurationBuilder().databaseDir(path).isWalCompressionEnabled(true).build();
-    final List<SegmentIdentifier> segments = Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO);
-    // compresses well, and is small enough to stay in the write-ahead log until the database is
-    // closed
-    final byte[] value = new byte[256 * 1024];
-    try (OptimisticRocksDBColumnarKeyValueStorage store =
-        new OptimisticRocksDBColumnarKeyValueStorage(
-            configuration,
-            segments,
-            List.of(),
-            new NoOpMetricsSystem(),
-            RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS)) {
-      assertThat(writtenOptions(path)).contains("wal_compression=kZSTD");
-      // the log files are still reused, compression does not switch that off
-      assertThat(writtenOptions(path)).doesNotContain("recycle_log_file_num=0");
-
-      final SegmentedKeyValueStorageTransaction tx = store.startTransaction();
-      tx.put(TestSegment.FOO, new byte[] {1}, value);
-      tx.commit();
-
-      assertThat(writeAheadLogSize(path)).isPositive().isLessThan(value.length / 10);
-    }
-
-    // what was only in the compressed log is read back when the database is opened again
-    try (OptimisticRocksDBColumnarKeyValueStorage reopened =
-        new OptimisticRocksDBColumnarKeyValueStorage(
-            configuration,
-            segments,
-            List.of(),
-            new NoOpMetricsSystem(),
-            RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS)) {
-      assertThat(reopened.get(TestSegment.FOO, new byte[] {1})).contains(value);
-    }
-  }
-
-  @Test
-  public void shouldNotCompressTheWriteAheadLogByDefault(@TempDir final Path path)
-      throws Exception {
-    try (OptimisticRocksDBColumnarKeyValueStorage store =
-        new OptimisticRocksDBColumnarKeyValueStorage(
-            new RocksDBConfigurationBuilder().databaseDir(path).build(),
-            Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO),
-            List.of(),
-            new NoOpMetricsSystem(),
-            RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS)) {
-      assertThat(writtenOptions(path)).contains("wal_compression=kNoCompression");
-    }
-  }
-
-  private static long writeAheadLogSize(final Path databaseDir) throws IOException {
-    try (Stream<Path> files = Files.list(databaseDir)) {
-      long size = 0;
-      for (final Path file : files.filter(f -> f.toString().endsWith(".log")).toList()) {
-        size += Files.size(file);
-      }
-      return size;
-    }
-  }
-
-  /** The options RocksDB wrote out when it opened the database. */
-  private static List<String> writtenOptions(final Path databaseDir) throws IOException {
-    try (Stream<Path> files = Files.list(databaseDir)) {
-      final Path optionsFile =
-          files
-              .filter(file -> file.getFileName().toString().startsWith("OPTIONS-"))
-              .max(Comparator.naturalOrder())
-              .orElseThrow();
-      return Files.readAllLines(optionsFile).stream().map(String::strip).toList();
     }
   }
 }

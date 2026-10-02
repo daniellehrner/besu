@@ -18,7 +18,6 @@ import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_CACHE_CAPACITY;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_IS_HIGH_SPEC;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_IS_TABLE_CACHE_WARMUP_ENABLED;
-import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_IS_WAL_COMPRESSION_ENABLED;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_OPEN_FILES;
 
 import java.nio.file.Path;
@@ -37,7 +36,6 @@ public class RocksDBConfigurationBuilder {
   private boolean isBlockchainGarbageCollectionEnabled = false;
   private Optional<Double> blobGarbageCollectionAgeCutoff = Optional.empty();
   private Optional<Double> blobGarbageCollectionForceThreshold = Optional.empty();
-  private boolean isWalCompressionEnabled = DEFAULT_IS_WAL_COMPRESSION_ENABLED;
 
   /** Instantiates a new Rocks db configuration builder. */
   public RocksDBConfigurationBuilder() {}
@@ -157,18 +155,6 @@ public class RocksDBConfigurationBuilder {
   }
 
   /**
-   * Enables or disables the compression of the write-ahead log.
-   *
-   * @param isWalCompressionEnabled whether the write-ahead log is compressed
-   * @return the RocksDB configuration builder
-   */
-  public RocksDBConfigurationBuilder isWalCompressionEnabled(
-      final boolean isWalCompressionEnabled) {
-    this.isWalCompressionEnabled = isWalCompressionEnabled;
-    return this;
-  }
-
-  /**
    * From.
    *
    * @param configuration the configuration
@@ -183,8 +169,8 @@ public class RocksDBConfigurationBuilder {
         .isTableCacheWarmupEnabled(configuration.isTableCacheWarmupEnabled())
         .isBlockchainGarbageCollectionEnabled(configuration.isBlockchainGarbageCollectionEnabled())
         .blobGarbageCollectionAgeCutoff(configuration.getBlobGarbageCollectionAgeCutoff())
-        .blobGarbageCollectionForceThreshold(configuration.getBlobGarbageCollectionForceThreshold())
-        .isWalCompressionEnabled(configuration.isWalCompressionEnabled());
+        .blobGarbageCollectionForceThreshold(
+            configuration.getBlobGarbageCollectionForceThreshold());
   }
 
   /**
@@ -203,7 +189,6 @@ public class RocksDBConfigurationBuilder {
         isTableCacheWarmupEnabled,
         isBlockchainGarbageCollectionEnabled,
         blobGarbageCollectionAgeCutoff,
-        blobGarbageCollectionForceThreshold,
-        isWalCompressionEnabled);
+        blobGarbageCollectionForceThreshold);
   }
 }
