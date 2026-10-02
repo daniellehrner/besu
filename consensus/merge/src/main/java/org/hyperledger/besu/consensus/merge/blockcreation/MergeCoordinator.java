@@ -325,7 +325,7 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
     blockCreationTasks.computeIfPresent(
         payloadIdentifier,
         (pid, blockCreationTask) -> {
-          blockCreationTask.discard();
+          blockCreationTask.cancel();
           return null;
         });
   }
@@ -1077,7 +1077,7 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
 
   private boolean isBlockInFlightDiscarded(final PayloadIdentifier payloadId) {
     final BlockCreationTask task = blockCreationTasks.get(payloadId);
-    return task == null || task.discarded.get();
+    return task != null && task.discarded.get();
   }
 
   private Optional<Long> getDefaultGasLimit(final ProtocolSchedule protocolSchedule) {

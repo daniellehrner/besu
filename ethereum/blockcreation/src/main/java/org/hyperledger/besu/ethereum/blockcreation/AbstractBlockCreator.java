@@ -268,9 +268,7 @@ public abstract class AbstractBlockCreator implements AsyncBlockCreator {
               selectorsStateManager,
               parentHeader,
               blockAccessListBuilder);
-      if (isAborted.get()) {
-        throw new CancellationException("Block creation aborted");
-      }
+      throwIfAborted();
       transactionResults.logSelectionStats();
       timings.register("txsSelection");
       timings.registerValue(
@@ -442,6 +440,8 @@ public abstract class AbstractBlockCreator implements AsyncBlockCreator {
             ethScheduler,
             selectorsStateManager,
             blockAccessListBuilder);
+    // an abort that came before the selector existed could not cancel it
+    throwIfAborted();
 
     if (transactions.isPresent()) {
       return selector.evaluateTransactions(transactions.get());
@@ -484,6 +484,12 @@ public abstract class AbstractBlockCreator implements AsyncBlockCreator {
   public void abort() {
     isAborted.set(true);
     cancel();
+  }
+
+  private void throwIfAborted() {
+    if (isAborted.get()) {
+      throw new CancellationException("Block creation aborted");
+    }
   }
 
   @Override
