@@ -38,8 +38,10 @@ import java.util.Optional;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -80,6 +82,12 @@ import org.slf4j.LoggerFactory;
  * next range, and a file reaching into the range of another stream cannot be kept as it is either.
  * It is therefore taken out of the response before the rest goes into the file.
  *
+ * <p>A file that is complete is not stored by the thread that completed it. It is queued, in the
+ * order things have to reach the storage, together with the batches that take the regular write
+ * path, and one task at a time takes what is queued to the storage, every run of files in one step.
+ * Storing a file takes the longer the more files the storage has, and the threads that write here
+ * hold the lock of a partition while they do.
+ *
  * <p>Nothing written here is readable before its file is stored, which {@link #finishAll()} does
  * for whatever is still open. Callers that read the state back have to call it first.
  */
@@ -92,7 +100,9 @@ public class WorldStateSortedIngest {
    *
    * @param targetFileSize a file is stored once it holds this much
    * @param rangeFileThreshold a range of a contract that is not waited for gets files of its own
-   *     once it holds this much, below it takes the regular write path
+   *     once it holds this much. Less than this takes the regular write path, when the range ends
+   *     or when memory is short: a file for every small range leaves the storage with tens of
+   *     thousands of them.
    * @param queuedAccountLimit how much of the storage of an account may wait in memory for the rest
    *     of it. An account with more than this is a contract with files of its own.
    * @param bufferLimit what may wait in memory altogether. Beyond it the partition holding the most
@@ -101,8 +111,31 @@ public class WorldStateSortedIngest {
    */
   record Limits(
       long targetFileSize, long rangeFileThreshold, long queuedAccountLimit, long bufferLimit) {
-    static final Limits DEFAULT =
-        new Limits(64L * 1024 * 1024, 1024L * 1024, 64L * 1024 * 1024, 256L * 1024 * 1024);
+    private static final long MEGABYTE = 1024L * 1024;
+    private static final long MIN_BUFFER_LIMIT = 256 * MEGABYTE;
+    private static final long MAX_BUFFER_LIMIT = 2048 * MEGABYTE;
+    private static final long MIN_QUEUED_ACCOUNT_LIMIT = 64 * MEGABYTE;
+
+    static final Limits DEFAULT = forHeap(Runtime.getRuntime().maxMemory());
+
+    /**
+     * The limits for a process with the given heap. Every account that is given up waiting for ends
+     * the file of its partition and gets files of its own, so the more may wait the fewer and
+     * larger the files are. What waits takes about twice its size on the heap, and a twelfth of the
+     * heap is allowed to wait. On Ethereum mainnet 256 MiB were not enough: the limit was reached
+     * again and again.
+     *
+     * @param maxHeap the most the heap of the process can grow to
+     * @return the limits
+     */
+    static Limits forHeap(final long maxHeap) {
+      final long bufferLimit = Math.max(MIN_BUFFER_LIMIT, Math.min(maxHeap / 12, MAX_BUFFER_LIMIT));
+      return new Limits(
+          64 * MEGABYTE,
+          MEGABYTE,
+          Math.max(MIN_QUEUED_ACCOUNT_LIMIT, bufferLimit / 8),
+          bufferLimit);
+    }
   }
 
   /** The segments of the world state whose entries are downloaded in key order. */
@@ -111,6 +144,12 @@ public class WorldStateSortedIngest {
 
   private static final int STORAGE_PARTITIONS = 16;
   private static final int DIRECT_WRITE_ATTEMPTS = 3;
+  // more files in one step only hold up everything else that writes to the storage for longer
+  private static final int MAX_FILES_PER_STORE_STEP = 512;
+  // what may be queued for the storage before whoever completes files has to wait for it
+  private static final int MAX_QUEUED_FILES = 4 * MAX_FILES_PER_STORE_STEP;
+  private static final long MAX_QUEUED_DIRECT_SIZE = 64L * 1024 * 1024;
+  private static final long PROGRESS_LOG_INTERVAL_NANOS = TimeUnit.MINUTES.toNanos(1);
 
   /**
    * An entry of a segment.
@@ -270,30 +309,17 @@ public class WorldStateSortedIngest {
       onStored.add(batch.onStored);
     }
 
-    /** Takes the open file off the stream. Running the returned action stores it. */
+    /**
+     * Takes the open file off the stream. Running the returned action queues it for the storage,
+     * behind everything that was queued before.
+     */
     private Runnable seal() {
-      final List<SortedSegmentWriter> sealedWriters = new ArrayList<>(writers.values());
-      final List<Runnable> sealedOnStored = onStored;
-      final long sealedSize = openSize;
+      final SortedFiles sealed =
+          new SortedFiles(new ArrayList<>(writers.values()), openSize, onStored);
       writers.clear();
       onStored = new ArrayList<>();
       openSize = 0;
-      return () -> {
-        try {
-          for (final SortedSegmentWriter writer : sealedWriters) {
-            writer.finish();
-          }
-        } catch (final StorageException e) {
-          // The responses in the file were reported as persisted long ago and are not requested
-          // again, so carrying on would leave a hole in the state that nothing looks for.
-          throw new IllegalStateException("Sorted world state file could not be stored", e);
-        } finally {
-          sealedWriters.forEach(SortedSegmentWriter::close);
-        }
-        sortedFiles.addAndGet(sealedWriters.size());
-        sortedBytes.addAndGet(sealedSize);
-        sealedOnStored.forEach(Runnable::run);
-      };
+      return () -> stores.add(sealed);
     }
 
     private void storeOpenFile() {
@@ -314,6 +340,8 @@ public class WorldStateSortedIngest {
     // the batches of a range that has no file
     private List<Batch> buffered = new ArrayList<>();
     private long bufferedSize;
+    // what the range wrote through the regular write path because memory was short
+    private long directSize;
     private boolean complete;
     private Run run;
   }
@@ -367,7 +395,8 @@ public class WorldStateSortedIngest {
   private final SegmentedKeyValueStorage storage;
   private final SegmentBulkLoad bulkLoad;
   private final Limits limits;
-  private final Executor bulkLoadEndExecutor;
+  private final Executor executor;
+  private final StoreQueue stores = new StoreQueue();
   private final Map<Bytes32, Run> accountPartitions = new ConcurrentHashMap<>();
   private final StoragePartition[] storagePartitions = new StoragePartition[STORAGE_PARTITIONS];
   // what queued accounts and ranges without a file hold in memory
@@ -378,6 +407,7 @@ public class WorldStateSortedIngest {
 
   private final AtomicLong sortedBytes = new AtomicLong();
   private final AtomicLong sortedFiles = new AtomicLong();
+  private final AtomicLong storeSteps = new AtomicLong();
   private final AtomicLong directBytes = new AtomicLong();
   private final AtomicLong directBatches = new AtomicLong();
   private final AtomicLong heldBack = new AtomicLong();
@@ -385,20 +415,18 @@ public class WorldStateSortedIngest {
 
   /**
    * @param storage the storage of the world state
-   * @param bulkLoadEndExecutor runs what the storage has to catch up on once the state is in, which
-   *     can take minutes and must not hold up whoever finishes the ingest
+   * @param executor runs what must not hold up the threads that write here: taking the files that
+   *     are complete to the storage, and what the storage has to catch up on once the state is in,
+   *     which can take minutes
    */
-  public WorldStateSortedIngest(
-      final SegmentedKeyValueStorage storage, final Executor bulkLoadEndExecutor) {
-    this(storage, bulkLoadEndExecutor, Limits.DEFAULT);
+  public WorldStateSortedIngest(final SegmentedKeyValueStorage storage, final Executor executor) {
+    this(storage, executor, Limits.DEFAULT);
   }
 
   WorldStateSortedIngest(
-      final SegmentedKeyValueStorage storage,
-      final Executor bulkLoadEndExecutor,
-      final Limits limits) {
+      final SegmentedKeyValueStorage storage, final Executor executor, final Limits limits) {
     this.storage = storage;
-    this.bulkLoadEndExecutor = bulkLoadEndExecutor;
+    this.executor = executor;
     this.limits = limits;
     // A file that cannot be kept in its final place right away is put above the others. Left to
     // itself the storage would start merging it down at once and rewrite what is below it, again
@@ -631,15 +659,17 @@ public class WorldStateSortedIngest {
       afterPartitionEnd.forEach(this::writeDirect);
       afterPartitionEnd.clear();
     }
+    stores.storeAll();
     LOG.info(
-        "World state sorted ingest finished: {} MB stored in {} sorted files, {} MB in {} batches through the regular write path, {} accounts with ranges stored on their own, {} writes held back for the file of their partition",
+        "World state sorted ingest finished: {} MB stored in {} sorted files in {} steps, {} MB in {} batches through the regular write path, {} accounts with ranges stored on their own, {} writes held back for the file of their partition",
         sortedBytes.get() >> 20,
         sortedFiles.get(),
+        storeSteps.get(),
         directBytes.get() >> 20,
         directBatches.get(),
         accountsNotWaitedFor.get(),
         heldBack.get());
-    bulkLoadEndExecutor.execute(bulkLoad::close);
+    executor.execute(bulkLoad::close);
   }
 
   /** Drops what is not stored yet. Used when the download ends without completing. */
@@ -673,7 +703,8 @@ public class WorldStateSortedIngest {
     synchronized (afterPartitionEnd) {
       afterPartitionEnd.clear();
     }
-    bulkLoadEndExecutor.execute(bulkLoad::close);
+    stores.discard();
+    executor.execute(bulkLoad::close);
   }
 
   long sortedBytes() {
@@ -768,12 +799,14 @@ public class WorldStateSortedIngest {
         // into the file of the partition. They can only be kept as they are if no file spans their
         // account, so the file has to end with it.
         storeMainFile(partition);
-        // told to stop waiting means memory is short, and a file takes a range out of it
-        final long fileThreshold = stopWaiting ? 0 : limits.rangeFileThreshold();
+        // told to stop waiting means memory is short, and what a range holds has to get out of it
+        final boolean memoryIsShort = stopWaiting;
         head.ranges.forEach(
             (end, range) -> {
-              if (range.bufferedSize > 0 && range.bufferedSize >= fileThreshold) {
+              if (range.bufferedSize >= limits.rangeFileThreshold()) {
                 giveFiles(partition, head.account, range);
+              } else if (memoryIsShort) {
+                writeBufferedDirect(partition, head.account, range);
               }
               if (range.complete) {
                 endOwnRange(partition, head.account, range);
@@ -895,9 +928,10 @@ public class WorldStateSortedIngest {
       range.buffered.add(batch);
       range.bufferedSize += batch.size;
       final long bufferedAltogether = bufferedSize.addAndGet(batch.size);
-      if (range.bufferedSize >= limits.rangeFileThreshold()
-          || bufferedAltogether > limits.bufferLimit()) {
+      if (range.bufferedSize + range.directSize >= limits.rangeFileThreshold()) {
         giveFiles(partition, account, range);
+      } else if (bufferedAltogether > limits.bufferLimit()) {
+        writeBufferedDirect(partition, account, range);
       }
     } else {
       appendToOwnRange(partition, account, range, batch);
@@ -919,6 +953,22 @@ public class WorldStateSortedIngest {
     range.bufferedSize = 0;
     range.run = new Run();
     buffered.forEach(batch -> appendToOwnRange(partition, account, range, batch));
+  }
+
+  /**
+   * Takes what a range without a file holds in memory to the storage through the regular write
+   * path. For when memory is short and the range has too little for a file: the many ranges of a
+   * few responses would each leave the storage with a file of their own. A range does this with
+   * less than a file is worth altogether, after that it gets a file after all.
+   */
+  private void writeBufferedDirect(
+      final StoragePartition partition, final byte[] account, final StorageRange range) {
+    final List<Batch> buffered = range.buffered;
+    bufferedSize.addAndGet(-range.bufferedSize);
+    range.directSize += range.bufferedSize;
+    range.buffered = new ArrayList<>();
+    range.bufferedSize = 0;
+    buffered.forEach(batch -> afterMainStream(partition, account, () -> writeDirect(batch)));
   }
 
   private void appendToOwnRange(
@@ -948,8 +998,15 @@ public class WorldStateSortedIngest {
     }
   }
 
-  /** Writes a batch the way the state is written without the sorted ingest. */
+  /**
+   * Queues a batch for the regular write path, the way the state is written without the sorted
+   * ingest. It reaches the storage after everything that was queued before it.
+   */
   private void writeDirect(final Batch batch) {
+    stores.add(new DirectWrite(batch));
+  }
+
+  private void writeDirectNow(final Batch batch) {
     StorageException lastFailure = null;
     for (int attempt = 0; attempt < DIRECT_WRITE_ATTEMPTS; attempt++) {
       final SegmentedKeyValueStorageTransaction transaction = storage.startTransaction();
@@ -979,5 +1036,283 @@ public class WorldStateSortedIngest {
     // The batch may belong to a response that was reported as persisted long ago and is not
     // requested again, so carrying on would leave a hole in the state that nothing looks for.
     throw new IllegalStateException("World state batch could not be stored", lastFailure);
+  }
+
+  /** What is on its way to the storage. */
+  private sealed interface Store permits SortedFiles, DirectWrite {}
+
+  /** The files of a stream that are complete, one per segment. */
+  private record SortedFiles(List<SortedSegmentWriter> writers, long size, List<Runnable> onStored)
+      implements Store {}
+
+  /** A batch that takes the regular write path. */
+  private record DirectWrite(Batch batch) implements Store {}
+
+  /**
+   * Takes what is complete to the storage, in the order it was handed over.
+   *
+   * <p>One thread at a time does that, with everything that was queued while the step before was
+   * under way: the files in one step, each batch of the regular write path on its own and after the
+   * files queued before it. A batch can replace entries of such a file, which it only does if it
+   * gets to the storage second.
+   */
+  private final class StoreQueue {
+    private final Deque<Store> queue = new ArrayDeque<>();
+    private int queuedFiles;
+    private long queuedDirectSize;
+    // a task was handed to the executor and has not started
+    private boolean scheduled;
+    // the thread that takes the queue to the storage, null if none does
+    private Thread storing;
+    private boolean discarded;
+    private Throwable failure;
+    private long lastProgressLogNanos = System.nanoTime();
+
+    /**
+     * Queues something for the storage. Waits while too much is queued, which holds up whoever
+     * completes files faster than the storage takes them.
+     */
+    void add(final Store store) {
+      synchronized (this) {
+        awaitWhile(
+            () ->
+                failure == null
+                    && !discarded
+                    && isFull()
+                    && (scheduled || storing != null)
+                    && storing != Thread.currentThread());
+        if (failure != null || discarded) {
+          discard(store);
+          throwIfFailed();
+          return;
+        }
+        queue.addLast(store);
+        count(store, 1);
+        if (scheduled || storing != null) {
+          return;
+        }
+        scheduled = true;
+      }
+      try {
+        executor.execute(this::storeQueued);
+      } catch (final RuntimeException e) {
+        synchronized (this) {
+          // nothing will come and store what is queued, the next one to queue has to try again
+          scheduled = false;
+          notifyAll();
+        }
+        throw e;
+      }
+      synchronized (this) {
+        // an executor may run the task right here
+        throwIfFailed();
+      }
+    }
+
+    /** Stores everything that is queued, in this thread unless another one is at it. */
+    void storeAll() {
+      synchronized (this) {
+        awaitWhile(() -> storing != null && storing != Thread.currentThread());
+        throwIfFailed();
+        if (queue.isEmpty() || storing != null) {
+          return;
+        }
+        // a task that was scheduled and starts later finds nothing left to do
+        storing = Thread.currentThread();
+      }
+      storeUntilEmpty();
+      synchronized (this) {
+        throwIfFailed();
+      }
+    }
+
+    /** Drops what is queued and lets the step that is under way come to its end. */
+    void discard() {
+      synchronized (this) {
+        discarded = true;
+        discardQueued();
+        notifyAll();
+        awaitWhile(() -> storing != null && storing != Thread.currentThread());
+      }
+    }
+
+    private void storeQueued() {
+      final Thread thread = Thread.currentThread();
+      synchronized (this) {
+        scheduled = false;
+        if (storing != null) {
+          return;
+        }
+        storing = thread;
+      }
+      // named like the threads of the pipeline stages, for whoever looks at what the node does
+      final String name = thread.getName();
+      thread.setName(name + " (storeSortedFiles)");
+      try {
+        storeUntilEmpty();
+      } finally {
+        thread.setName(name);
+      }
+    }
+
+    /** For the thread that is registered as the one that stores. */
+    private void storeUntilEmpty() {
+      while (true) {
+        final List<Store> step;
+        synchronized (this) {
+          if (queue.isEmpty()) {
+            // in one go with the check, so that what is queued from now on gets a task of its own
+            storing = null;
+            notifyAll();
+            return;
+          }
+          step = nextStep();
+        }
+        try {
+          store(step);
+        } catch (final RuntimeException | Error e) {
+          synchronized (this) {
+            failure = e;
+            step.forEach(failed -> count(failed, -1));
+            discardQueued();
+            storing = null;
+            notifyAll();
+          }
+          return;
+        }
+        synchronized (this) {
+          step.forEach(stored -> count(stored, -1));
+          notifyAll();
+          logProgress();
+        }
+      }
+    }
+
+    /** For the thread that stores, with the monitor of the queue. */
+    private void logProgress() {
+      final long now = System.nanoTime();
+      if (!LOG.isDebugEnabled() || now - lastProgressLogNanos < PROGRESS_LOG_INTERVAL_NANOS) {
+        return;
+      }
+      lastProgressLogNanos = now;
+      LOG.debug(
+          "World state sorted ingest so far: {} MB stored in {} sorted files in {} steps, {} MB in {} batches through the regular write path, {} accounts with ranges stored on their own, {} writes held back, {} MB waiting in memory, {} files and {} MB of batches queued for the storage",
+          sortedBytes.get() >> 20,
+          sortedFiles.get(),
+          storeSteps.get(),
+          directBytes.get() >> 20,
+          directBatches.get(),
+          accountsNotWaitedFor.get(),
+          heldBack.get(),
+          bufferedSize.get() >> 20,
+          queuedFiles,
+          queuedDirectSize >> 20);
+    }
+
+    /** Takes the next of what is queued off the queue, as many files as go into one step. */
+    private List<Store> nextStep() {
+      final List<Store> step = new ArrayList<>();
+      int files = 0;
+      while (!queue.isEmpty() && files < MAX_FILES_PER_STORE_STEP) {
+        final Store store = queue.pollFirst();
+        step.add(store);
+        if (store instanceof SortedFiles sortedFiles) {
+          files += sortedFiles.writers().size();
+        }
+      }
+      return step;
+    }
+
+    private void store(final List<Store> step) {
+      final Deque<Store> remaining = new ArrayDeque<>(step);
+      try {
+        final List<SortedFiles> files = new ArrayList<>();
+        while (!remaining.isEmpty()) {
+          final Store store = remaining.pollFirst();
+          if (store instanceof SortedFiles sortedFiles) {
+            files.add(sortedFiles);
+          } else {
+            storeFiles(files);
+            files.clear();
+            writeDirectNow(((DirectWrite) store).batch());
+          }
+        }
+        storeFiles(files);
+      } catch (final RuntimeException | Error e) {
+        // the files the step got to are released, stored or not: these are the ones it did not
+        remaining.forEach(this::discard);
+        throw e;
+      }
+    }
+
+    private void storeFiles(final List<SortedFiles> files) {
+      if (files.isEmpty()) {
+        return;
+      }
+      final List<SortedSegmentWriter> writers =
+          files.stream().flatMap(sortedFiles -> sortedFiles.writers().stream()).toList();
+      try {
+        storage.finishSortedWriters(writers);
+      } catch (final StorageException e) {
+        // The responses in the files were reported as persisted long ago and are not requested
+        // again, so carrying on would leave a hole in the state that nothing looks for.
+        throw new IllegalStateException("Sorted world state file could not be stored", e);
+      } finally {
+        writers.forEach(SortedSegmentWriter::close);
+      }
+      storeSteps.incrementAndGet();
+      for (final SortedFiles stored : files) {
+        sortedFiles.addAndGet(stored.writers().size());
+        sortedBytes.addAndGet(stored.size());
+        stored.onStored().forEach(Runnable::run);
+      }
+    }
+
+    private boolean isFull() {
+      return queuedFiles >= MAX_QUEUED_FILES || queuedDirectSize >= MAX_QUEUED_DIRECT_SIZE;
+    }
+
+    private void count(final Store store, final int sign) {
+      if (store instanceof SortedFiles sortedFiles) {
+        queuedFiles += sign * sortedFiles.writers().size();
+      } else {
+        queuedDirectSize += sign * ((DirectWrite) store).batch().size;
+      }
+    }
+
+    private void discardQueued() {
+      for (final Store store : queue) {
+        count(store, -1);
+        discard(store);
+      }
+      queue.clear();
+    }
+
+    /** Releases the files of what will not be stored. A file that was stored stays where it is. */
+    private void discard(final Store store) {
+      if (store instanceof SortedFiles sortedFiles) {
+        sortedFiles.writers().forEach(SortedSegmentWriter::close);
+      }
+    }
+
+    private void throwIfFailed() {
+      if (failure != null) {
+        // What was queued was reported as persisted and is not requested again, so carrying on
+        // would leave a hole in the state that nothing looks for.
+        throw new IllegalStateException("World state could not be stored", failure);
+      }
+    }
+
+    /** For a thread that holds the monitor of the queue. */
+    private void awaitWhile(final BooleanSupplier condition) {
+      try {
+        while (condition.getAsBoolean()) {
+          wait();
+        }
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException("Interrupted while the world state was being stored", e);
+      }
+    }
   }
 }
