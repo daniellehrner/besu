@@ -49,6 +49,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import kotlin.collections.ArrayDeque;
 import org.apache.tuweni.bytes.Bytes;
@@ -58,6 +59,14 @@ import org.slf4j.LoggerFactory;
 
 public class RequestDataStep {
   private static final Logger LOG = LoggerFactory.getLogger(RequestDataStep.class);
+
+  /**
+   * How many requests are sent for the accounts of one batch before what is still unanswered goes
+   * back to the queue. A batch of accounts with much storage would otherwise keep its place in the
+   * pipeline for as many round trips as it has accounts.
+   */
+  private static final int MAX_STORAGE_REQUESTS_PER_BATCH = 8;
+
   private final WorldStateStorageCoordinator worldStateStorageCoordinator;
   private final SnapSyncProcessState fastSyncState;
   private final SnapRequestContext downloadState;
@@ -119,7 +128,42 @@ public class RequestDataStep {
             });
   }
 
+  /**
+   * Requests the storage of the accounts of the given tasks.
+   *
+   * <p>A peer answers as many of the accounts as fit its response and nothing for the rest. Those
+   * are asked for again right away, before the tasks are handed on. Sent back to the queue, they
+   * would be requested after the accounts that were queued behind them, and so arrive out of order.
+   *
+   * @param requestTasks the storage requests of some accounts, or one request for a range of the
+   *     storage of an account
+   * @return the tasks, of which those that were answered hold their response
+   */
   public CompletableFuture<List<Task<SnapDataRequest>>> requestStorage(
+      final List<Task<SnapDataRequest>> requestTasks) {
+    return requestStorage(requestTasks, MAX_STORAGE_REQUESTS_PER_BATCH)
+        .thenApply(__ -> requestTasks);
+  }
+
+  private CompletableFuture<Void> requestStorage(
+      final List<Task<SnapDataRequest>> requestTasks, final int requestsLeft) {
+    return requestStorageOnce(requestTasks)
+        .thenCompose(
+            __ -> {
+              int answered = 0;
+              while (answered < requestTasks.size()
+                  && requestTasks.get(answered).getData().isResponseReceived()) {
+                answered++;
+              }
+              if (answered == 0 || answered == requestTasks.size() || requestsLeft <= 1) {
+                return CompletableFuture.completedFuture(null);
+              }
+              return requestStorage(
+                  requestTasks.subList(answered, requestTasks.size()), requestsLeft - 1);
+            });
+  }
+
+  private CompletableFuture<List<Task<SnapDataRequest>>> requestStorageOnce(
       final List<Task<SnapDataRequest>> requestTasks) {
     final List<Hash> accountHashes =
         requestTasks.stream()
@@ -141,8 +185,7 @@ public class RequestDataStep {
             .map(hash -> Bytes32.wrap(hash.getBytes()))
             .collect(Collectors.toList());
     final EthTask<StorageRangeMessage.SlotRangeData> getStorageRangeTask =
-        RetryingGetStorageRangeFromPeerTask.forStorageRange(
-            ethContext, accountHashesAsBytes32, minRange, maxRange, blockHeader, metricsSystem);
+        createStorageRangeTask(accountHashesAsBytes32, minRange, maxRange, blockHeader);
     downloadState.addOutstandingTask(getStorageRangeTask);
     return getStorageRangeTask
         .run()
@@ -189,6 +232,16 @@ public class RequestDataStep {
               }
               return requestTasks;
             });
+  }
+
+  @VisibleForTesting
+  EthTask<StorageRangeMessage.SlotRangeData> createStorageRangeTask(
+      final List<Bytes32> accountHashes,
+      final Bytes32 minRange,
+      final Bytes32 maxRange,
+      final BlockHeader blockHeader) {
+    return RetryingGetStorageRangeFromPeerTask.forStorageRange(
+        ethContext, accountHashes, minRange, maxRange, blockHeader, metricsSystem);
   }
 
   public CompletableFuture<List<Task<SnapDataRequest>>> requestCode(
