@@ -51,6 +51,7 @@ public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceip
   private final MutableBlockchain blockchain;
   private final boolean transactionIndexingEnabled;
   private final Difficulty totalDifficulty;
+  private final long firstBlock;
   private final long lastBlock;
   private final Clock clock;
   private final AtomicBoolean isTimeToLog = new AtomicBoolean(true);
@@ -76,6 +77,7 @@ public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceip
     this.blockchain = blockchain;
     this.totalDifficulty = totalDifficulty;
     this.transactionIndexingEnabled = transactionIndexingEnabled;
+    this.firstBlock = missingBlockBodies.firstBlock();
     this.lastBlock = missingBlockBodies.lastBlock();
     this.clock = clock;
     this.nextBlockNumber = missingBlockBodies.firstBlock();
@@ -113,11 +115,14 @@ public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceip
     if (isTimeToLog.get()) {
       throttledLog(
           LOG::info,
+          // of the blocks that were missing when this download started: on a chain that is synced
+          // from a checkpoint the first of them is far from block 1
           String.format(
               "Chain history download progress: %s of %s (%s%%)",
               nextBlockNumber - 1,
               lastBlock,
-              ImportSyncBlocksStep.getBlocksPercent(nextBlockNumber - 1, lastBlock)),
+              ImportSyncBlocksStep.getBlocksPercent(
+                  nextBlockNumber - firstBlock, lastBlock - firstBlock + 1)),
           isTimeToLog,
           PRINT_DELAY_SECONDS);
     }
