@@ -160,6 +160,13 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
 
     private static final int LARGE_STORAGE_PERSIST_THREADS = 4;
 
+    /**
+     * How many code requests a batch holds at most. More than a request asks for, because the
+     * requests of a batch can be for the same code.
+     */
+    private static final int MAX_CODE_BATCH_SIZE =
+        2 * RequestDataStep.MAX_BYTECODE_COUNT_PER_REQUEST;
+
     private SnapSyncConfiguration snapSyncConfiguration;
     private int maxOutstandingRequests;
     private SnapWorldDownloadState downloadState;
@@ -355,14 +362,15 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
                   "dequeueCodeRequestBlocking",
                   new TaskQueueIterator<>(
                       downloadState, () -> downloadState.dequeueCodeRequestBlocking()),
-                  bufferCapacity,
+                  // a batch is filled from what waits here, so it has to hold a whole one
+                  Math.max(bufferCapacity, MAX_CODE_BATCH_SIZE),
                   outputCounter,
                   true,
                   "code_blocks_download_pipeline")
               .inBatches(
-                  snapSyncConfiguration.getBytecodeCountPerRequest() * 2,
+                  MAX_CODE_BATCH_SIZE,
                   tasks ->
-                      snapSyncConfiguration.getBytecodeCountPerRequest()
+                      requestDataStep.bytecodeCountPerRequest()
                           - (int)
                               tasks.stream()
                                   .map(Task::getData)
@@ -378,7 +386,10 @@ public class SnapWorldStateDownloadProcess implements WorldStateDownloadProcess 
                             reloadHealWhenNeeded(snapSyncState, downloadState, newBlockFound));
                     return tasks;
                   })
-              .thenProcessAsyncOrdered(
+              // A code depends on no other code, and nothing depends on the order they are stored
+              // in. So a response need not wait for those requested before it, which would leave
+              // the requests of the faster peers idle until the slowest one answered.
+              .thenProcessAsync(
                   "batchDownloadCodeData",
                   tasks -> requestDataStep.requestCode(tasks),
                   maxOutstandingRequests)

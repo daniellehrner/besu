@@ -32,6 +32,7 @@ import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.StorageRangeDataR
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.heal.AccountFlatDatabaseHealingRangeRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.heal.StorageFlatDatabaseHealingRangeRequest;
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.request.heal.TrieNodeHealingRequest;
+import org.hyperledger.besu.ethereum.p2p.rlpx.wire.AbstractSnapMessageData;
 import org.hyperledger.besu.ethereum.proof.WorldStateProofProvider;
 import org.hyperledger.besu.ethereum.trie.RangeManager;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
@@ -47,6 +48,7 @@ import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -67,6 +69,12 @@ public class RequestDataStep {
    */
   private static final int MAX_STORAGE_REQUESTS_PER_BATCH = 8;
 
+  /**
+   * How many codes a request asks for at most. Peers stop looking codes up after about this many,
+   * whatever the size of their response.
+   */
+  static final int MAX_BYTECODE_COUNT_PER_REQUEST = 1024;
+
   private final WorldStateStorageCoordinator worldStateStorageCoordinator;
   private final SnapSyncProcessState fastSyncState;
   private final SnapRequestContext downloadState;
@@ -74,6 +82,9 @@ public class RequestDataStep {
   private final MetricsSystem metricsSystem;
   private final EthContext ethContext;
   private final WorldStateProofProvider worldStateProofProvider;
+  // the codes received so far and their size, which tell how many of them fit a response
+  private final AtomicLong receivedCodes = new AtomicLong();
+  private final AtomicLong receivedCodeBytes = new AtomicLong();
 
   public RequestDataStep(
       final EthContext ethContext,
@@ -244,6 +255,27 @@ public class RequestDataStep {
         ethContext, accountHashes, minRange, maxRange, blockHeader, metricsSystem);
   }
 
+  /**
+   * How many codes to ask a peer for at once. A peer answers as many as fit the size its response
+   * is asked to stay below. The configured count is what fits if the codes are large. Where they
+   * are small, as on a network full of minimal proxy contracts, it leaves most of the response
+   * unused and the download with a round trip for every few kilobytes of code. So the count goes by
+   * the size of the codes received so far.
+   *
+   * @return the number of codes the next request should ask for
+   */
+  public int bytecodeCountPerRequest() {
+    final int configuredCount = snapSyncConfiguration.getBytecodeCountPerRequest();
+    final long codes = receivedCodes.get();
+    if (codes == 0) {
+      return configuredCount;
+    }
+    final long averageSize = Math.max(1, receivedCodeBytes.get() / codes);
+    final long fittingResponse = AbstractSnapMessageData.SIZE_REQUEST.longValue() / averageSize;
+    return (int)
+        Math.max(configuredCount, Math.min(MAX_BYTECODE_COUNT_PER_REQUEST, fittingResponse));
+  }
+
   public CompletableFuture<List<Task<SnapDataRequest>>> requestCode(
       final List<Task<SnapDataRequest>> requestTasks) {
     final List<Bytes32> codeHashes =
@@ -255,8 +287,7 @@ public class RequestDataStep {
             .collect(Collectors.toList());
     final BlockHeader blockHeader = fastSyncState.getPivotBlockHeader().get();
     final EthTask<Map<Bytes32, Bytes>> getByteCodeTask =
-        RetryingGetBytecodeFromPeerTask.forByteCode(
-            ethContext, codeHashes, blockHeader, metricsSystem);
+        createBytecodeTask(codeHashes, blockHeader);
     downloadState.addOutstandingTask(getByteCodeTask);
     return getByteCodeTask
         .run()
@@ -265,6 +296,9 @@ public class RequestDataStep {
             (response, error) -> {
               downloadState.removeOutstandingTask(getByteCodeTask);
               if (response != null) {
+                receivedCodes.addAndGet(response.size());
+                receivedCodeBytes.addAndGet(
+                    response.values().stream().mapToLong(Bytes::size).sum());
                 for (Task<SnapDataRequest> requestTask : requestTasks) {
                   final BytecodeRequest request = (BytecodeRequest) requestTask.getData();
                   request.setRootHash(blockHeader.getStateRoot());
@@ -281,6 +315,13 @@ public class RequestDataStep {
               }
               return requestTasks;
             });
+  }
+
+  @VisibleForTesting
+  EthTask<Map<Bytes32, Bytes>> createBytecodeTask(
+      final List<Bytes32> codeHashes, final BlockHeader blockHeader) {
+    return RetryingGetBytecodeFromPeerTask.forByteCode(
+        ethContext, codeHashes, blockHeader, metricsSystem);
   }
 
   public CompletableFuture<List<Task<SnapDataRequest>>> requestTrieNodeByPath(
