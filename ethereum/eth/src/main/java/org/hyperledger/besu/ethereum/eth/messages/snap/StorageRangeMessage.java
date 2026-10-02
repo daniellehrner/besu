@@ -22,7 +22,6 @@ import org.hyperledger.besu.ethereum.rlp.RLPInput;
 
 import java.util.List;
 import java.util.NavigableMap;
-import java.util.TreeMap;
 
 import kotlin.collections.ArrayDeque;
 import org.apache.tuweni.bytes.Bytes;
@@ -82,14 +81,16 @@ public final class StorageRangeMessage extends AbstractSnapMessageData {
 
     input.readList(
         accountRlpInput -> {
-          slots.add(new TreeMap<>());
-          return accountRlpInput.readList(
+          final RangeEntries accountSlots = new RangeEntries();
+          accountRlpInput.readList(
               slotRlpInput -> {
                 slotRlpInput.enterList();
-                slots.last().put(slotRlpInput.readBytes32(), slotRlpInput.readBytes());
+                accountSlots.add(slotRlpInput.readBytes32(), slotRlpInput.readBytes());
                 slotRlpInput.leaveList();
                 return Void.TYPE; // we don't need the response
               });
+          slots.add(accountSlots.toMap());
+          return Void.TYPE;
         });
 
     input.enterList();

@@ -26,10 +26,8 @@ import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
-import java.util.TreeMap;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.Maps;
 import kotlin.collections.ArrayDeque;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -76,23 +74,21 @@ public final class AccountRangeMessage extends AbstractSnapMessageData {
   }
 
   public AccountRangeData accountData(final boolean withRequestId) {
-    final TreeMap<Bytes32, Bytes> accounts = new TreeMap<>();
+    final RangeEntries accountEntries = new RangeEntries();
     final ArrayDeque<Bytes> proofs = new ArrayDeque<>();
     final RLPInput input = new BytesValueRLPInput(data, false);
     input.enterList();
 
     if (withRequestId) input.skipNext();
 
-    input
-        .readList(
-            rlpInput -> {
-              rlpInput.enterList();
-              Map.Entry<Bytes32, Bytes> entry =
-                  Maps.immutableEntry(rlpInput.readBytes32(), toFullAccount(rlpInput.readAsRlp()));
-              rlpInput.leaveList();
-              return entry;
-            })
-        .forEach(entry -> accounts.put(entry.getKey(), entry.getValue()));
+    input.readList(
+        rlpInput -> {
+          rlpInput.enterList();
+          accountEntries.add(rlpInput.readBytes32(), toFullAccount(rlpInput.readAsRlp()));
+          rlpInput.leaveList();
+          return Void.TYPE; // we don't need the response
+        });
+    final NavigableMap<Bytes32, Bytes> accounts = accountEntries.toMap();
 
     input.enterList();
     while (!input.isEndOfCurrentList()) {
