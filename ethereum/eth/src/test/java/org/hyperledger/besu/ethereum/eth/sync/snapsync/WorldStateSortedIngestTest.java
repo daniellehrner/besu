@@ -15,19 +15,29 @@
 package org.hyperledger.besu.ethereum.eth.sync.snapsync;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 
 import org.hyperledger.besu.ethereum.eth.sync.snapsync.WorldStateSortedIngest.Batch;
+import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.storage.SegmentBulkLoad;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.storage.SortedSegmentWriter;
 import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -37,6 +47,8 @@ public class WorldStateSortedIngestTest {
 
   private static final Bytes32 PARTITION_END =
       Bytes32.fromHexString("0x0fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+  private static final Bytes32 NEXT_PARTITION_END =
+      Bytes32.fromHexString("0x1fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
   private static final Bytes32 RANGE_END =
       Bytes32.fromHexString("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
   private static final Bytes32 OTHER_RANGE_END = Bytes32.repeat((byte) 0xff);
@@ -828,6 +840,265 @@ public class WorldStateSortedIngestTest {
   }
 
   @Test
+  public void shouldWriteTheSmallRangesOfAnAccountThroughTheRegularWritePathWhenMemoryIsShort() {
+    ingest.writeStorageStart(
+        ACCOUNT_1, WHOLE_STORAGE, slots("start", ACCOUNT_1, 0x01), List.of(RANGE_END));
+    ingest.writeStorageContinuation(
+        ACCOUNT_1, ANY_START, RANGE_END, slots("range", ACCOUNT_1, 0x05), List.of(RANGE_END));
+    // just below the size at which the file of the partition is stored
+    final long valueSize = LIMITS.targetFileSize() - Bytes32.SIZE - 1;
+    assertThat(storage.events).isEmpty();
+    int account = 0x12;
+    for (long held = 0; held <= LIMITS.bufferLimit(); held += valueSize + Bytes32.SIZE) {
+      ingest.writeStorageStart(
+          account(account),
+          WHOLE_STORAGE,
+          batch("held " + account, ACCOUNT_STORAGE_STORAGE, valueSize, account(account)),
+          List.of());
+      account++;
+    }
+
+    // the account is given up waiting for, and what its range holds is too little for a file
+    assertThat(storage.events)
+        .startsWith(
+            "file ACCOUNT_STORAGE_STORAGE [11:01]", "direct ACCOUNT_STORAGE_STORAGE [11:05]");
+    assertThat(stored).startsWith("start", "range", "held 18");
+
+    // the rest of the range is as small
+    ingest.writeStorageContinuation(
+        ACCOUNT_1, ANY_START, RANGE_END, slots("range end", ACCOUNT_1, 0x06), List.of());
+
+    assertThat(storage.events).last().isEqualTo("direct ACCOUNT_STORAGE_STORAGE [11:06]");
+    assertThat(storage.events).noneMatch(event -> event.contains("[11:05") && isFile(event));
+  }
+
+  @Test
+  public void shouldWriteASmallRangeThroughTheRegularWritePathWhileMemoryIsShort() {
+    // a range without a file holds what it has in memory, and nothing is waited for that could
+    // be given up on to make room
+    final WorldStateSortedIngest.Limits limits =
+        new WorldStateSortedIngest.Limits(4096, 512, 3072, 600);
+    final WorldStateSortedIngest shortOfMemory =
+        new WorldStateSortedIngest(storage, Runnable::run, limits);
+    shortOfMemory.writeStorageContinuation(
+        ACCOUNT_2,
+        ANY_START,
+        RANGE_END,
+        batch("other", ACCOUNT_STORAGE_STORAGE, 400, slotKey(ACCOUNT_2, 0x05)),
+        List.of(RANGE_END));
+    assertThat(storage.events).isEmpty();
+
+    shortOfMemory.writeStorageContinuation(
+        ACCOUNT_1,
+        ANY_START,
+        RANGE_END,
+        batch("first", ACCOUNT_STORAGE_STORAGE, 300, slotKey(ACCOUNT_1, 0x05)),
+        List.of(RANGE_END));
+
+    assertThat(storage.events).containsExactly("direct ACCOUNT_STORAGE_STORAGE [11:05]");
+    assertThat(stored).containsExactly("first");
+
+    // with this the range has had more than a file is worth, so it gets one for what follows
+    shortOfMemory.writeStorageContinuation(
+        ACCOUNT_1,
+        ANY_START,
+        RANGE_END,
+        batch("second", ACCOUNT_STORAGE_STORAGE, 300, slotKey(ACCOUNT_1, 0x06)),
+        List.of(RANGE_END));
+    shortOfMemory.writeStorageContinuation(
+        ACCOUNT_1, ANY_START, RANGE_END, slots("third", ACCOUNT_1, 0x07), List.of());
+
+    assertThat(storage.events)
+        .containsExactly(
+            "direct ACCOUNT_STORAGE_STORAGE [11:05]",
+            "file ACCOUNT_STORAGE_STORAGE [11:06, 11:07]");
+    assertThat(stored).containsExactly("first", "second", "third");
+  }
+
+  @Test
+  public void shouldLeaveStoringTheFilesToTheExecutorAndStoreThemInOneStep() {
+    final LaterExecutor later = new LaterExecutor();
+    final WorldStateSortedIngest queued = new WorldStateSortedIngest(storage, later, LIMITS);
+    queued.writeAccountRange(PARTITION_END, accounts("first", 0x01), true);
+    queued.writeAccountRange(NEXT_PARTITION_END, accounts("second", 0x11), true);
+
+    assertThat(storage.events).isEmpty();
+    assertThat(stored).isEmpty();
+    assertThat(storage.get(ACCOUNT_INFO_STATE, key(0x01))).isEmpty();
+
+    later.runAll();
+
+    assertThat(storage.events)
+        .containsExactly("file ACCOUNT_INFO_STATE [01]", "file ACCOUNT_INFO_STATE [11]");
+    assertThat(storage.filesPerStep).containsExactly(2);
+    assertThat(stored).containsExactly("first", "second");
+  }
+
+  @Test
+  public void shouldKeepABatchOfTheRegularWritePathBehindTheFileThatWasQueuedBeforeIt() {
+    final LaterExecutor later = new LaterExecutor();
+    final WorldStateSortedIngest queued = new WorldStateSortedIngest(storage, later, LIMITS);
+    queued.writeAccountRange(PARTITION_END, accounts("first", 0x01, 0x02), false);
+    // does not follow what the file holds, which has to be in the storage before it
+    queued.writeAccountRange(PARTITION_END, accounts("again", 0x02), false);
+    queued.writeAccountRange(PARTITION_END, accounts("last", 0x03), true);
+
+    assertThat(storage.events).isEmpty();
+
+    later.runAll();
+
+    assertThat(storage.events)
+        .containsExactly(
+            "file ACCOUNT_INFO_STATE [01, 02]",
+            "direct ACCOUNT_INFO_STATE [02]",
+            "file ACCOUNT_INFO_STATE [03]");
+    assertThat(storage.filesPerStep).containsExactly(1, 1);
+    assertThat(stored).containsExactly("first", "again", "last");
+  }
+
+  @Test
+  public void shouldStoreWhatIsQueuedWhenFinishedWithoutWaitingForTheExecutor() {
+    final LaterExecutor later = new LaterExecutor();
+    final WorldStateSortedIngest queued = new WorldStateSortedIngest(storage, later, LIMITS);
+    queued.writeAccountRange(PARTITION_END, accounts("accounts", 0x01), true);
+    queued.writeStorageStart(ACCOUNT_1, WHOLE_STORAGE, slots("one", ACCOUNT_1, 0x01), List.of());
+
+    queued.finishAll();
+
+    assertThat(storage.events)
+        .containsExactly("file ACCOUNT_INFO_STATE [01]", "file ACCOUNT_STORAGE_STORAGE [11:01]");
+    assertThat(stored).containsExactly("accounts", "one");
+    assertThat(storage.get(ACCOUNT_INFO_STATE, key(0x01))).isPresent();
+
+    // the task that was scheduled finds nothing left
+    later.runAll();
+
+    assertThat(storage.events).hasSize(2);
+    assertThat(stored).hasSize(2);
+  }
+
+  @Test
+  public void shouldDropWhatIsQueuedWhenClosed() {
+    final LaterExecutor later = new LaterExecutor();
+    final WorldStateSortedIngest queued = new WorldStateSortedIngest(storage, later, LIMITS);
+    queued.writeAccountRange(PARTITION_END, accounts("first", 0x01), true);
+    queued.writeAccountRange(NEXT_PARTITION_END, accounts("open", 0x11), false);
+
+    queued.close();
+    later.runAll();
+
+    assertThat(storage.events).isEmpty();
+    assertThat(stored).isEmpty();
+    assertThat(storage.openWriters).isZero();
+  }
+
+  @Test
+  public void shouldFailWhatIsWrittenOnceAFileCouldNotBeStored() {
+    storage.failToFinish = true;
+
+    assertThatThrownBy(() -> ingest.writeAccountRange(PARTITION_END, accounts("first", 0x01), true))
+        .isInstanceOf(IllegalStateException.class)
+        .hasRootCauseInstanceOf(StorageException.class);
+
+    // what was in the file is not requested again, so there is no carrying on
+    storage.failToFinish = false;
+    assertThatThrownBy(
+            () -> ingest.writeAccountRange(NEXT_PARTITION_END, accounts("second", 0x11), true))
+        .isInstanceOf(IllegalStateException.class);
+    assertThatThrownBy(ingest::finishAll).isInstanceOf(IllegalStateException.class);
+    assertThat(stored).isEmpty();
+    assertThat(storage.events).isEmpty();
+    assertThat(storage.openWriters).isZero();
+  }
+
+  @Test
+  public void shouldFailTheNextWriteWhenAFileCouldNotBeStoredInTheMeantime() {
+    final LaterExecutor later = new LaterExecutor();
+    final WorldStateSortedIngest queued = new WorldStateSortedIngest(storage, later, LIMITS);
+    queued.writeAccountRange(PARTITION_END, accounts("first", 0x01), true);
+    queued.writeAccountRange(NEXT_PARTITION_END, accounts("open", 0x11), false);
+    storage.failToFinish = true;
+
+    later.runAll();
+
+    assertThatThrownBy(
+            () -> queued.writeAccountRange(NEXT_PARTITION_END, accounts("last", 0x12), true))
+        .isInstanceOf(IllegalStateException.class)
+        .hasRootCauseInstanceOf(StorageException.class);
+    assertThat(stored).isEmpty();
+    assertThat(storage.openWriters).isZero();
+  }
+
+  @Test
+  public void shouldStoreEverythingSeveralThreadsWriteWhileAnotherOneStores() throws Exception {
+    final int writers = 8;
+    final int batchesPerWriter = 400;
+    final SegmentedInMemoryKeyValueStorage sharedStorage = new SegmentedInMemoryKeyValueStorage();
+    final ExecutorService storeExecutor = Executors.newSingleThreadExecutor();
+    final ExecutorService writeExecutor = Executors.newFixedThreadPool(writers);
+    final AtomicInteger storedBatches = new AtomicInteger();
+    try {
+      final WorldStateSortedIngest concurrent =
+          new WorldStateSortedIngest(sharedStorage, storeExecutor, LIMITS);
+      final List<Future<?>> written = new ArrayList<>();
+      for (int writer = 0; writer < writers; writer++) {
+        // every writer has an account partition and a storage partition to itself
+        final int nibble = writer;
+        written.add(
+            writeExecutor.submit(
+                () -> {
+                  final Bytes32 partitionEnd =
+                      Bytes32.wrap(
+                          Bytes.concatenate(
+                              Bytes.of((nibble << 4) | 0x0f), Bytes.repeat((byte) 0xff, 31)));
+                  for (int i = 0; i < batchesPerWriter; i++) {
+                    final SortedIngestTransaction accounts = new SortedIngestTransaction();
+                    accounts.put(ACCOUNT_INFO_STATE, concurrentKey(nibble, i), new byte[300]);
+                    concurrent.writeAccountRange(
+                        partitionEnd,
+                        accounts.toBatch(storedBatches::incrementAndGet),
+                        i == batchesPerWriter - 1);
+                    final Bytes32 account = Bytes32.rightPad(Bytes.wrap(concurrentKey(nibble, i)));
+                    final SortedIngestTransaction slots = new SortedIngestTransaction();
+                    slots.put(
+                        ACCOUNT_STORAGE_STORAGE,
+                        slotKey(account, 0x01).toArrayUnsafe(),
+                        new byte[300]);
+                    concurrent.writeStorageStart(
+                        account,
+                        WHOLE_STORAGE,
+                        slots.toBatch(storedBatches::incrementAndGet),
+                        List.of());
+                  }
+                }));
+      }
+      for (final Future<?> writer : written) {
+        writer.get(60, TimeUnit.SECONDS);
+      }
+
+      concurrent.finishAll();
+
+      assertThat(storedBatches).hasValue(2 * writers * batchesPerWriter);
+      for (int writer = 0; writer < writers; writer++) {
+        for (int i = 0; i < batchesPerWriter; i++) {
+          assertThat(sharedStorage.get(ACCOUNT_INFO_STATE, concurrentKey(writer, i))).isPresent();
+          assertThat(
+                  sharedStorage.get(
+                      ACCOUNT_STORAGE_STORAGE,
+                      slotKey(Bytes32.rightPad(Bytes.wrap(concurrentKey(writer, i))), 0x01)
+                          .toArrayUnsafe()))
+              .isPresent();
+        }
+      }
+      // most of it in files, and far fewer steps than files
+      assertThat(concurrent.sortedFiles()).isGreaterThan(100);
+    } finally {
+      writeExecutor.shutdownNow();
+      storeExecutor.shutdownNow();
+    }
+  }
+
+  @Test
   public void shouldKeepTheLastOfSeveralEntriesWithTheSameKey() {
     final SortedIngestTransaction collected = new SortedIngestTransaction();
     collected.put(ACCOUNT_INFO_STATE, key(0x02), Bytes.of(1).toArrayUnsafe());
@@ -903,6 +1174,31 @@ public class WorldStateSortedIngestTest {
     return new byte[] {1};
   }
 
+  /** The key of the given number of a writer, ascending with the number. */
+  private static byte[] concurrentKey(final int nibble, final int number) {
+    return new byte[] {(byte) ((nibble << 4) | (number >> 8)), (byte) number};
+  }
+
+  private static boolean isFile(final String event) {
+    return event.startsWith("file ");
+  }
+
+  /** Runs what it is handed when told to, the way an executor does that has other things to do. */
+  private static final class LaterExecutor implements Executor {
+    private final Deque<Runnable> tasks = new ArrayDeque<>();
+
+    @Override
+    public void execute(final Runnable task) {
+      tasks.add(task);
+    }
+
+    void runAll() {
+      while (!tasks.isEmpty()) {
+        tasks.poll().run();
+      }
+    }
+  }
+
   /**
    * Names a key of an account or of the account trie by its bytes, and a storage key by the first
    * byte of the account hash and the byte after the hash.
@@ -917,7 +1213,10 @@ public class WorldStateSortedIngestTest {
   private static class RecordingStorage extends SegmentedInMemoryKeyValueStorage {
     private final List<String> events = new ArrayList<>();
     private final List<String> bulkLoadEvents = new ArrayList<>();
+    // how many writers were finished together, one entry per call
+    private final List<Integer> filesPerStep = new ArrayList<>();
     private int openWriters;
+    private boolean failToFinish;
     // the sorted writer of this storage is built on a transaction, which is not a direct write
     private boolean openingSortedWriter;
 
@@ -956,6 +1255,15 @@ public class WorldStateSortedIngestTest {
           delegate.close();
         }
       };
+    }
+
+    @Override
+    public void finishSortedWriters(final List<SortedSegmentWriter> writers) {
+      if (failToFinish) {
+        throw new StorageException("The storage takes no files");
+      }
+      filesPerStep.add(writers.size());
+      super.finishSortedWriters(writers);
     }
 
     @Override
