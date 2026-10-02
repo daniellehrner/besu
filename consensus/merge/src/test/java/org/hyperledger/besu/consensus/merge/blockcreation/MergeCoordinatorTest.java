@@ -93,8 +93,10 @@ import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -746,6 +748,127 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
                 .getBody()
                 .getTransactions())
         .hasSize(0);
+  }
+
+  @Test
+  public void finalizingDropsTheBlockInFlightWhenABlockWithTransactionsIsAvailable()
+      throws ExecutionException, InterruptedException {
+    final CountDownLatch blockInFlight = new CountDownLatch(1);
+    final CountDownLatch finalized = new CountDownLatch(1);
+    // the empty block, the first block with a transaction, then the block to hold in flight
+    final MergeCoordinator holdingCoordinator =
+        coordinatorHoldingBlockCreation(3, blockInFlight, finalized);
+    final List<PayloadWrapper> payloads = trackPayloads();
+    transactions.addTransaction(createLocalTransaction(0), Optional.empty());
+
+    final var payloadId =
+        holdingCoordinator.preparePayload(
+            new PreparePayloadArgsBuilder()
+                .parentHeader(genesisState.getBlock().getHeader())
+                .timestamp(System.currentTimeMillis() / 1000)
+                .prevRandao(Bytes32.ZERO)
+                .feeRecipient(suggestedFeeRecipient)
+                .build());
+    assertThat(blockInFlight.await(5, TimeUnit.SECONDS)).isTrue();
+
+    // makes the block in flight better than the available one
+    transactions.addTransaction(createLocalTransaction(1), Optional.empty());
+    holdingCoordinator.finalizeProposalById(payloadId);
+    finalized.countDown();
+    blockCreationTask.get();
+
+    assertThat(payloads).extracting(PayloadWrapper::transactionCount).containsExactly(0, 1);
+  }
+
+  @Test
+  public void finalizingFinishesTheBlockInFlightWhenOnlyTheEmptyBlockIsAvailable()
+      throws ExecutionException, InterruptedException {
+    final CountDownLatch blockInFlight = new CountDownLatch(1);
+    final CountDownLatch finalized = new CountDownLatch(1);
+    // the empty block, then the block to hold in flight
+    final MergeCoordinator holdingCoordinator =
+        coordinatorHoldingBlockCreation(2, blockInFlight, finalized);
+    final List<PayloadWrapper> payloads = trackPayloads();
+    transactions.addTransaction(createLocalTransaction(0), Optional.empty());
+
+    final var payloadId =
+        holdingCoordinator.preparePayload(
+            new PreparePayloadArgsBuilder()
+                .parentHeader(genesisState.getBlock().getHeader())
+                .timestamp(System.currentTimeMillis() / 1000)
+                .prevRandao(Bytes32.ZERO)
+                .feeRecipient(suggestedFeeRecipient)
+                .build());
+    assertThat(blockInFlight.await(5, TimeUnit.SECONDS)).isTrue();
+
+    holdingCoordinator.finalizeProposalById(payloadId);
+    finalized.countDown();
+    blockCreationTask.get();
+
+    assertThat(payloads).extracting(PayloadWrapper::transactionCount).containsExactly(0, 1);
+  }
+
+  /**
+   * A coordinator whose given block creation, counted from 1, signals that it is in flight and then
+   * waits to be released before it runs.
+   */
+  private MergeCoordinator coordinatorHoldingBlockCreation(
+      final int heldBlockCreation, final CountDownLatch inFlight, final CountDownLatch release) {
+    final AtomicLong blockCreations = new AtomicLong(0);
+    final MergeCoordinator.MergeBlockCreatorFactory holdingFactory =
+        (parentHeader, address) -> {
+          final MergeBlockCreator creator =
+              spy(
+                  new MergeBlockCreator(
+                      miningConfiguration,
+                      parent -> Bytes.EMPTY,
+                      transactionPool,
+                      protocolContext,
+                      protocolSchedule,
+                      parentHeader,
+                      ethScheduler));
+          doAnswer(
+                  invocation -> {
+                    if (blockCreations.incrementAndGet() == heldBlockCreation) {
+                      inFlight.countDown();
+                      release.await();
+                    }
+                    return invocation.callRealMethod();
+                  })
+              .when(creator)
+              .createBlock(
+                  any(),
+                  any(Bytes32.class),
+                  anyLong(),
+                  eq(Optional.empty()),
+                  eq(Optional.empty()),
+                  eq(Optional.empty()),
+                  eq(Optional.empty()),
+                  any());
+          return creator;
+        };
+    return new MergeCoordinator(
+        protocolContext,
+        protocolSchedule,
+        ethScheduler,
+        miningConfiguration,
+        backwardSyncContext,
+        holdingFactory);
+  }
+
+  /** Makes the mocked merge context hand back the latest payload it was given. */
+  private List<PayloadWrapper> trackPayloads() {
+    final List<PayloadWrapper> payloads = new CopyOnWriteArrayList<>();
+    doAnswer(
+            invocation -> {
+              payloads.add(invocation.getArgument(0, PayloadWrapper.class));
+              return null;
+            })
+        .when(mergeContext)
+        .putPayloadById(any());
+    when(mergeContext.retrievePayloadById(any()))
+        .thenAnswer(invocation -> Optional.of(payloads.getLast()));
+    return payloads;
   }
 
   @Test

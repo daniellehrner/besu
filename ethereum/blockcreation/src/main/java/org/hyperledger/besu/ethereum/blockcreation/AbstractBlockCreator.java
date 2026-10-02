@@ -93,6 +93,7 @@ public abstract class AbstractBlockCreator implements AsyncBlockCreator {
   protected final BlockHeaderFunctions blockHeaderFunctions;
   private final EthScheduler ethScheduler;
   private final AtomicBoolean isCancelled = new AtomicBoolean(false);
+  private final AtomicBoolean isAborted = new AtomicBoolean(false);
   private volatile @Nullable BlockTransactionSelector selector;
 
   protected AbstractBlockCreator(
@@ -267,6 +268,9 @@ public abstract class AbstractBlockCreator implements AsyncBlockCreator {
               selectorsStateManager,
               parentHeader,
               blockAccessListBuilder);
+      if (isAborted.get()) {
+        throw new CancellationException("Block creation aborted");
+      }
       transactionResults.logSelectionStats();
       timings.register("txsSelection");
       timings.registerValue(
@@ -474,6 +478,12 @@ public abstract class AbstractBlockCreator implements AsyncBlockCreator {
     if (currSelector != null) {
       currSelector.cancel();
     }
+  }
+
+  /** Stops the block creation without finishing the block being built. */
+  public void abort() {
+    isAborted.set(true);
+    cancel();
   }
 
   @Override
