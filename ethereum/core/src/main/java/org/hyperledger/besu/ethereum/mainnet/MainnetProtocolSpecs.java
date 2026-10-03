@@ -1439,9 +1439,11 @@ public abstract class MainnetProtocolSpecs {
         final TransactionProcessingResult result,
         final long gasUsed) {
       return new TransactionReceipt(
+          TransactionType.FRONTIER,
           result.isSuccessful() ? 1 : 0,
           gasUsed,
           result.getLogs(),
+          result.getLogsBloom(),
           revertReasonEnabled ? result.getRevertReason() : Optional.empty());
     }
   }
@@ -1462,6 +1464,7 @@ public abstract class MainnetProtocolSpecs {
           result.isSuccessful() ? 1 : 0,
           gasUsed,
           result.getLogs(),
+          result.getLogsBloom(),
           revertReasonEnabled ? result.getRevertReason() : Optional.empty());
     }
   }
