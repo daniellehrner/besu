@@ -341,7 +341,8 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         // Log files are not reused: RocksDB refuses writes that skip the log while it reuses them,
         // and the download of the chain history writes that way so that it writes to disk once.
         // The limit on the total size of the log still keeps the space it takes in check.
-        .setRecycleLogFileNum(0);
+        .setRecycleLogFileNum(0)
+        .setMaxBackgroundJobs(configuration.getMaxBackgroundJobs());
   }
 
   /**

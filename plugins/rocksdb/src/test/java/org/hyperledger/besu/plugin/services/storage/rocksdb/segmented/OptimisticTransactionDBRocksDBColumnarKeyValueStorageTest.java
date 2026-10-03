@@ -24,14 +24,18 @@ import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTran
 import org.hyperledger.besu.plugin.services.storage.rocksdb.RocksDBMetricsFactory;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBConfigurationBuilder;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
@@ -105,6 +109,45 @@ public class OptimisticTransactionDBRocksDBColumnarKeyValueStorageTest
     } finally {
       snapshot.close();
       store.close();
+    }
+  }
+
+  @Test
+  public void shouldRunAsManyBackgroundJobsAsConfigured(@TempDir final Path path) throws Exception {
+    try (OptimisticRocksDBColumnarKeyValueStorage store =
+        new OptimisticRocksDBColumnarKeyValueStorage(
+            new RocksDBConfigurationBuilder().databaseDir(path).maxBackgroundJobs(8).build(),
+            Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO),
+            List.of(),
+            new NoOpMetricsSystem(),
+            RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS)) {
+      assertThat(writtenOptions(path)).contains("max_background_jobs=8");
+    }
+  }
+
+  @Test
+  public void shouldKeepTheBackgroundJobsOfRocksDBByDefault(@TempDir final Path path)
+      throws Exception {
+    try (OptimisticRocksDBColumnarKeyValueStorage store =
+        new OptimisticRocksDBColumnarKeyValueStorage(
+            new RocksDBConfigurationBuilder().databaseDir(path).build(),
+            Arrays.asList(TestSegment.DEFAULT, TestSegment.FOO),
+            List.of(),
+            new NoOpMetricsSystem(),
+            RocksDBMetricsFactory.PUBLIC_ROCKS_DB_METRICS)) {
+      assertThat(writtenOptions(path)).contains("max_background_jobs=2");
+    }
+  }
+
+  /** The options RocksDB wrote out when it opened the database. */
+  private static List<String> writtenOptions(final Path databaseDir) throws IOException {
+    try (Stream<Path> files = Files.list(databaseDir)) {
+      final Path optionsFile =
+          files
+              .filter(file -> file.getFileName().toString().startsWith("OPTIONS-"))
+              .max(Comparator.naturalOrder())
+              .orElseThrow();
+      return Files.readAllLines(optionsFile).stream().map(String::strip).toList();
     }
   }
 }

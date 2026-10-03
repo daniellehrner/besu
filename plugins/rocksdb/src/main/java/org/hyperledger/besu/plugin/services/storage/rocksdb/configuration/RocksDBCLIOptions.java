@@ -55,6 +55,12 @@ public class RocksDBCLIOptions {
   /** The default value indicating whether the startup table cache warm-up is enabled. */
   public static final boolean DEFAULT_IS_TABLE_CACHE_WARMUP_ENABLED = true;
 
+  /** The default number of flushes and compactions RocksDB runs at the same time, its own. */
+  public static final int DEFAULT_MAX_BACKGROUND_JOBS = 2;
+
+  /** The constant MAX_BACKGROUND_JOBS_FLAG. */
+  public static final String MAX_BACKGROUND_JOBS_FLAG = "--Xplugin-rocksdb-max-background-jobs";
+
   /** The constant MAX_OPEN_FILES_FLAG. */
   public static final String MAX_OPEN_FILES_FLAG = "--Xplugin-rocksdb-max-open-files";
 
@@ -129,6 +135,15 @@ public class RocksDBCLIOptions {
           "At startup, open the table readers of all live SST files to populate the RocksDB table cache with their footers, indexes and filters (default: ${DEFAULT-VALUE})")
   boolean isTableCacheWarmupEnabled = DEFAULT_IS_TABLE_CACHE_WARMUP_ENABLED;
 
+  /** How many flushes and compactions run at the same time. */
+  @CommandLine.Option(
+      names = {MAX_BACKGROUND_JOBS_FLAG},
+      hidden = true,
+      paramLabel = "<INTEGER>",
+      description =
+          "How many flushes and compactions RocksDB runs at the same time, for all column families together. A quarter of them, at least one, are flushes (default: ${DEFAULT-VALUE})")
+  int maxBackgroundJobs = DEFAULT_MAX_BACKGROUND_JOBS;
+
   /** The Blob blockchain garbage collection enabled. */
   @CommandLine.Option(
       names = {BLOB_BLOCKCHAIN_GARBAGE_COLLECTION_ENABLED},
@@ -190,6 +205,7 @@ public class RocksDBCLIOptions {
     options.backgroundThreadCount = config.getBackgroundThreadCount();
     options.isHighSpec = config.isHighSpec();
     options.isTableCacheWarmupEnabled = config.isTableCacheWarmupEnabled();
+    options.maxBackgroundJobs = config.getMaxBackgroundJobs();
     options.isBlockchainGarbageCollectionEnabled = config.isBlockchainGarbageCollectionEnabled();
     options.blobGarbageCollectionAgeCutoff = config.getBlobGarbageCollectionAgeCutoff();
     options.blobGarbageCollectionForceThreshold = config.getBlobGarbageCollectionForceThreshold();
@@ -210,7 +226,8 @@ public class RocksDBCLIOptions {
         isTableCacheWarmupEnabled,
         isBlockchainGarbageCollectionEnabled,
         blobGarbageCollectionAgeCutoff,
-        blobGarbageCollectionForceThreshold);
+        blobGarbageCollectionForceThreshold,
+        maxBackgroundJobs);
   }
 
   private int resolveMaxOpenFiles() {
@@ -292,6 +309,7 @@ public class RocksDBCLIOptions {
         .add("backgroundThreadCount", backgroundThreadCount)
         .add("isHighSpec", isHighSpec)
         .add("isTableCacheWarmupEnabled", isTableCacheWarmupEnabled)
+        .add("maxBackgroundJobs", maxBackgroundJobs)
         .add("isBlockchainGarbageCollectionEnabled", isBlockchainGarbageCollectionEnabled)
         .add("blobGarbageCollectionAgeCutoff", blobGarbageCollectionAgeCutoff)
         .add("blobGarbageCollectionForceThreshold", blobGarbageCollectionForceThreshold)

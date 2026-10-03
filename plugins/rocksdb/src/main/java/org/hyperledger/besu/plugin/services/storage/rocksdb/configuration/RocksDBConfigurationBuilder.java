@@ -18,6 +18,7 @@ import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_CACHE_CAPACITY;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_IS_HIGH_SPEC;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_IS_TABLE_CACHE_WARMUP_ENABLED;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_BACKGROUND_JOBS;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.RocksDBCLIOptions.DEFAULT_MAX_OPEN_FILES;
 
 import java.nio.file.Path;
@@ -36,6 +37,7 @@ public class RocksDBConfigurationBuilder {
   private boolean isBlockchainGarbageCollectionEnabled = false;
   private Optional<Double> blobGarbageCollectionAgeCutoff = Optional.empty();
   private Optional<Double> blobGarbageCollectionForceThreshold = Optional.empty();
+  private int maxBackgroundJobs = DEFAULT_MAX_BACKGROUND_JOBS;
 
   /** Instantiates a new Rocks db configuration builder. */
   public RocksDBConfigurationBuilder() {}
@@ -155,6 +157,17 @@ public class RocksDBConfigurationBuilder {
   }
 
   /**
+   * Sets how many flushes and compactions run at the same time.
+   *
+   * @param maxBackgroundJobs how many flushes and compactions run at the same time
+   * @return the RocksDB configuration builder
+   */
+  public RocksDBConfigurationBuilder maxBackgroundJobs(final int maxBackgroundJobs) {
+    this.maxBackgroundJobs = maxBackgroundJobs;
+    return this;
+  }
+
+  /**
    * From.
    *
    * @param configuration the configuration
@@ -169,8 +182,8 @@ public class RocksDBConfigurationBuilder {
         .isTableCacheWarmupEnabled(configuration.isTableCacheWarmupEnabled())
         .isBlockchainGarbageCollectionEnabled(configuration.isBlockchainGarbageCollectionEnabled())
         .blobGarbageCollectionAgeCutoff(configuration.getBlobGarbageCollectionAgeCutoff())
-        .blobGarbageCollectionForceThreshold(
-            configuration.getBlobGarbageCollectionForceThreshold());
+        .blobGarbageCollectionForceThreshold(configuration.getBlobGarbageCollectionForceThreshold())
+        .maxBackgroundJobs(configuration.getMaxBackgroundJobs());
   }
 
   /**
@@ -189,6 +202,7 @@ public class RocksDBConfigurationBuilder {
         isTableCacheWarmupEnabled,
         isBlockchainGarbageCollectionEnabled,
         blobGarbageCollectionAgeCutoff,
-        blobGarbageCollectionForceThreshold);
+        blobGarbageCollectionForceThreshold,
+        maxBackgroundJobs);
   }
 }
