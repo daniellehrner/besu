@@ -64,7 +64,7 @@ public final class BlockAccessListAccountLookup {
 
   public Optional<Hash> getAddressHash(final Address address) {
     final AccountEntry entry = accountEntries.get(address);
-    return entry == null ? Optional.empty() : Optional.of(entry.addressHash);
+    return entry == null ? Optional.empty() : Optional.of(entry.addressHash());
   }
 
   Optional<BlockAccessList.SlotChanges> getSlotChanges(
@@ -75,13 +75,22 @@ public final class BlockAccessListAccountLookup {
 
   private static final class AccountEntry {
     private final BlockAccessList.AccountChanges accountChanges;
-    private final Hash addressHash;
+    // hashed on first use, so building the lookup costs the importing thread no hashing
+    private Hash addressHash;
     private final Map<StorageSlotKey, BlockAccessList.SlotChanges> storageBySlot;
 
     private AccountEntry(final BlockAccessList.AccountChanges accountChanges) {
       this.accountChanges = accountChanges;
-      this.addressHash = accountChanges.address().addressHash();
       this.storageBySlot = buildStorageBySlot(accountChanges.storageChanges());
+    }
+
+    private Hash addressHash() {
+      Hash hash = addressHash;
+      if (hash == null) {
+        hash = accountChanges.address().addressHash();
+        addressHash = hash;
+      }
+      return hash;
     }
 
     private static Map<StorageSlotKey, BlockAccessList.SlotChanges> buildStorageBySlot(

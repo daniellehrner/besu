@@ -47,6 +47,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
@@ -55,7 +56,7 @@ public final class BalStateRootCommitter implements StateRootCommitter {
 
   private final ProtocolContext protocolContext;
   private final BlockHeader blockHeader;
-  private final BlockAccessListAccountLookup accountLookup;
+  private final Supplier<BlockAccessListAccountLookup> accountLookup;
   private final boolean storageFrozen;
 
   private final AtomicBoolean cancelled = new AtomicBoolean(false);
@@ -67,10 +68,40 @@ public final class BalStateRootCommitter implements StateRootCommitter {
       final BlockHeader blockHeader,
       final BlockAccessListAccountLookup accountLookup,
       final boolean storageFrozen) {
+    this(protocolContext, blockHeader, () -> accountLookup, storageFrozen);
+  }
+
+  private BalStateRootCommitter(
+      final ProtocolContext protocolContext,
+      final BlockHeader blockHeader,
+      final Supplier<BlockAccessListAccountLookup> accountLookup,
+      final boolean storageFrozen) {
     this.protocolContext = protocolContext;
     this.blockHeader = blockHeader;
     this.accountLookup = accountLookup;
     this.storageFrozen = storageFrozen;
+  }
+
+  /**
+   * A committer that builds its lookup over the access list on the background thread, which the
+   * block's transactions would otherwise wait for before they are handed out.
+   *
+   * @param protocolContext the protocol context
+   * @param blockHeader the header of the block being processed
+   * @param blockAccessList the block's access list
+   * @param storageFrozen whether the computed writes are discarded
+   * @return the committer, not yet started
+   */
+  public static BalStateRootCommitter forAccessList(
+      final ProtocolContext protocolContext,
+      final BlockHeader blockHeader,
+      final BlockAccessList blockAccessList,
+      final boolean storageFrozen) {
+    return new BalStateRootCommitter(
+        protocolContext,
+        blockHeader,
+        () -> BlockAccessListAccountLookup.of(blockAccessList),
+        storageFrozen);
   }
 
   /**
@@ -85,9 +116,10 @@ public final class BalStateRootCommitter implements StateRootCommitter {
     this.backgroundComputation =
         CompletableFuture.supplyAsync(
             () -> {
+              final BlockAccessListAccountLookup lookup = accountLookup.get();
               try (BonsaiWorldState parent =
-                  openParentWorldState(protocolContext, blockHeader, accountLookup)) {
-                return runComputation(parent, accountLookup, storageFrozen);
+                  openParentWorldState(protocolContext, blockHeader, lookup)) {
+                return runComputation(parent, lookup, storageFrozen);
               }
             },
             BlockProcessingExecutors.stateRootExecutor());
