@@ -73,7 +73,8 @@ public final class BlockAccessListReplay {
             final Optional<BlockAccessList> blockAccessList,
             final BlockHeader blockHeader,
             final int nbTransactions) {
-          SUPPLIED_HASH.set(blockAccessList.map(BodyValidation::balHash).orElse(null));
+          SUPPLIED_HASH.set(
+              blockAccessList.map(MainnetBlockAccessListValidator::suppliedBalHash).orElse(null));
           return true;
         }
 

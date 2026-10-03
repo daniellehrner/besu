@@ -149,8 +149,12 @@ public class MainnetBlockAccessListValidator implements BlockAccessListValidator
       return false;
     }
 
-    if (balHashMismatchAgainstHeaderIfAny(bal, headerBalHash, Optional.empty(), false, false)
-        .isPresent()) {
+    final Hash suppliedHash = suppliedBalHash(bal);
+    if (!suppliedHash.equals(headerBalHash.get())) {
+      LOG.warn(
+          "Block access list hash mismatch, calculated: {} header: {}",
+          suppliedHash.getBytes().toHexString(),
+          headerBalHash.get().getBytes().toHexString());
       return false;
     }
 
@@ -160,6 +164,19 @@ public class MainnetBlockAccessListValidator implements BlockAccessListValidator
     }
     LOG.trace("Block access list validated successfully for block {}", blockHeader.getNumber());
     return true;
+  }
+
+  /**
+   * The hash a supplied access list is checked against its header with: the hash of the bytes it
+   * was decoded from, when it was decoded, which spares encoding it again. Those bytes need not be
+   * canonical, but the list the block's execution builds is hashed in its canonical encoding
+   * against the same header, so a block whose supplied encoding is not canonical still fails.
+   *
+   * @param bal the supplied access list
+   * @return the hash to compare with the header's
+   */
+  public static Hash suppliedBalHash(final BlockAccessList bal) {
+    return bal.rawRlp().map(BodyValidation::balHash).orElseGet(() -> BodyValidation.balHash(bal));
   }
 
   private void logBalHashMismatch(
