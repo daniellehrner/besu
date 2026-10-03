@@ -196,7 +196,9 @@ public final class BalStateRootCommitter implements StateRootCommitter {
     final BonsaiWorldState worldState =
         (BonsaiWorldState)
             protocolContext.getWorldStateArchive().getWorldState(queryParams).orElseThrow();
-    worldState.disableCacheMerkleTrieLoader();
+    // The block's own world state preloads nothing on this path, so these reads are what keeps
+    // the node cache warm for the next root computation over the same paths.
+    worldState.cacheTrieNodeReads();
     return worldState;
   }
 

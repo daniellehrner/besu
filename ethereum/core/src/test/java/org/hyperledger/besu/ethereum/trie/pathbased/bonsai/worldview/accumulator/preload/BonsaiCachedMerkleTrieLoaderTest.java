@@ -253,4 +253,97 @@ class BonsaiCachedMerkleTrieLoaderTest {
         });
     assertThat(originalSlots).isNotEmpty().isEqualTo(cachedSlots);
   }
+
+  @Test
+  void accountNodesReadThroughTheCachingViewWarmTheSharedCache() {
+    final BonsaiCachedMerkleTrieLoader cachingReads = merkleTrieLoader.cachingReads();
+    final Hash hashAccountZero = accounts.get(0).addressHash();
+    new StoredMerklePatriciaTrie<>(
+            (Bytes location, Bytes32 hash) ->
+                cachingReads.getAccountStateTrieNode(
+                    inMemoryWorldState, location, Bytes32.wrap(hash)),
+            trie.getRootHash(),
+            Function.identity(),
+            Function.identity())
+        .get(hashAccountZero.getBytes());
+
+    final StoredMerklePatriciaTrie<Bytes, Bytes> cachedTrie =
+        new StoredMerklePatriciaTrie<>(
+            (Bytes location, Bytes32 hash) ->
+                merkleTrieLoader.getAccountStateTrieNode(
+                    emptyStorage(), location, Bytes32.wrap(hash)),
+            trie.getRootHash(),
+            Function.identity(),
+            Function.identity());
+    assertThat(cachedTrie.get(hashAccountZero.getBytes()))
+        .isPresent()
+        .isEqualTo(trie.get(hashAccountZero.getBytes()));
+  }
+
+  @Test
+  void storageNodesReadThroughTheCachingViewWarmTheSharedCache() {
+    final BonsaiCachedMerkleTrieLoader cachingReads = merkleTrieLoader.cachingReads();
+    final Hash hashAccountZero = accounts.get(0).addressHash();
+    final Bytes32 storageRoot =
+        Bytes32.wrap(
+            PmtStateTrieAccountValue.readFrom(
+                    RLP.input(trie.get(hashAccountZero.getBytes()).orElseThrow()))
+                .getStorageRoot()
+                .getBytes());
+    final List<Bytes> originalSlots = new ArrayList<>();
+    new StoredMerklePatriciaTrie<>(
+            (Bytes location, Bytes32 hash) ->
+                cachingReads.getAccountStorageTrieNode(
+                    inMemoryWorldState, hashAccountZero, location, Bytes32.wrap(hash)),
+            storageRoot,
+            Function.identity(),
+            Function.identity())
+        .visitLeafs(
+            (keyHash, node) -> {
+              originalSlots.add(node.getEncodedBytes());
+              return TrieIterator.State.CONTINUE;
+            });
+
+    final BonsaiWorldStateKeyValueStorage emptyStorage = emptyStorage();
+    final List<Bytes> cachedSlots = new ArrayList<>();
+    new StoredMerklePatriciaTrie<>(
+            (Bytes location, Bytes32 hash) ->
+                merkleTrieLoader.getAccountStorageTrieNode(
+                    emptyStorage, hashAccountZero, location, Bytes32.wrap(hash)),
+            storageRoot,
+            Function.identity(),
+            Function.identity())
+        .visitLeafs(
+            (keyHash, node) -> {
+              cachedSlots.add(node.getEncodedBytes());
+              return TrieIterator.State.CONTINUE;
+            });
+    assertThat(originalSlots).isNotEmpty().isEqualTo(cachedSlots);
+  }
+
+  @Test
+  void theCachingViewRequestsNoPreloads() {
+    final BonsaiCachedMerkleTrieLoader cachingReads = merkleTrieLoader.cachingReads();
+    for (int i = 0; i < BonsaiCachedMerkleTrieLoader.BATCH_SIZE; i++) {
+      cachingReads.preLoadAccount(
+          inMemoryWorldState, Hash.wrap(trie.getRootHash()), accounts.get(i % accounts.size()));
+    }
+    final BonsaiWorldStateKeyValueStorage emptyStorage = emptyStorage();
+    await()
+        .pollDelay(Duration.ofMillis(200))
+        .atMost(Duration.ofSeconds(10))
+        .untilAsserted(
+            () ->
+                assertThat(
+                        merkleTrieLoader.getAccountStateTrieNode(
+                            emptyStorage, Bytes.EMPTY, trie.getRootHash()))
+                    .isEmpty());
+  }
+
+  private static BonsaiWorldStateKeyValueStorage emptyStorage() {
+    return new BonsaiWorldStateKeyValueStorage(
+        new InMemoryKeyValueStorageProvider(),
+        new NoOpMetricsSystem(),
+        DataStorageConfiguration.DEFAULT_BONSAI_CONFIG);
+  }
 }
