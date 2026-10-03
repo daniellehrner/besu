@@ -28,6 +28,7 @@ import org.hyperledger.besu.ethereum.mainnet.BlockBodyValidator;
 import org.hyperledger.besu.ethereum.mainnet.BlockHeaderValidator;
 import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.BlockProcessor;
+import org.hyperledger.besu.ethereum.mainnet.BodyValidation;
 import org.hyperledger.besu.ethereum.mainnet.BodyValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
@@ -43,6 +44,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -254,6 +256,11 @@ public class MainnetBlockValidator implements BlockValidator {
             result.getYield().map(BlockProcessingOutputs::getAccessedAncestors).orElse(Map.of());
         long cumulativeBlockGasUsed =
             result.getYield().map(BlockProcessingOutputs::getCumulativeBlockGasUsed).orElse(0L);
+        final Supplier<Hash> receiptsRoot =
+            result
+                .getYield()
+                .map(BlockProcessingOutputs::getReceiptsRoot)
+                .orElseGet(() -> () -> BodyValidation.receiptsRoot(receipts));
         final boolean bodyValid =
             BlockImportTimings.time(
                 BlockImportTimings.Phase.BODY_VALIDATION,
@@ -262,6 +269,7 @@ public class MainnetBlockValidator implements BlockValidator {
                         context,
                         block,
                         receipts,
+                        receiptsRoot,
                         worldState.rootHash(),
                         ommerValidationMode,
                         BodyValidationMode.FULL,
@@ -281,7 +289,8 @@ public class MainnetBlockValidator implements BlockValidator {
                     maybeRequests,
                     blockAccessListToStore(block, blockAccessList, processedBlockAccessList),
                     cumulativeBlockGasUsed,
-                    accessedAncestors)),
+                    accessedAncestors,
+                    receiptsRoot)),
             result.getNbParallelizedTransactions(),
             result.getParallelizedGasUsed());
       }
