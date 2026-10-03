@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.trie.patricia;
 import static org.hyperledger.besu.ethereum.trie.CompactEncoding.bytesToPath;
 import static org.hyperledger.besu.ethereum.trie.patricia.DefaultNodeFactory.NB_CHILD;
 
+import org.hyperledger.besu.ethereum.trie.BytesConcatenation;
 import org.hyperledger.besu.ethereum.trie.CommitVisitor;
 import org.hyperledger.besu.ethereum.trie.CompactEncoding;
 import org.hyperledger.besu.ethereum.trie.Node;
@@ -356,7 +357,7 @@ public class ParallelStoredMerklePatriciaTrie<K extends Bytes, V>
       for (final Map.Entry<Byte, List<UpdateEntry<V>>> entry : largeGroups.entrySet()) {
         final byte nibble = entry.getKey();
         final List<UpdateEntry<V>> childUpdates = entry.getValue();
-        final Bytes childLocation = Bytes.concatenate(location, Bytes.of(nibble));
+        final Bytes childLocation = BytesConcatenation.append(location, nibble);
 
         ForkJoinTask<Void> task =
             ForkJoinTask.adapt(
@@ -378,7 +379,7 @@ public class ParallelStoredMerklePatriciaTrie<K extends Bytes, V>
     for (final Map.Entry<Byte, List<UpdateEntry<V>>> entry : smallGroups.entrySet()) {
       final byte nibble = entry.getKey();
       final List<UpdateEntry<V>> childUpdates = entry.getValue();
-      final Bytes childLocation = Bytes.concatenate(location, Bytes.of(nibble));
+      final Bytes childLocation = BytesConcatenation.append(location, nibble);
 
       final Node<V> currentChild = branchWrapper.getPendingChildren().get(nibble);
       final Node<V> updatedChild =
@@ -422,7 +423,7 @@ public class ParallelStoredMerklePatriciaTrie<K extends Bytes, V>
 
     // No divergence: all updates continue past extension
     if (divergenceIndex == extensionPath.size()) {
-      final Bytes newLocation = Bytes.concatenate(location, extensionPath);
+      final Bytes newLocation = BytesConcatenation.concatenate(location, extensionPath);
       final Node<V> newChild =
           processNode(
               extensionNode.getChild(),

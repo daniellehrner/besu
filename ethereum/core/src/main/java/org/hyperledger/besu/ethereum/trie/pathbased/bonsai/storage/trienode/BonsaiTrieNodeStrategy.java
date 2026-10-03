@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.trienode;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.trie.BytesConcatenation;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -56,7 +57,9 @@ public class BonsaiTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes32 nodeHash,
       final SegmentedKeyValueStorage storage) {
     return storage
-        .get(trieSegment, Bytes.concatenate(accountHash.getBytes(), location).toArrayUnsafe())
+        .get(
+            trieSegment,
+            BytesConcatenation.concatenate(accountHash.getBytes(), location).toArrayUnsafe())
         .map(Bytes::wrap);
   }
 
@@ -80,7 +83,7 @@ public class BonsaiTrieNodeStrategy implements TrieNodeStrategy {
       final Bytes node) {
     transaction.put(
         trieSegment,
-        Bytes.concatenate(accountHash.getBytes(), location).toArrayUnsafe(),
+        BytesConcatenation.concatenate(accountHash.getBytes(), location).toArrayUnsafe(),
         node.toArrayUnsafe());
   }
 
