@@ -18,11 +18,13 @@ import org.hyperledger.besu.collections.undo.Undoable;
 import org.hyperledger.besu.crypto.SecureRandomProvider;
 import org.hyperledger.besu.datatypes.Address;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.nio.ByteOrder;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.function.BiConsumer;
 
-import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 
 /**
@@ -46,11 +48,23 @@ public final class WarmStorageTable implements Undoable {
     }
   }
 
+  private static final VarHandle LONG_BE =
+      MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
+  private static final VarHandle INT_BE =
+      MethodHandles.byteArrayViewVarHandle(int[].class, ByteOrder.BIG_ENDIAN);
+
+  // a key as words: the slot's four, then the address's two and a half
+  private static final int WORDS = 7;
+
   private long[] hashes;
+  // compared instead of the keys themselves, whose equals reads them a byte at a time
+  private long[] words;
   private Address[] addresses;
   private Bytes32[] slots;
   private int mask;
   private int size;
+  // the key being looked up; a table belongs to one transaction, so one thread
+  private final long[] probe = new long[WORDS];
 
   private long[] logLevels;
   private Address[] logAddresses;
@@ -67,6 +81,7 @@ public final class WarmStorageTable implements Undoable {
 
   private void allocate(final int capacity) {
     hashes = new long[capacity];
+    words = new long[capacity * WORDS];
     addresses = new Address[capacity];
     slots = new Bytes32[capacity];
     mask = capacity - 1;
@@ -80,19 +95,21 @@ public final class WarmStorageTable implements Undoable {
    * @return true if the slot was already warm
    */
   public boolean warmUp(final Address address, final Bytes32 slot) {
-    final long hash = hash(address, slot);
+    final long[] key = load(address, slot);
+    final long hash = hash(key);
     int index = (int) hash & mask;
     while (true) {
       final long candidate = hashes[index];
       if (candidate == 0L) {
         break;
       }
-      if (candidate == hash && slots[index].equals(slot) && addresses[index].equals(address)) {
+      if (candidate == hash && holds(index, key)) {
         return true;
       }
       index = (index + 1) & mask;
     }
     hashes[index] = hash;
+    System.arraycopy(key, 0, words, index * WORDS, WORDS);
     addresses[index] = address;
     slots[index] = slot;
     size++;
@@ -111,7 +128,8 @@ public final class WarmStorageTable implements Undoable {
    * @return true if the slot is warm
    */
   public boolean contains(final Address address, final Bytes32 slot) {
-    return find(address, slot, hash(address, slot)) >= 0;
+    final long[] key = load(address, slot);
+    return find(key, hash(key)) >= 0;
   }
 
   /**
@@ -158,7 +176,8 @@ public final class WarmStorageTable implements Undoable {
       final Bytes32 slot = logSlots[logSize];
       logAddresses[logSize] = null;
       logSlots[logSize] = null;
-      remove(find(address, slot, hash(address, slot)));
+      final long[] key = load(address, slot);
+      remove(find(key, hash(key)));
     }
   }
 
@@ -175,18 +194,43 @@ public final class WarmStorageTable implements Undoable {
     logSize++;
   }
 
-  private int find(final Address address, final Bytes32 slot, final long hash) {
+  private int find(final long[] key, final long hash) {
     int index = (int) hash & mask;
     while (true) {
       final long candidate = hashes[index];
       if (candidate == 0L) {
         return -1;
       }
-      if (candidate == hash && slots[index].equals(slot) && addresses[index].equals(address)) {
+      if (candidate == hash && holds(index, key)) {
         return index;
       }
       index = (index + 1) & mask;
     }
+  }
+
+  private boolean holds(final int index, final long[] key) {
+    final int base = index * WORDS;
+    return words[base] == key[0]
+        && words[base + 1] == key[1]
+        && words[base + 2] == key[2]
+        && words[base + 3] == key[3]
+        && words[base + 4] == key[4]
+        && words[base + 5] == key[5]
+        && words[base + 6] == key[6];
+  }
+
+  private long[] load(final Address address, final Bytes32 slot) {
+    final byte[] slotBytes = slot.toArrayUnsafe();
+    final byte[] addressBytes = address.getBytes().toArrayUnsafe();
+    final long[] key = probe;
+    key[0] = (long) LONG_BE.get(slotBytes, 0);
+    key[1] = (long) LONG_BE.get(slotBytes, 8);
+    key[2] = (long) LONG_BE.get(slotBytes, 16);
+    key[3] = (long) LONG_BE.get(slotBytes, 24);
+    key[4] = (long) LONG_BE.get(addressBytes, 0);
+    key[5] = (long) LONG_BE.get(addressBytes, 8);
+    key[6] = (int) INT_BE.get(addressBytes, 16) & 0xffffffffL;
+    return key;
   }
 
   /**
@@ -203,6 +247,7 @@ public final class WarmStorageTable implements Undoable {
           hole <= next ? (home <= hole || home > next) : (home <= hole && home > next);
       if (movable) {
         hashes[hole] = hashes[next];
+        System.arraycopy(words, next * WORDS, words, hole * WORDS, WORDS);
         addresses[hole] = addresses[next];
         slots[hole] = slots[next];
         hole = next;
@@ -217,6 +262,7 @@ public final class WarmStorageTable implements Undoable {
 
   private void grow() {
     final long[] oldHashes = hashes;
+    final long[] oldWords = words;
     final Address[] oldAddresses = addresses;
     final Bytes32[] oldSlots = slots;
     allocate(oldHashes.length * 2);
@@ -228,14 +274,15 @@ public final class WarmStorageTable implements Undoable {
           index = (index + 1) & mask;
         }
         hashes[index] = hash;
+        System.arraycopy(oldWords, i * WORDS, words, index * WORDS, WORDS);
         addresses[index] = oldAddresses[i];
         slots[index] = oldSlots[i];
       }
     }
   }
 
-  private static long hash(final Address address, final Bytes32 slot) {
-    final long hash = multiplyMix(address, slot);
+  private static long hash(final long[] key) {
+    final long hash = multiplyMix(key);
     // zero marks an empty cell
     return hash == 0L ? 1L : hash;
   }
@@ -247,20 +294,15 @@ public final class WarmStorageTable implements Undoable {
    * top bits of two lanes collide regardless of the secret, which is why the lanes are paired and
    * the high half is taken.
    */
-  private static long multiplyMix(final Address address, final Bytes32 slot) {
-    final Bytes addressBytes = address.getBytes();
+  private static long multiplyMix(final long[] key) {
     long sum = MULTIPLIERS[14];
-    sum += (MULTIPLIERS[0] + lane(slot, 0)) * (MULTIPLIERS[1] + lane(slot, 4));
-    sum += (MULTIPLIERS[2] + lane(slot, 8)) * (MULTIPLIERS[3] + lane(slot, 12));
-    sum += (MULTIPLIERS[4] + lane(slot, 16)) * (MULTIPLIERS[5] + lane(slot, 20));
-    sum += (MULTIPLIERS[6] + lane(slot, 24)) * (MULTIPLIERS[7] + lane(slot, 28));
-    sum += (MULTIPLIERS[8] + lane(addressBytes, 0)) * (MULTIPLIERS[9] + lane(addressBytes, 4));
-    sum += (MULTIPLIERS[10] + lane(addressBytes, 8)) * (MULTIPLIERS[11] + lane(addressBytes, 12));
-    sum += (MULTIPLIERS[12] + lane(addressBytes, 16)) * MULTIPLIERS[13];
+    sum += (MULTIPLIERS[0] + (key[0] >>> 32)) * (MULTIPLIERS[1] + (key[0] & 0xffffffffL));
+    sum += (MULTIPLIERS[2] + (key[1] >>> 32)) * (MULTIPLIERS[3] + (key[1] & 0xffffffffL));
+    sum += (MULTIPLIERS[4] + (key[2] >>> 32)) * (MULTIPLIERS[5] + (key[2] & 0xffffffffL));
+    sum += (MULTIPLIERS[6] + (key[3] >>> 32)) * (MULTIPLIERS[7] + (key[3] & 0xffffffffL));
+    sum += (MULTIPLIERS[8] + (key[4] >>> 32)) * (MULTIPLIERS[9] + (key[4] & 0xffffffffL));
+    sum += (MULTIPLIERS[10] + (key[5] >>> 32)) * (MULTIPLIERS[11] + (key[5] & 0xffffffffL));
+    sum += (MULTIPLIERS[12] + key[6]) * MULTIPLIERS[13];
     return sum >>> 32;
-  }
-
-  private static long lane(final Bytes bytes, final int offset) {
-    return bytes.getInt(offset) & 0xffffffffL;
   }
 }
