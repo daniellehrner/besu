@@ -46,6 +46,11 @@ import org.slf4j.LoggerFactory;
  * waiting for that this step stays idle for as long again: stored as fast as they arrive, the
  * batches fill the write buffers faster than they are flushed, which stops every write to the
  * storage, and they leave the disk no room for the reads a new block needs.
+ *
+ * <p>The bodies and receipts are written past the write-ahead log of the storage, which would
+ * otherwise write all of them to disk twice. So before the recorded range shrinks over them, the
+ * storage is made to write them out: what a crash loses is never recorded as stored, and is
+ * downloaded again.
  */
 public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceipts>> {
   private static final Logger LOG = LoggerFactory.getLogger(StoreMissingBodiesStep.class);
@@ -141,6 +146,7 @@ public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceip
     }
 
     if (nextBlockNumber > lastBlock) {
+      blockchain.unsafePersistSyncBodiesAndReceipts();
       blockchain.unsafeSetMissingBlockBodies(Optional.empty());
       LOG.info(
           "Chain history is complete: stored the bodies and receipts of the blocks up to {}",
@@ -150,6 +156,7 @@ public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceip
     final long now = clock.millis();
     if (now - lastRecordMillis >= RECORD_INTERVAL_MILLIS) {
       lastRecordMillis = now;
+      blockchain.unsafePersistSyncBodiesAndReceipts();
       blockchain.unsafeSetMissingBlockBodies(
           Optional.of(new MissingBlockBodies(nextBlockNumber, lastBlock)));
     }

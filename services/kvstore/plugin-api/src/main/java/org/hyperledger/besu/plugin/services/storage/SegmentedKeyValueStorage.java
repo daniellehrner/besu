@@ -132,6 +132,32 @@ public interface SegmentedKeyValueStorage extends Closeable {
   }
 
   /**
+   * Begins a transaction whose writes skip the write-ahead log. They are in the storage once the
+   * transaction is committed, but a crash loses them until {@link #flush} of their segment returns.
+   * For data that can be written again if it is lost, written in amounts that would double what
+   * goes to disk if it went through the log as well.
+   *
+   * <p>Storages without a write-ahead log fall back to {@link #startTransaction()}.
+   *
+   * @return An object representing the transaction.
+   * @throws StorageException the storage exception
+   */
+  default SegmentedKeyValueStorageTransaction startUnloggedTransaction() throws StorageException {
+    return startTransaction();
+  }
+
+  /**
+   * Writes what is in memory for the segment to disk and returns when it is there. After that the
+   * writes of {@link #startUnloggedTransaction()} transactions to the segment survive a crash. The
+   * default implementation does nothing, which is right for storages that keep nothing in memory
+   * only.
+   *
+   * @param segmentIdentifier the segment to flush
+   * @throws StorageException the storage exception
+   */
+  default void flush(final SegmentIdentifier segmentIdentifier) throws StorageException {}
+
+  /**
    * Returns a stream of all keys for the segment.
    *
    * @param segmentIdentifier The segment identifier whose keys we want to stream.

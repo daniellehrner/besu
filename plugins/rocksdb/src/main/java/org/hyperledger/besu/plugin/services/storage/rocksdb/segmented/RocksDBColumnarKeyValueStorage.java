@@ -65,6 +65,7 @@ import org.rocksdb.CompressionType;
 import org.rocksdb.ConfigOptions;
 import org.rocksdb.DBOptions;
 import org.rocksdb.Env;
+import org.rocksdb.FlushOptions;
 import org.rocksdb.LRUCache;
 import org.rocksdb.LiveFileMetaData;
 import org.rocksdb.Options;
@@ -92,9 +93,6 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
 
   /** Max total size of all WAL file, after which a flush is triggered */
   protected static final long WAL_MAX_TOTAL_SIZE = 1_073_741_824L;
-
-  /** Expected size of a single WAL file, to determine how many WAL files to keep around */
-  protected static final long EXPECTED_WAL_FILE_SIZE = 67_108_864L;
 
   /** RocksDb number of log files to keep on disk */
   private static final long NUMBER_OF_LOG_FILES_TO_KEEP = 7;
@@ -340,7 +338,10 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         .setKeepLogFileNum(NUMBER_OF_LOG_FILES_TO_KEEP)
         .setEnv(Env.getDefault().setBackgroundThreads(configuration.getBackgroundThreadCount()))
         .setMaxTotalWalSize(WAL_MAX_TOTAL_SIZE)
-        .setRecycleLogFileNum(WAL_MAX_TOTAL_SIZE / EXPECTED_WAL_FILE_SIZE);
+        // Log files are not reused: RocksDB refuses writes that skip the log while it reuses them,
+        // and the download of the chain history writes that way so that it writes to disk once.
+        // The limit on the total size of the log still keeps the space it takes in check.
+        .setRecycleLogFileNum(0);
   }
 
   /**
@@ -701,6 +702,16 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   public SegmentBulkLoad startBulkLoad(final List<SegmentIdentifier> segmentIdentifiers) {
     throwIfClosed();
     return new RocksDBSegmentBulkLoad(this, segmentIdentifiers);
+  }
+
+  @Override
+  public void flush(final SegmentIdentifier segmentIdentifier) {
+    throwIfClosed();
+    try (FlushOptions flushOptions = new FlushOptions().setWaitForFlush(true)) {
+      getDB().flush(flushOptions, safeColumnHandle(segmentIdentifier));
+    } catch (final RocksDBException e) {
+      throw new StorageException(e);
+    }
   }
 
   /**

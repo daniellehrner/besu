@@ -16,7 +16,10 @@ package org.hyperledger.besu.ethereum.eth.sync.common;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider.createInMemoryBlockchain;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.ethereum.chain.MissingBlockBodies;
@@ -39,6 +42,7 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 public class StoreMissingBodiesStepTest {
 
@@ -137,6 +141,28 @@ public class StoreMissingBodiesStepTest {
     storeStep.accept(batch(4, 9));
 
     assertThat(blockchain.getMissingBlockBodies()).isEmpty();
+  }
+
+  @Test
+  public void shouldPersistWhatIsStoredBeforeRecordingIt() {
+    final MutableBlockchain recordingBlockchain = spy(blockchain);
+    final StoreMissingBodiesStep step = stepOn(recordingBlockchain, millis -> {});
+
+    step.accept(batch(1, 3));
+    // nothing recorded yet, so nothing needs to be on disk
+    verify(recordingBlockchain, never()).unsafePersistSyncBodiesAndReceipts();
+
+    clock.advance(StoreMissingBodiesStep.RECORD_INTERVAL_MILLIS);
+    step.accept(batch(4, 6));
+    step.accept(batch(7, 9));
+
+    final InOrder inOrder = inOrder(recordingBlockchain);
+    inOrder.verify(recordingBlockchain).unsafePersistSyncBodiesAndReceipts();
+    inOrder
+        .verify(recordingBlockchain)
+        .unsafeSetMissingBlockBodies(Optional.of(new MissingBlockBodies(7, 9)));
+    inOrder.verify(recordingBlockchain).unsafePersistSyncBodiesAndReceipts();
+    inOrder.verify(recordingBlockchain).unsafeSetMissingBlockBodies(Optional.empty());
   }
 
   @Test

@@ -203,6 +203,19 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
   }
 
   @Override
+  public Updater unloggedUpdater() {
+    return new Updater(
+        blockchainStorage.startUnloggedTransaction(),
+        variablesStorage.updater(),
+        receiptCompaction);
+  }
+
+  @Override
+  public void flush() {
+    blockchainStorage.flush();
+  }
+
+  @Override
   public boolean isWriteBufferWaitingForFlush() {
     return blockchainStorage.isWriteBufferWaitingForFlush();
   }

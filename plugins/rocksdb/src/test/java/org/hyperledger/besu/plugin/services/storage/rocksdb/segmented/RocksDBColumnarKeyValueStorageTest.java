@@ -34,6 +34,7 @@ import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
+import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
 import org.hyperledger.besu.plugin.services.storage.SegmentBulkLoad;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
@@ -766,6 +767,56 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
       assertThat(labelledCountersHelpArgs.getValue())
           .isEqualTo("Number of RocksDB transactions rolled back.");
     }
+  }
+
+  @Test
+  public void unloggedWritesSurviveACrashOnlyOnceTheirSegmentIsFlushed(@TempDir final Path testPath)
+      throws Exception {
+    final List<SegmentIdentifier> segments = List.of(TestSegment.DEFAULT, TestSegment.FOO);
+    final Path dbPath = testPath.resolve("db");
+    final byte[] logged = bytesFromHexString("01");
+    final byte[] unlogged = bytesFromHexString("02");
+    final byte[] value = bytesFromHexString("0FFF");
+    // the variant of createSegmentedStore that opens the database at the path it is given
+    try (SegmentedKeyValueStorage store =
+        createSegmentedStore(dbPath, new NoOpMetricsSystem(), segments, List.of())) {
+      final SegmentedKeyValueStorageTransaction loggedTx = store.startTransaction();
+      loggedTx.put(TestSegment.FOO, logged, value);
+      loggedTx.commit();
+      final KeyValueStorageTransaction unloggedTx =
+          new SegmentedKeyValueStorageAdapter(TestSegment.FOO, store).startUnloggedTransaction();
+      unloggedTx.put(unlogged, value);
+      unloggedTx.commit();
+      assertThat(store.get(TestSegment.FOO, unlogged)).contains(value);
+
+      // what a crash leaves behind now: the logged write is replayed from the log, the other lost
+      final Path crashed = copyOfTheFiles(dbPath, testPath.resolve("crashed"));
+      try (SegmentedKeyValueStorage recovered =
+          createSegmentedStore(crashed, new NoOpMetricsSystem(), segments, List.of())) {
+        assertThat(recovered.get(TestSegment.FOO, logged)).contains(value);
+        assertThat(recovered.get(TestSegment.FOO, unlogged)).isEmpty();
+      }
+
+      new SegmentedKeyValueStorageAdapter(TestSegment.FOO, store).flush();
+      final Path crashedAfterFlush = copyOfTheFiles(dbPath, testPath.resolve("flushed"));
+      try (SegmentedKeyValueStorage recovered =
+          createSegmentedStore(crashedAfterFlush, new NoOpMetricsSystem(), segments, List.of())) {
+        assertThat(recovered.get(TestSegment.FOO, logged)).contains(value);
+        assertThat(recovered.get(TestSegment.FOO, unlogged)).contains(value);
+      }
+    }
+  }
+
+  private static Path copyOfTheFiles(final Path from, final Path to) throws IOException {
+    Files.createDirectories(to);
+    try (Stream<Path> files = Files.list(from)) {
+      for (final Path file : files.toList()) {
+        if (!file.getFileName().toString().equals("LOCK")) {
+          Files.copy(file, to.resolve(file.getFileName()));
+        }
+      }
+    }
+    return to;
   }
 
   @Test
