@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.mainnet;
 
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.encoding.BlockAccessListDecoder;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
@@ -58,10 +59,12 @@ public final class BlockAccessListReplay {
   private static final boolean BAL_STATE_ROOT =
       !"accumulator".equals(System.getProperty("besu.bench.balReplay.stateRoot", "bal"));
 
+  private static final ThreadLocal<Hash> SUPPLIED_HASH = new ThreadLocal<>();
+
   /**
-   * Accepts a supplied list, since headers before Amsterdam carry no hash to check it against, and
-   * requires the executed list to match it. Both lists are hashed, as an Amsterdam block hashes the
-   * supplied and the executed list against its header, so the validation cost is the same.
+   * Stands in for the header's access list hash, which blocks before Amsterdam lack: the supplied
+   * list is hashed before execution and the executed one after it, as for an Amsterdam block, and
+   * the two hashes must match.
    */
   public static final BlockAccessListValidator VALIDATOR =
       new BlockAccessListValidator() {
@@ -70,6 +73,7 @@ public final class BlockAccessListReplay {
             final Optional<BlockAccessList> blockAccessList,
             final BlockHeader blockHeader,
             final int nbTransactions) {
+          SUPPLIED_HASH.set(blockAccessList.map(BodyValidation::balHash).orElse(null));
           return true;
         }
 
@@ -79,9 +83,9 @@ public final class BlockAccessListReplay {
             final BlockHeader blockHeader,
             final Optional<BlockAccessList> suppliedBlockAccessList,
             final boolean logBalDetailsOnHashMismatch) {
-          if (suppliedBlockAccessList.isEmpty()
-              || BodyValidation.balHash(executedBal)
-                  .equals(BodyValidation.balHash(suppliedBlockAccessList.get()))) {
+          final Hash expected = SUPPLIED_HASH.get();
+          SUPPLIED_HASH.remove();
+          if (expected == null || BodyValidation.balHash(executedBal).equals(expected)) {
             return Optional.empty();
           }
           return Optional.of(

@@ -63,21 +63,27 @@ public class MainnetBlockImporter implements BlockImporter {
           .getYield()
           .ifPresent(
               processingOutputs -> {
-                context
-                    .getBlockchain()
-                    .appendBlock(
-                        block,
-                        processingOutputs.getReceipts(),
-                        processingOutputs.getBlockAccessList());
+                BlockImportTimings.time(
+                    BlockImportTimings.Phase.STORE_BLOCK,
+                    () ->
+                        context
+                            .getBlockchain()
+                            .appendBlock(
+                                block,
+                                processingOutputs.getReceipts(),
+                                processingOutputs.getBlockAccessList()));
 
                 // move the head worldstate if block processing was successful:
-                context
-                    .getWorldStateArchive()
-                    .getWorldState(
-                        WorldStateQueryParams.newBuilder()
-                            .withBlockHeader(block.getHeader())
-                            .withShouldWorldStateUpdateHead(true)
-                            .build());
+                BlockImportTimings.time(
+                    BlockImportTimings.Phase.FORK_CHOICE_WORLD_STATE,
+                    () ->
+                        context
+                            .getWorldStateArchive()
+                            .getWorldState(
+                                WorldStateQueryParams.newBuilder()
+                                    .withBlockHeader(block.getHeader())
+                                    .withShouldWorldStateUpdateHead(true)
+                                    .build()));
               });
     }
 
