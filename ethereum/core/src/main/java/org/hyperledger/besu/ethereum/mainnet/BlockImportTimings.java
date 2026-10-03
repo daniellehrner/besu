@@ -59,6 +59,8 @@ public final class BlockImportTimings {
     PARALLEL_DISPATCH("dispatch"),
     /** Taking over speculative results, including the conflict check and the state merge. */
     TX_REUSE("reuse", Kind.PER_TRANSACTION),
+    /** Waiting inside {@link #TX_REUSE} for a parallel execution that has not finished yet. */
+    TX_WAIT("wait", Kind.PER_TRANSACTION),
     /** Executing transactions on the importing thread. */
     TX_EXECUTE("execute", Kind.PER_TRANSACTION),
     /** Committing a transaction's changes into the block's state. */
