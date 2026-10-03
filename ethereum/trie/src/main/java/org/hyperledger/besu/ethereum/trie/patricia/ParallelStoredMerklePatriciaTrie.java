@@ -29,6 +29,7 @@ import org.hyperledger.besu.ethereum.trie.StoredNode;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -37,7 +38,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -340,15 +340,14 @@ public class ParallelStoredMerklePatriciaTrie<K extends Bytes, V>
     final BranchWrapper branchWrapper = new BranchWrapper(branchNode);
 
     // Partition groups into large (parallel) and small (sequential)
-    final Map<Boolean, Map<Byte, List<UpdateEntry<V>>>> partitionedGroups =
-        groupedUpdates.entrySet().stream()
-            .peek(e -> branchWrapper.loadChild(e.getKey())) // force load lazy nodes
-            .collect(
-                Collectors.partitioningBy(
-                    entry -> entry.getValue().size() > 1 && groupedUpdates.size() > 1,
-                    Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
-    final Map<Byte, List<UpdateEntry<V>>> largeGroups = partitionedGroups.get(true);
-    final Map<Byte, List<UpdateEntry<V>>> smallGroups = partitionedGroups.get(false);
+    final Map<Byte, List<UpdateEntry<V>>> largeGroups = new HashMap<>();
+    final Map<Byte, List<UpdateEntry<V>>> smallGroups = new HashMap<>();
+    final boolean severalGroups = groupedUpdates.size() > 1;
+    for (final Map.Entry<Byte, List<UpdateEntry<V>>> entry : groupedUpdates.entrySet()) {
+      branchWrapper.loadChild(entry.getKey()); // force load lazy nodes
+      (severalGroups && entry.getValue().size() > 1 ? largeGroups : smallGroups)
+          .put(entry.getKey(), entry.getValue());
+    }
 
     final List<ForkJoinTask<Void>> forkJoinTasks = new ArrayList<>();
 
@@ -627,7 +626,11 @@ public class ParallelStoredMerklePatriciaTrie<K extends Bytes, V>
    */
   private Map<Byte, List<UpdateEntry<V>>> groupUpdatesByNibble(
       final List<UpdateEntry<V>> updates, final int depth) {
-    return updates.stream().collect(Collectors.groupingBy(entry -> entry.getNibble(depth)));
+    final Map<Byte, List<UpdateEntry<V>>> groups = new HashMap<>();
+    for (final UpdateEntry<V> entry : updates) {
+      groups.computeIfAbsent(entry.getNibble(depth), nibble -> new ArrayList<>()).add(entry);
+    }
+    return groups;
   }
 
   /**

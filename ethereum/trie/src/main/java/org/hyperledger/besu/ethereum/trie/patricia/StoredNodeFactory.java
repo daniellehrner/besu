@@ -212,10 +212,9 @@ public class StoredNodeFactory<V> implements NodeFactory<V> {
       } else {
         final Bytes32 childHash = nodeRLPs.readBytes32();
         children.add(
-            new StoredNode<>(
-                this,
-                location == null ? null : BytesConcatenation.append(location, (byte) i),
-                childHash));
+            location == null
+                ? new StoredNode<>(this, null, childHash)
+                : new StoredNode<>(this, location, (byte) i, childHash));
       }
     }
 
