@@ -31,6 +31,8 @@ import org.hyperledger.besu.ethereum.core.ProtocolScheduleFixture;
 import org.hyperledger.besu.ethereum.core.SyncBlock;
 import org.hyperledger.besu.ethereum.core.SyncBlockBody;
 import org.hyperledger.besu.ethereum.core.SyncBlockWithReceipts;
+import org.hyperledger.besu.ethereum.core.SyncTransactionReceipt;
+import org.hyperledger.besu.ethereum.rlp.RLP;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -40,6 +42,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
@@ -231,9 +234,73 @@ public class StoreMissingBodiesStepTest {
     assertThat(blockchain.getBlockBody(chain.get(1).getHash())).isPresent();
   }
 
+  @Test
+  public void shouldKeepToTheRateLimit() {
+    final List<Long> pauses = new ArrayList<>();
+    final StoreMissingBodiesStep step =
+        new StoreMissingBodiesStep(
+            blockchain,
+            MISSING,
+            TOTAL_DIFFICULTY,
+            false,
+            1,
+            clock,
+            millis -> {
+              pauses.add(millis);
+              clock.advance(millis);
+            });
+    final List<SyncBlockWithReceipts> first = withLargeReceipts(batch(1, 3));
+    final long firstBytes = bytes(first);
+    assertThat(firstBytes).isGreaterThan(600_000);
+
+    // the first batch goes at once, the next waits until the first is paid for at 1 MB/s
+    step.accept(first);
+    assertThat(pauses).isEmpty();
+    step.accept(withLargeReceipts(batch(4, 6)));
+    assertThat(pauses).containsExactly(firstBytes * 1000 / 1_000_000);
+    assertThat(blockchain.getBlockBody(chain.get(6).getHash())).isPresent();
+  }
+
+  @Test
+  public void shouldNotWaitForTheRateLimitWhenTheTimeIsPaidForAlready() {
+    final List<Long> pauses = new ArrayList<>();
+    final StoreMissingBodiesStep step =
+        new StoreMissingBodiesStep(
+            blockchain, MISSING, TOTAL_DIFFICULTY, false, 1, clock, pauses::add);
+
+    step.accept(withLargeReceipts(batch(1, 3)));
+    clock.advance(60_000);
+    step.accept(withLargeReceipts(batch(4, 6)));
+
+    assertThat(pauses).isEmpty();
+  }
+
+  /** The blocks, each with a receipt of 200 kB, so that storing them takes a while at 1 MB/s. */
+  private static List<SyncBlockWithReceipts> withLargeReceipts(
+      final List<SyncBlockWithReceipts> batch) {
+    return batch.stream()
+        .map(
+            block ->
+                new SyncBlockWithReceipts(
+                    block.getBlock(),
+                    List.of(
+                        new SyncTransactionReceipt(RLP.encodeOne(Bytes.wrap(new byte[200_000]))))))
+        .toList();
+  }
+
+  private static long bytes(final List<SyncBlockWithReceipts> batch) {
+    return batch.stream()
+        .mapToLong(
+            block ->
+                block.getBlock().getBody().getRlp().size()
+                    + block.getReceipts().stream().mapToLong(r -> r.getRlpBytes().size()).sum())
+        .sum();
+  }
+
   private StoreMissingBodiesStep stepOn(
       final MutableBlockchain onBlockchain, final StoreMissingBodiesStep.Pause pause) {
-    return new StoreMissingBodiesStep(onBlockchain, MISSING, TOTAL_DIFFICULTY, false, clock, pause);
+    return new StoreMissingBodiesStep(
+        onBlockchain, MISSING, TOTAL_DIFFICULTY, false, 0, clock, pause);
   }
 
   /** The blocks with the given numbers, as a batch of the download. */

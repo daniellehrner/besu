@@ -98,6 +98,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
       "--Xsnapsync-synchronizer-sorted-ingest-enabled";
   private static final String SNAP_HISTORY_BACKFILL_ENABLED_FLAG =
       "--Xsnapsync-synchronizer-history-backfill-enabled";
+  private static final String SNAP_HISTORY_BACKFILL_MAX_MEGABYTES_PER_SECOND_FLAG =
+      "--Xsnapsync-synchronizer-history-backfill-max-megabytes-per-second";
 
   private static final String SNAP_FLAT_ACCOUNT_HEALED_COUNT_PER_REQUEST_FLAG =
       "--Xsnapsync-synchronizer-flat-account-healed-count-per-request";
@@ -463,6 +465,15 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
   private Boolean snapHistoryBackfillEnabled =
       SnapSyncConfiguration.DEFAULT_SNAP_SYNC_HISTORY_BACKFILL_ENABLED;
 
+  @CommandLine.Option(
+      names = SNAP_HISTORY_BACKFILL_MAX_MEGABYTES_PER_SECOND_FLAG,
+      hidden = true,
+      paramLabel = "<INTEGER>",
+      description =
+          "The most megabytes of bodies and receipts the download of the chain history stores per second while the node follows the chain, 0 for no limit. It leaves the disk room for what the import of new blocks reads. (default: ${DEFAULT-VALUE})")
+  private int snapHistoryBackfillMaxMegabytesPerSecond =
+      SnapSyncConfiguration.DEFAULT_SNAP_SYNC_HISTORY_BACKFILL_MAX_MEGABYTES_PER_SECOND;
+
   /**
    * @deprecated No longer used. Accepted for backwards compatibility. The flag will be removed in a
    *     future release.
@@ -598,6 +609,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
     options.snapSortedIngestEnabled = config.getSnapSyncConfiguration().isSortedIngestEnabled();
     options.snapHistoryBackfillEnabled =
         config.getSnapSyncConfiguration().isHistoryBackfillEnabled();
+    options.snapHistoryBackfillMaxMegabytesPerSecond =
+        config.getSnapSyncConfiguration().getHistoryBackfillMaxMegabytesPerSecond();
     options.era1ImportPrepipelineEnabled = config.era1ImportPrepipelineEnabled();
     options.era1DataUri = config.era1DataUri();
     options.era1ImportPrepipelineConcurrency = config.era1ImportPrepipelineConcurrency();
@@ -646,6 +659,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
             .isSnapSyncTransactionIndexingEnabled(snapTransactionIndexingEnabled)
             .isSortedIngestEnabled(snapSortedIngestEnabled)
             .isHistoryBackfillEnabled(snapHistoryBackfillEnabled)
+            .historyBackfillMaxMegabytesPerSecond(snapHistoryBackfillMaxMegabytesPerSecond)
             .build());
     builder.receiptsDownloadStepTimeoutMillis(receiptsDownloadStepTimeoutMillis);
     builder.backwardHeadersDownloadStepTimeoutMillis(backwardHeadersDownloadStepTimeoutMillis);
@@ -729,6 +743,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
             OptionParser.format(snapSortedIngestEnabled),
             SNAP_HISTORY_BACKFILL_ENABLED_FLAG,
             OptionParser.format(snapHistoryBackfillEnabled),
+            SNAP_HISTORY_BACKFILL_MAX_MEGABYTES_PER_SECOND_FLAG,
+            OptionParser.format(snapHistoryBackfillMaxMegabytesPerSecond),
             ERA1_IMPORT_PREPIPELINE_ENABLED_FLAG,
             OptionParser.format(era1ImportPrepipelineEnabled),
             ERA1_DATA_URI_FLAG,

@@ -20,6 +20,7 @@ import org.hyperledger.besu.ethereum.chain.MissingBlockBodies;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.SyncBlockWithReceipts;
+import org.hyperledger.besu.ethereum.core.SyncTransactionReceipt;
 
 import java.time.Clock;
 import java.util.List;
@@ -87,6 +88,10 @@ public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceip
   private long lastRecordMillis;
   // how long this step waited for the storage and stayed idle after that
   private long heldBackMillis;
+  // the most bytes of bodies and receipts to store per second, 0 for no limit
+  private final long maxBytesPerSecond;
+  // when the bytes stored so far are paid for at that rate
+  private long rateLimitedUntilMillis;
 
   /**
    * @param blockchain the blockchain the blocks belong to
@@ -101,11 +106,31 @@ public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceip
       final Difficulty totalDifficulty,
       final boolean transactionIndexingEnabled,
       final Clock clock) {
+    this(blockchain, missingBlockBodies, totalDifficulty, transactionIndexingEnabled, 0, clock);
+  }
+
+  /**
+   * @param blockchain the blockchain the blocks belong to
+   * @param missingBlockBodies the blocks to store
+   * @param totalDifficulty the total difficulty of every one of the blocks
+   * @param transactionIndexingEnabled whether to index the transactions of the blocks
+   * @param maxMegabytesPerSecond the most megabytes of bodies and receipts to store per second, 0
+   *     for no limit
+   * @param clock tells when the range was last recorded
+   */
+  public StoreMissingBodiesStep(
+      final MutableBlockchain blockchain,
+      final MissingBlockBodies missingBlockBodies,
+      final Difficulty totalDifficulty,
+      final boolean transactionIndexingEnabled,
+      final int maxMegabytesPerSecond,
+      final Clock clock) {
     this(
         blockchain,
         missingBlockBodies,
         totalDifficulty,
         transactionIndexingEnabled,
+        maxMegabytesPerSecond,
         clock,
         Thread::sleep);
   }
@@ -115,9 +140,11 @@ public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceip
       final MissingBlockBodies missingBlockBodies,
       final Difficulty totalDifficulty,
       final boolean transactionIndexingEnabled,
+      final int maxMegabytesPerSecond,
       final Clock clock,
       final Pause pause) {
     this.blockchain = blockchain;
+    this.maxBytesPerSecond = Math.max(0, maxMegabytesPerSecond) * 1_000_000L;
     this.totalDifficulty = totalDifficulty;
     this.transactionIndexingEnabled = transactionIndexingEnabled;
     this.firstBlock = missingBlockBodies.firstBlock();
@@ -127,13 +154,16 @@ public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceip
     this.startMillis = clock.millis();
     this.nextBlockNumber = missingBlockBodies.firstBlock();
     this.lastRecordMillis = clock.millis();
+    this.rateLimitedUntilMillis = clock.millis();
   }
 
   @Override
   public void accept(final List<SyncBlockWithReceipts> blocksWithReceipts) {
+    waitForTheRateLimit();
     waitForTheStorage();
     blockchain.unsafeStoreSyncBodiesAndReceipts(
         blocksWithReceipts, transactionIndexingEnabled, totalDifficulty);
+    payForTheRateLimit(blocksWithReceipts);
     storedAhead.put(
         blocksWithReceipts.getFirst().getNumber(), blocksWithReceipts.getLast().getNumber());
 
@@ -175,6 +205,38 @@ public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceip
           isTimeToLog,
           PRINT_DELAY_SECONDS);
     }
+  }
+
+  /** Waits until what was stored before is paid for at the rate limit. */
+  private void waitForTheRateLimit() {
+    if (maxBytesPerSecond == 0) {
+      return;
+    }
+    final long waitMillis = rateLimitedUntilMillis - clock.millis();
+    if (waitMillis > 0) {
+      try {
+        pause.forMillis(waitMillis);
+        heldBackMillis += waitMillis;
+      } catch (final InterruptedException e) {
+        // the download is being stopped: store what is at hand and let the pipeline end
+        Thread.currentThread().interrupt();
+      }
+    }
+  }
+
+  private void payForTheRateLimit(final List<SyncBlockWithReceipts> blocksWithReceipts) {
+    if (maxBytesPerSecond == 0) {
+      return;
+    }
+    long bytes = 0;
+    for (final SyncBlockWithReceipts blockWithReceipts : blocksWithReceipts) {
+      bytes += blockWithReceipts.getBlock().getBody().getRlp().size();
+      for (final SyncTransactionReceipt receipt : blockWithReceipts.getReceipts()) {
+        bytes += receipt.getRlpBytes().size();
+      }
+    }
+    rateLimitedUntilMillis =
+        Math.max(rateLimitedUntilMillis, clock.millis()) + bytes * 1000 / maxBytesPerSecond;
   }
 
   /**
