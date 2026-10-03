@@ -25,6 +25,7 @@ import org.hyperledger.besu.ethereum.core.BlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.core.BlockImporter;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.Transaction;
+import org.hyperledger.besu.ethereum.mainnet.BlockAccessListReplay;
 import org.hyperledger.besu.ethereum.mainnet.BlockHeaderValidator;
 import org.hyperledger.besu.ethereum.mainnet.BlockImportResult;
 import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
@@ -32,6 +33,7 @@ import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 import org.hyperledger.besu.ethereum.mainnet.ScheduleBasedBlockHeaderFunctions;
+import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 import org.hyperledger.besu.ethereum.util.RawBlockIterator;
 
 import java.io.Closeable;
@@ -39,6 +41,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -248,6 +251,10 @@ public class RlpBlockImporter implements Closeable {
       final ProtocolSpec protocolSpec,
       final boolean skipPowValidation,
       final boolean perBlockTimings) {
+    final Optional<BlockAccessList> blockAccessList =
+        BlockAccessListReplay.mode() == BlockAccessListReplay.Mode.REPLAY
+            ? Optional.of(BlockAccessListReplay.load(header.getNumber()))
+            : Optional.empty();
     // The phase hooks record into a thread local, and this runs on the single import thread that
     // the block processor itself runs on, so the phases of this block are the ones attributed.
     final BlockImportTimings timings = perBlockTimings ? BlockImportTimings.begin() : null;
@@ -262,10 +269,22 @@ public class RlpBlockImporter implements Closeable {
               skipPowValidation
                   ? HeaderValidationMode.LIGHT_SKIP_DETACHED
                   : HeaderValidationMode.SKIP_DETACHED,
-              skipPowValidation ? HeaderValidationMode.LIGHT : HeaderValidationMode.FULL);
+              skipPowValidation ? HeaderValidationMode.LIGHT : HeaderValidationMode.FULL,
+              blockAccessList);
       if (!blockImported.isImported()) {
         throw new IllegalStateException(
             "Invalid block at block number " + header.getNumber() + ".");
+      }
+      if (BlockAccessListReplay.mode() == BlockAccessListReplay.Mode.RECORD) {
+        BlockAccessListReplay.store(
+            header.getNumber(),
+            context
+                .getBlockchain()
+                .getBlockAccessList(block.getHash())
+                .orElseThrow(
+                    () ->
+                        new IllegalStateException(
+                            "No block access list built for block " + header.getNumber())));
       }
     } finally {
       blockBacklog.release();

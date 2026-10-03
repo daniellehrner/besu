@@ -349,6 +349,13 @@ public class ProtocolSpecBuilder {
   }
 
   public ProtocolSpec build(final ProtocolSchedule protocolSchedule) {
+    if (blockAccessListFactory == null && BlockAccessListReplay.isEnabled()) {
+      blockAccessListFactory = new BlockAccessListFactory();
+      blockAccessListValidatorBuilder = __ -> BlockAccessListReplay.VALIDATOR;
+      if (BlockAccessListReplay.isBalStateRoot()) {
+        stateRootCommitterFactory = new StateRootCommitterFactory(balConfiguration);
+      }
+    }
     checkNotNull(gasCalculatorBuilder, "Missing gasCalculator");
     checkNotNull(gasLimitCalculatorBuilder, "Missing gasLimitCalculatorBuilder");
     checkNotNull(evmBuilder, "Missing operation registry");
