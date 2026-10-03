@@ -345,7 +345,8 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         .setEnv(Env.getDefault().setBackgroundThreads(configuration.getBackgroundThreadCount()))
         .setMaxTotalWalSize(WAL_MAX_TOTAL_SIZE)
         // no recycled log files, which RocksDB forbids with writes that skip the log
-        .setRecycleLogFileNum(0);
+        .setRecycleLogFileNum(0)
+        .setMaxBackgroundJobs(configuration.getMaxBackgroundJobs());
   }
 
   /**

@@ -30,6 +30,7 @@ public class RocksDBConfiguration {
   private final boolean isBlockchainGarbageCollectionEnabled;
   private final Optional<Double> blobGarbageCollectionAgeCutoff;
   private final Optional<Double> blobGarbageCollectionForceThreshold;
+  private final int maxBackgroundJobs;
 
   /**
    * Instantiates a new RocksDb configuration.
@@ -45,6 +46,7 @@ public class RocksDBConfiguration {
    *     column family
    * @param blobGarbageCollectionAgeCutoff the blob garbage collection age cutoff
    * @param blobGarbageCollectionForceThreshold the blob garbage collection force threshold
+   * @param maxBackgroundJobs how many flushes and compactions run at the same time
    */
   public RocksDBConfiguration(
       final Path databaseDir,
@@ -56,7 +58,9 @@ public class RocksDBConfiguration {
       final boolean isTableCacheWarmupEnabled,
       final boolean isBlockchainGarbageCollectionEnabled,
       final Optional<Double> blobGarbageCollectionAgeCutoff,
-      final Optional<Double> blobGarbageCollectionForceThreshold) {
+      final Optional<Double> blobGarbageCollectionForceThreshold,
+      final int maxBackgroundJobs) {
+    this.maxBackgroundJobs = maxBackgroundJobs;
     this.backgroundThreadCount = backgroundThreadCount;
     this.databaseDir = databaseDir;
     this.maxOpenFiles = maxOpenFiles;
@@ -130,6 +134,15 @@ public class RocksDBConfiguration {
    */
   public boolean isTableCacheWarmupEnabled() {
     return isTableCacheWarmupEnabled;
+  }
+
+  /**
+   * How many flushes and compactions run at the same time.
+   *
+   * @return the number of background jobs
+   */
+  public int getMaxBackgroundJobs() {
+    return maxBackgroundJobs;
   }
 
   /**
