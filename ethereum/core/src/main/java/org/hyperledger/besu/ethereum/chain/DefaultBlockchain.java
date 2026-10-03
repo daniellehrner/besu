@@ -419,6 +419,11 @@ public class DefaultBlockchain implements MutableBlockchain {
   }
 
   @Override
+  public boolean isStorageWaitingForFlush() {
+    return blockchainStorage.isWriteBufferWaitingForFlush();
+  }
+
+  @Override
   public Hash getChainHeadHash() {
     return chainHeader.getHash();
   }

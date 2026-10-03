@@ -334,6 +334,19 @@ public interface SegmentedKeyValueStorage extends Closeable {
   }
 
   /**
+   * Whether data that was written to the segment is still waiting in memory to be written out. A
+   * storage that buffers writes stops taking writes, to every segment, when too much of it waits. A
+   * writer of data that is in no hurry asks before it writes more, so that it never is what stops
+   * the writes that are. The default implementation has no such buffer.
+   *
+   * @param segmentIdentifier the segment that is about to be written to
+   * @return true if a write buffer of the segment waits to be flushed
+   */
+  default boolean isWriteBufferWaitingForFlush(final SegmentIdentifier segmentIdentifier) {
+    return false;
+  }
+
+  /**
    * Whether the underlying storage is closed.
    *
    * @return boolean indicating whether the underlying storage is closed.

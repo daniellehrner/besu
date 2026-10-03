@@ -129,6 +129,25 @@ public class DefaultBlockchainTest {
   }
 
   @Test
+  public void shouldTellWhetherTheBlockStorageWaitsForAFlush() {
+    final AtomicBoolean waiting = new AtomicBoolean();
+    final KeyValueStorage kvStore =
+        new InMemoryKeyValueStorage() {
+          @Override
+          public boolean isWriteBufferWaitingForFlush() {
+            return waiting.get();
+          }
+        };
+    final DefaultBlockchain blockchain =
+        createMutableBlockchain(
+            kvStore, new InMemoryKeyValueStorage(), new BlockDataGenerator().genesisBlock());
+
+    assertThat(blockchain.isStorageWaitingForFlush()).isFalse();
+    waiting.set(true);
+    assertThat(blockchain.isStorageWaitingForFlush()).isTrue();
+  }
+
+  @Test
   public void shouldKeepTheMissingBlockBodiesAcrossARestart() {
     final BlockDataGenerator gen = new BlockDataGenerator();
     final KeyValueStorage kvStore = new InMemoryKeyValueStorage();

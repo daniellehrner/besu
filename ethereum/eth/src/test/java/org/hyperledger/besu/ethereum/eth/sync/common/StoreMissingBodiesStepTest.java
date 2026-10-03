@@ -16,6 +16,8 @@ package org.hyperledger.besu.ethereum.eth.sync.common;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider.createInMemoryBlockchain;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.ethereum.chain.MissingBlockBodies;
 import org.hyperledger.besu.ethereum.chain.MutableBlockchain;
@@ -30,6 +32,7 @@ import org.hyperledger.besu.ethereum.core.SyncBlockWithReceipts;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -134,6 +137,77 @@ public class StoreMissingBodiesStepTest {
     storeStep.accept(batch(4, 9));
 
     assertThat(blockchain.getMissingBlockBodies()).isEmpty();
+  }
+
+  @Test
+  public void shouldStoreABatchAtOnceWhenTheStorageHasNothingToFlush() {
+    final List<Long> pauses = new ArrayList<>();
+    final StoreMissingBodiesStep step = stepOn(blockchain, pauses::add);
+
+    step.accept(batch(1, 3));
+
+    assertThat(pauses).isEmpty();
+    assertThat(blockchain.getBlockBody(chain.get(1).getHash())).isPresent();
+  }
+
+  @Test
+  public void shouldWaitForTheStorageAndThenAsLongAgain() {
+    final MutableBlockchain busyBlockchain = spy(blockchain);
+    when(busyBlockchain.isStorageWaitingForFlush()).thenReturn(true, true, true, false);
+    final List<Long> pauses = new ArrayList<>();
+    final StoreMissingBodiesStep step =
+        stepOn(
+            busyBlockchain,
+            millis -> {
+              // nothing is stored while the storage is waited for
+              assertThat(blockchain.getBlockBody(chain.get(1).getHash())).isEmpty();
+              pauses.add(millis);
+            });
+
+    step.accept(batch(1, 3));
+
+    final long poll = StoreMissingBodiesStep.FLUSH_POLL_MILLIS;
+    assertThat(pauses).containsExactly(poll, poll, poll, 3 * poll);
+    assertThat(blockchain.getBlockBody(chain.get(1).getHash())).isPresent();
+  }
+
+  @Test
+  public void shouldStoreABatchAfterTheLongestWaitWhateverTheStorageSays() {
+    final MutableBlockchain stuckBlockchain = spy(blockchain);
+    when(stuckBlockchain.isStorageWaitingForFlush()).thenReturn(true);
+    final List<Long> pauses = new ArrayList<>();
+    final StoreMissingBodiesStep step = stepOn(stuckBlockchain, pauses::add);
+
+    step.accept(batch(1, 3));
+
+    final long polls =
+        StoreMissingBodiesStep.MAX_FLUSH_WAIT_MILLIS / StoreMissingBodiesStep.FLUSH_POLL_MILLIS;
+    assertThat(pauses).hasSize((int) polls + 1);
+    assertThat(pauses.getLast()).isEqualTo(StoreMissingBodiesStep.MAX_FLUSH_WAIT_MILLIS);
+    assertThat(blockchain.getBlockBody(chain.get(1).getHash())).isPresent();
+  }
+
+  @Test
+  public void shouldStoreTheBatchWhenTheWaitIsInterrupted() {
+    final MutableBlockchain busyBlockchain = spy(blockchain);
+    when(busyBlockchain.isStorageWaitingForFlush()).thenReturn(true);
+    final StoreMissingBodiesStep step =
+        stepOn(
+            busyBlockchain,
+            millis -> {
+              throw new InterruptedException();
+            });
+
+    step.accept(batch(1, 3));
+
+    // the thread stays interrupted for the pipeline that runs the step
+    assertThat(Thread.interrupted()).isTrue();
+    assertThat(blockchain.getBlockBody(chain.get(1).getHash())).isPresent();
+  }
+
+  private StoreMissingBodiesStep stepOn(
+      final MutableBlockchain onBlockchain, final StoreMissingBodiesStep.Pause pause) {
+    return new StoreMissingBodiesStep(onBlockchain, MISSING, TOTAL_DIFFICULTY, false, clock, pause);
   }
 
   /** The blocks with the given numbers, as a batch of the download. */

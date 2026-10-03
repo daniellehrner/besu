@@ -51,6 +51,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
@@ -765,6 +766,36 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
       assertThat(labelledCountersHelpArgs.getValue())
           .isEqualTo("Number of RocksDB transactions rolled back.");
     }
+  }
+
+  @Test
+  public void writeBufferWaitsForFlushOnlyOnceItIsFull() throws Exception {
+    final SegmentedKeyValueStorage store = createSegmentedStore();
+    final KeyValueStorage fooStore = new SegmentedKeyValueStorageAdapter(TestSegment.FOO, store);
+    assertThat(store.isWriteBufferWaitingForFlush(TestSegment.FOO)).isFalse();
+    assertThat(fooStore.isWriteBufferWaitingForFlush()).isFalse();
+
+    // a megabyte at a time until a write buffer is full and handed over to be flushed
+    final byte[] value = new byte[1024 * 1024];
+    final Random random = new Random(1);
+    boolean seenWaiting = false;
+    for (int i = 0; i < 256 && !seenWaiting; i++) {
+      random.nextBytes(value);
+      final SegmentedKeyValueStorageTransaction tx = store.startTransaction();
+      tx.put(TestSegment.FOO, ByteBuffer.allocate(4).putInt(i).array(), value);
+      tx.commit();
+      seenWaiting = fooStore.isWriteBufferWaitingForFlush();
+    }
+    assertThat(seenWaiting).isTrue();
+    // only the segment that was written to
+    assertThat(store.isWriteBufferWaitingForFlush(TestSegment.BAR)).isFalse();
+
+    final long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+    while (store.isWriteBufferWaitingForFlush(TestSegment.FOO) && System.nanoTime() < deadline) {
+      Thread.sleep(10);
+    }
+    assertThat(store.isWriteBufferWaitingForFlush(TestSegment.FOO)).isFalse();
+    store.close();
   }
 
   @Test

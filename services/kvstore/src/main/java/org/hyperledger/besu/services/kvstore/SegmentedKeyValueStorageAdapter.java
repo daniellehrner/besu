@@ -126,6 +126,11 @@ public class SegmentedKeyValueStorageAdapter implements KeyValueStorage {
   }
 
   @Override
+  public boolean isWriteBufferWaitingForFlush() {
+    return storage.isWriteBufferWaitingForFlush(segmentIdentifier);
+  }
+
+  @Override
   public boolean isClosed() {
     return storage.isClosed();
   }

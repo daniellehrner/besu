@@ -105,6 +105,8 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   /** Number of threads used to parallelize table cache warm-up seeks */
   private static final int TABLE_CACHE_WARMUP_THREAD_COUNT = 8;
 
+  private static final String IMMUTABLE_MEMTABLES_PROPERTY = "rocksdb.num-immutable-mem-table";
+
   static {
     RocksDbUtil.loadNativeLibrary();
   }
@@ -699,6 +701,22 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   public SegmentBulkLoad startBulkLoad(final List<SegmentIdentifier> segmentIdentifiers) {
     throwIfClosed();
     return new RocksDBSegmentBulkLoad(this, segmentIdentifiers);
+  }
+
+  /**
+   * A memtable of the column family that is full stays in memory until it is flushed. When a second
+   * one fills up before that, RocksDB stops the writes to the whole database.
+   */
+  @Override
+  public boolean isWriteBufferWaitingForFlush(final SegmentIdentifier segmentIdentifier) {
+    throwIfClosed();
+    try {
+      return getDB()
+              .getLongProperty(safeColumnHandle(segmentIdentifier), IMMUTABLE_MEMTABLES_PROPERTY)
+          > 0;
+    } catch (final RocksDBException e) {
+      throw new StorageException(e);
+    }
   }
 
   @Override

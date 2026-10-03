@@ -202,6 +202,11 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
         blockchainStorage.startTransaction(), variablesStorage.updater(), receiptCompaction);
   }
 
+  @Override
+  public boolean isWriteBufferWaitingForFlush() {
+    return blockchainStorage.isWriteBufferWaitingForFlush();
+  }
+
   private List<TransactionReceipt> rlpDecodeTransactionReceipts(final Bytes bytes) {
     return RLP.input(bytes).readList(in -> TransactionReceiptDecoder.readFrom(in, true));
   }

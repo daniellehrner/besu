@@ -64,6 +64,16 @@ public interface BlockchainStorage {
 
   Updater updater();
 
+  /**
+   * Whether blocks that were stored are still waiting in memory to be written out. Storing more
+   * while they do can make the storage stop every write until they are.
+   *
+   * @return true if a write buffer of the storage waits to be flushed
+   */
+  default boolean isWriteBufferWaitingForFlush() {
+    return false;
+  }
+
   interface Updater {
 
     void putBlockHeader(Hash blockHash, BlockHeader blockHeader);

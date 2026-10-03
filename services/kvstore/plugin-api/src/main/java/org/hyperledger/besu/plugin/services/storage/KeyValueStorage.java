@@ -138,6 +138,16 @@ public interface KeyValueStorage extends Closeable {
   KeyValueStorageTransaction startTransaction() throws StorageException;
 
   /**
+   * Whether data that was written to this storage is still waiting in memory to be written out, see
+   * {@link SegmentedKeyValueStorage#isWriteBufferWaitingForFlush}.
+   *
+   * @return true if a write buffer of this storage waits to be flushed
+   */
+  default boolean isWriteBufferWaitingForFlush() {
+    return false;
+  }
+
+  /**
    * Return Whether the underlying storage is closed.
    *
    * @return boolean indicating whether the storage is closed.

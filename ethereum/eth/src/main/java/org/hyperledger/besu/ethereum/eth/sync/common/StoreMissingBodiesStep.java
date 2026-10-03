@@ -40,6 +40,12 @@ import org.slf4j.LoggerFactory;
  * The range of missing blocks recorded with the chain only shrinks over blocks that have every
  * block before them stored, so a download that is interrupted continues from there and downloads
  * what was stored ahead of it again.
+ *
+ * <p>The node follows the chain while this runs, and the blocks it imports go to the same storage.
+ * So a batch is only stored once the storage has written out what it was given before, and after
+ * waiting for that this step stays idle for as long again: stored as fast as they arrive, the
+ * batches fill the write buffers faster than they are flushed, which stops every write to the
+ * storage, and they leave the disk no room for the reads a new block needs.
  */
 public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceipts>> {
   private static final Logger LOG = LoggerFactory.getLogger(StoreMissingBodiesStep.class);
@@ -48,18 +54,34 @@ public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceip
   /** How long the recorded range may lag behind what is stored. */
   static final long RECORD_INTERVAL_MILLIS = 5_000;
 
+  /** How often the storage is asked whether it has written out what it was given. */
+  static final long FLUSH_POLL_MILLIS = 10;
+
+  /** A batch is stored after this long even if the storage still has a buffer to write out. */
+  static final long MAX_FLUSH_WAIT_MILLIS = 30_000;
+
+  /** Waits without holding anything, for the time given in milliseconds. */
+  @FunctionalInterface
+  interface Pause {
+    void forMillis(long millis) throws InterruptedException;
+  }
+
   private final MutableBlockchain blockchain;
   private final boolean transactionIndexingEnabled;
   private final Difficulty totalDifficulty;
   private final long firstBlock;
   private final long lastBlock;
   private final Clock clock;
+  private final Pause pause;
+  private final long startMillis;
   private final AtomicBoolean isTimeToLog = new AtomicBoolean(true);
   // the last block of the batches that are stored but follow a batch that is not, by first block
   private final NavigableMap<Long, Long> storedAhead = new TreeMap<>();
   // the first block that is not stored yet
   private volatile long nextBlockNumber;
   private long lastRecordMillis;
+  // how long this step waited for the storage and stayed idle after that
+  private long heldBackMillis;
 
   /**
    * @param blockchain the blockchain the blocks belong to
@@ -74,18 +96,37 @@ public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceip
       final Difficulty totalDifficulty,
       final boolean transactionIndexingEnabled,
       final Clock clock) {
+    this(
+        blockchain,
+        missingBlockBodies,
+        totalDifficulty,
+        transactionIndexingEnabled,
+        clock,
+        Thread::sleep);
+  }
+
+  StoreMissingBodiesStep(
+      final MutableBlockchain blockchain,
+      final MissingBlockBodies missingBlockBodies,
+      final Difficulty totalDifficulty,
+      final boolean transactionIndexingEnabled,
+      final Clock clock,
+      final Pause pause) {
     this.blockchain = blockchain;
     this.totalDifficulty = totalDifficulty;
     this.transactionIndexingEnabled = transactionIndexingEnabled;
     this.firstBlock = missingBlockBodies.firstBlock();
     this.lastBlock = missingBlockBodies.lastBlock();
     this.clock = clock;
+    this.pause = pause;
+    this.startMillis = clock.millis();
     this.nextBlockNumber = missingBlockBodies.firstBlock();
     this.lastRecordMillis = clock.millis();
   }
 
   @Override
   public void accept(final List<SyncBlockWithReceipts> blocksWithReceipts) {
+    waitForTheStorage();
     blockchain.unsafeStoreSyncBodiesAndReceipts(
         blocksWithReceipts, transactionIndexingEnabled, totalDifficulty);
     storedAhead.put(
@@ -118,13 +159,36 @@ public class StoreMissingBodiesStep implements Consumer<List<SyncBlockWithReceip
           // of the blocks that were missing when this download started: on a chain that is synced
           // from a checkpoint the first of them is far from block 1
           String.format(
-              "Chain history download progress: %s of %s (%s%%)",
+              "Chain history download progress: %s of %s (%s%%), held back %s%% of the time",
               nextBlockNumber - 1,
               lastBlock,
               ImportSyncBlocksStep.getBlocksPercent(
-                  nextBlockNumber - firstBlock, lastBlock - firstBlock + 1)),
+                  nextBlockNumber - firstBlock, lastBlock - firstBlock + 1),
+              100 * heldBackMillis / Math.max(1, now - startMillis)),
           isTimeToLog,
           PRINT_DELAY_SECONDS);
+    }
+  }
+
+  /**
+   * Waits until the storage has no write buffer left to flush, and then as long again, so that the
+   * storage is busy with the history for half of the time at most.
+   */
+  private void waitForTheStorage() {
+    long waitedMillis = 0;
+    try {
+      while (waitedMillis < MAX_FLUSH_WAIT_MILLIS && blockchain.isStorageWaitingForFlush()) {
+        pause.forMillis(FLUSH_POLL_MILLIS);
+        waitedMillis += FLUSH_POLL_MILLIS;
+      }
+      if (waitedMillis > 0) {
+        heldBackMillis += waitedMillis;
+        pause.forMillis(waitedMillis);
+        heldBackMillis += waitedMillis;
+      }
+    } catch (final InterruptedException e) {
+      // the download is being stopped: store what is at hand and let the pipeline end
+      Thread.currentThread().interrupt();
     }
   }
 
