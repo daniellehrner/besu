@@ -22,6 +22,7 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Request;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
+import org.hyperledger.besu.ethereum.mainnet.BlockAccessListReplay;
 import org.hyperledger.besu.ethereum.mainnet.BlockAccessListValidator;
 import org.hyperledger.besu.ethereum.mainnet.BlockBodyValidator;
 import org.hyperledger.besu.ethereum.mainnet.BlockHeaderValidator;
@@ -278,7 +279,7 @@ public class MainnetBlockValidator implements BlockValidator {
                     worldState,
                     receipts,
                     maybeRequests,
-                    processedBlockAccessList,
+                    blockAccessListToStore(block, blockAccessList, processedBlockAccessList),
                     cumulativeBlockGasUsed,
                     accessedAncestors)),
             result.getNbParallelizedTransactions(),
@@ -350,6 +351,26 @@ public class MainnetBlockValidator implements BlockValidator {
         LOG.debug("Invalid block {} not added to badBlockManager ", failedBlock.toLogString());
       }
     }
+  }
+
+  /**
+   * The access list to store with a block that processed successfully. A supplied list was checked
+   * against the header's hash in the bytes it was decoded from, before execution, and the list the
+   * execution built in its canonical encoding against the same hash afterwards, so those bytes are
+   * that canonical encoding and the supplied list is stored without encoding the built one again.
+   */
+  private static Optional<BlockAccessList> blockAccessListToStore(
+      final Block block,
+      final Optional<BlockAccessList> supplied,
+      final Optional<BlockAccessList> executed) {
+    final boolean checkedAgainstOneHash =
+        block.getHeader().getBalHash().isPresent() || BlockAccessListReplay.isEnabled();
+    if (executed.isPresent()
+        && checkedAgainstOneHash
+        && supplied.flatMap(BlockAccessList::rawRlp).isPresent()) {
+      return supplied;
+    }
+    return executed;
   }
 
   private static boolean transactionsExceedBlockGasLimit(final Block block) {
