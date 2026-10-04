@@ -74,16 +74,23 @@ public class ReferenceTestProtocolSchedules {
   private record CacheKey(EvmConfiguration evmConfiguration, ObjectNode blobSchedule) {}
 
   public static ReferenceTestProtocolSchedules create() {
-    final boolean evmV2 = Boolean.getBoolean("test.evm.v2");
-    final EvmConfiguration evmConfiguration =
-        evmV2
-            ? new EvmConfiguration(
-                EvmConfiguration.DEFAULT.jumpDestCacheWeightKB(),
-                EvmConfiguration.DEFAULT.worldUpdaterMode(),
-                EvmConfiguration.DEFAULT.enableOptimizedOpcodes(),
-                true)
-            : EvmConfiguration.DEFAULT;
-    return create(new StubGenesisConfigOptions(), evmConfiguration);
+    return create(new StubGenesisConfigOptions(), evmConfiguration());
+  }
+
+  /**
+   * The EVM configuration the reference tests run with: the v2 interpreter when the system property
+   * test.evm.v2 is set, the default one otherwise.
+   *
+   * @return the EVM configuration
+   */
+  public static EvmConfiguration evmConfiguration() {
+    return Boolean.getBoolean("test.evm.v2")
+        ? new EvmConfiguration(
+            EvmConfiguration.DEFAULT.jumpDestCacheWeightKB(),
+            EvmConfiguration.DEFAULT.worldUpdaterMode(),
+            EvmConfiguration.DEFAULT.enableOptimizedOpcodes(),
+            true)
+        : EvmConfiguration.DEFAULT;
   }
 
   public static ReferenceTestProtocolSchedules create(final EvmConfiguration evmConfiguration) {
