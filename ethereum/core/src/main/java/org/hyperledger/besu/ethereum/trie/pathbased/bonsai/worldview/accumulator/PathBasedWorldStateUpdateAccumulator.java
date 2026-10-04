@@ -78,7 +78,6 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
   private final Map<Address, StorageConsumingMap<StorageSlotKey, BonsaiValue<UInt256>>>
       storageToUpdate = new ConcurrentHashMap<>();
 
-  private final Map<UInt256, Hash> storageKeyHashLookup = new ConcurrentHashMap<>();
   protected boolean isAccumulatorStateChanged;
 
   public PathBasedWorldStateUpdateAccumulator(
@@ -294,7 +293,6 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
                   });
             });
 
-    storageKeyHashLookup.putAll(source.storageKeyHashLookup);
     this.isAccumulatorStateChanged = true;
   }
 
@@ -585,8 +583,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
         .forEach(
             storageUpdate -> {
               final UInt256 keyUInt = storageUpdate.getKey();
-              final StorageSlotKey slotKey =
-                  new StorageSlotKey(hashAndSaveSlotPreImage(keyUInt), Optional.of(keyUInt));
+              final StorageSlotKey slotKey = storageSlotKey(keyUInt);
               final UInt256 value = storageUpdate.getValue();
               final BonsaiValue<UInt256> pendingValue = pendingStorageUpdates.get(slotKey);
               if (pendingValue == null) {
@@ -626,9 +623,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
 
   @Override
   public UInt256 getStorageValue(final Address address, final UInt256 slotKey) {
-    StorageSlotKey storageSlotKey =
-        new StorageSlotKey(hashAndSaveSlotPreImage(slotKey), Optional.of(slotKey));
-    return getStorageValueByStorageSlotKey(address, storageSlotKey).orElse(UInt256.ZERO);
+    return getStorageValueByStorageSlotKey(address, storageSlotKey(slotKey)).orElse(UInt256.ZERO);
   }
 
   @Override
@@ -674,8 +669,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
   @Override
   public UInt256 getPriorStorageValue(final Address address, final UInt256 storageKey) {
     // TODO maybe log the read into the trie layer?
-    StorageSlotKey storageSlotKey =
-        new StorageSlotKey(hashAndSaveSlotPreImage(storageKey), Optional.of(storageKey));
+    final StorageSlotKey storageSlotKey = storageSlotKey(storageKey);
     final Map<StorageSlotKey, BonsaiValue<UInt256>> localAccountStorage =
         storageToUpdate.get(address);
     if (localAccountStorage != null) {
@@ -1020,7 +1014,6 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
     resetAccumulatorStateChanged();
     updatedAccounts.clear();
     deletedAccounts.clear();
-    storageKeyHashLookup.clear();
   }
 
   protected Hash hashAndSaveAccountPreImage(final Address address) {
@@ -1028,13 +1021,8 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
     return Hash.hash(address.getBytes());
   }
 
-  protected Hash hashAndSaveSlotPreImage(final UInt256 slotKey) {
-    Hash hash = storageKeyHashLookup.get(slotKey);
-    if (hash == null) {
-      hash = Hash.hash(slotKey);
-      storageKeyHashLookup.put(slotKey, hash);
-    }
-    return hash;
+  protected StorageSlotKey storageSlotKey(final UInt256 slotKey) {
+    return StorageSlotKeyCache.get(slotKey);
   }
 
   public abstract PathBasedWorldStateUpdateAccumulator<ACCOUNT> copy();
