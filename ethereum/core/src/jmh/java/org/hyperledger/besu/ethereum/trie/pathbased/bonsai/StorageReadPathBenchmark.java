@@ -131,4 +131,17 @@ public class StorageReadPathBenchmark {
   public Wei balanceOfUntrackedAccount() {
     return top.get(OTHER).getBalance();
   }
+
+  @Benchmark
+  public void callFrameWritesAndCommits() {
+    // a called frame updates two of the few slots its caller also writes, then returns
+    final WorldUpdater frame = top.updater();
+    final MutableAccount account = frame.getAccount(CONTRACT);
+    final int first = index++;
+    account.setStorageValue(
+        UInt256.fromBytes(Bytes32.wrap(keys[first & 7])), UInt256.valueOf(first));
+    account.setStorageValue(
+        UInt256.fromBytes(Bytes32.wrap(keys[(first + 1) & 7])), UInt256.valueOf(first));
+    frame.commit();
+  }
 }
