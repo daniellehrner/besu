@@ -23,6 +23,7 @@ import org.hyperledger.besu.datatypes.VersionedHash;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
 import org.hyperledger.besu.evm.internal.AddressStorageSlotKey;
+import org.hyperledger.besu.evm.internal.WarmStorageTable;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -31,7 +32,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 
-import com.google.common.collect.TreeBasedTable;
 import org.apache.tuweni.bytes.Bytes32;
 
 /**
@@ -46,7 +46,7 @@ public class TxValues {
   private final BlockHashLookup blockHashLookup;
   private final int maxStackSize;
   private final UndoSet<Address> warmedUpAddresses;
-  private final UndoTable<Address, Bytes32, Boolean> warmedUpStorage;
+  private final WarmStorageTable warmedUpStorage;
   private final Address originator;
   private final Wei gasPrice;
   private final Wei blobGasPrice;
@@ -65,7 +65,7 @@ public class TxValues {
       final BlockHashLookup blockHashLookup,
       final int maxStackSize,
       final UndoSet<Address> warmedUpAddresses,
-      final UndoTable<Address, Bytes32, Boolean> warmedUpStorage,
+      final WarmStorageTable warmedUpStorage,
       final Address originator,
       final Wei gasPrice,
       final Wei blobGasPrice,
@@ -130,7 +130,7 @@ public class TxValues {
         blockHashLookup,
         maxStackSize,
         warmedUpAddresses,
-        UndoTable.of(TreeBasedTable.create()),
+        new WarmStorageTable(),
         originator,
         gasPrice,
         blobGasPrice,
@@ -194,7 +194,7 @@ public class TxValues {
    *
    * @return the warmed-up storage slots
    */
-  public UndoTable<Address, Bytes32, Boolean> warmedUpStorage() {
+  public WarmStorageTable warmedUpStorage() {
     return warmedUpStorage;
   }
 
