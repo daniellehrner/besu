@@ -34,6 +34,7 @@ import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 import org.hyperledger.besu.ethereum.mainnet.parallelization.BlockProcessingExecutors;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.PathBasedWorldState;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateQueryParams;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
@@ -144,6 +145,44 @@ public class MainnetBlockValidator implements BlockValidator {
       final Optional<BlockAccessList> blockAccessList,
       final boolean shouldUpdateHead,
       final boolean shouldRecordBadBlock) {
+    return validateAndProcessBlock(
+        context,
+        block,
+        headerValidationMode,
+        ommerValidationMode,
+        blockAccessList,
+        shouldUpdateHead,
+        shouldRecordBadBlock,
+        false);
+  }
+
+  @Override
+  public BlockProcessingResult validateAndProcessBlockDeferringTrieLog(
+      final ProtocolContext context,
+      final Block block,
+      final HeaderValidationMode headerValidationMode,
+      final HeaderValidationMode ommerValidationMode,
+      final Optional<BlockAccessList> blockAccessList) {
+    return validateAndProcessBlock(
+        context,
+        block,
+        headerValidationMode,
+        ommerValidationMode,
+        blockAccessList,
+        false,
+        true,
+        true);
+  }
+
+  private BlockProcessingResult validateAndProcessBlock(
+      final ProtocolContext context,
+      final Block block,
+      final HeaderValidationMode headerValidationMode,
+      final HeaderValidationMode ommerValidationMode,
+      final Optional<BlockAccessList> blockAccessList,
+      final boolean shouldUpdateHead,
+      final boolean shouldRecordBadBlock,
+      final boolean deferTrieLog) {
 
     final int blockSize = block.getSize();
     if (blockSize > maxRlpBlockSize) {
@@ -238,6 +277,9 @@ public class MainnetBlockValidator implements BlockValidator {
                   .getWorldStateArchive()
                   .prepareWorldStateForBlock(block.getHeader(), worldState));
 
+      if (deferTrieLog && worldState instanceof PathBasedWorldState pathBasedWorldState) {
+        pathBasedWorldState.deferTrieLog();
+      }
       // the transactions root does not depend on execution, so it is computed alongside it
       CompletableFuture.runAsync(
           block.getBody()::getTransactionsRoot, BlockProcessingExecutors.ioExecutor());
@@ -290,7 +332,10 @@ public class MainnetBlockValidator implements BlockValidator {
                     blockAccessListToStore(block, blockAccessList, processedBlockAccessList),
                     cumulativeBlockGasUsed,
                     accessedAncestors,
-                    receiptsRoot)),
+                    receiptsRoot,
+                    worldState instanceof PathBasedWorldState pathBasedWorldState
+                        ? pathBasedWorldState.takeTrieLogWrite()
+                        : () -> {})),
             result.getNbParallelizedTransactions(),
             result.getParallelizedGasUsed());
       }

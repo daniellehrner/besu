@@ -38,6 +38,7 @@ public class BlockProcessingOutputs {
   private final long cumulativeBlockGasUsed;
   private final Map<Long, Hash> accessedAncestors;
   private final Supplier<Hash> receiptsRoot;
+  private final Runnable trieLogWrite;
 
   /**
    * Creates a new instance.
@@ -145,6 +146,38 @@ public class BlockProcessingOutputs {
       final long cumulativeBlockGasUsed,
       final Map<Long, Hash> accessedAncestors,
       final Supplier<Hash> receiptsRoot) {
+    this(
+        worldState,
+        receipts,
+        maybeRequests,
+        blockAccessList,
+        cumulativeBlockGasUsed,
+        accessedAncestors,
+        receiptsRoot,
+        () -> {});
+  }
+
+  /**
+   * Outputs of a block whose trie log is left for the caller to write.
+   *
+   * @param worldState the world state after the block
+   * @param receipts the block's receipts
+   * @param maybeRequests the block's requests
+   * @param blockAccessList the block's access list
+   * @param cumulativeBlockGasUsed the gas the block used
+   * @param accessedAncestors the ancestor hashes the block read
+   * @param receiptsRoot the root of the receipts
+   * @param trieLogWrite writes the block's trie log
+   */
+  public BlockProcessingOutputs(
+      final MutableWorldState worldState,
+      final List<TransactionReceipt> receipts,
+      final Optional<List<Request>> maybeRequests,
+      final Optional<BlockAccessList> blockAccessList,
+      final long cumulativeBlockGasUsed,
+      final Map<Long, Hash> accessedAncestors,
+      final Supplier<Hash> receiptsRoot,
+      final Runnable trieLogWrite) {
     this.worldState = worldState;
     this.receipts = receipts;
     this.maybeRequests = maybeRequests;
@@ -152,6 +185,16 @@ public class BlockProcessingOutputs {
     this.cumulativeBlockGasUsed = cumulativeBlockGasUsed;
     this.accessedAncestors = accessedAncestors;
     this.receiptsRoot = receiptsRoot;
+    this.trieLogWrite = trieLogWrite;
+  }
+
+  /**
+   * Writes the block's trie log, if processing left it to the caller.
+   *
+   * @return the write, which does nothing if processing wrote the trie log
+   */
+  public Runnable getTrieLogWrite() {
+    return trieLogWrite;
   }
 
   /**

@@ -95,7 +95,7 @@ public final class EngineNewPayloadV5<
   @Override
   protected BlockProcessingResult rememberBlock(final Block block, final EP executionPayload) {
     return mergeCoordinator.rememberBlock(
-        block, Optional.of(executionPayload.getBlockAccessList()));
+        block, Optional.of(executionPayload.getBlockAccessList()), writeAfterReply(block));
   }
 
   @Override
