@@ -14,11 +14,13 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.internal.WarmStorageTable;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
 
 import org.apache.tuweni.bytes.Bytes32;
@@ -94,29 +96,36 @@ public class SLoadOperationV2 extends AbstractOperationV2 {
     }
 
     final int top = frame.stackTopV2();
-
-    final byte[] keyBytes = new byte[32];
-    StackArithmetic.toBytesAt(s, top, 0, keyBytes);
-    final Bytes32 keyBytes32 = Bytes32.wrap(keyBytes);
-    final UInt256 key = UInt256.fromBytes(keyBytes32);
-
-    final boolean slotIsWarm = frame.warmUpStorage(frame.getRecipientAddress(), keyBytes32);
+    final int off = (top - 1) << 2;
+    final Address address = frame.getRecipientAddress();
+    final WarmStorageTable warmStorage = frame.getWarmedUpStorage();
+    final int found = warmStorage.warmUp(address, s[off], s[off + 1], s[off + 2], s[off + 3]);
+    final boolean slotIsWarm = found >= 0;
     final long cost = slotIsWarm ? warmCost : coldCost;
 
     if (frame.getRemainingGas() < cost) {
       return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
     }
 
-    final Account account = frame.getWorldUpdater().get(frame.getRecipientAddress());
-    frame.getEip7928AccessList().ifPresent(t -> t.addTouchedAccount(frame.getRecipientAddress()));
+    final int entry = slotIsWarm ? found : ~found;
+    // the transaction has read or written the slot before, which also put it in the access list
+    if (warmStorage.copyCurrentValue(entry, s, off)) {
+      return warmSuccess;
+    }
+
+    final byte[] keyBytes = new byte[32];
+    StackArithmetic.toBytesAt(s, top, 0, keyBytes);
+    final UInt256 key = UInt256.fromBytes(Bytes32.wrap(keyBytes));
+
+    final Account account = frame.getWorldUpdater().get(address);
+    frame.getEip7928AccessList().ifPresent(t -> t.addTouchedAccount(address));
 
     final UInt256 value = account == null ? UInt256.ZERO : account.getStorageValue(key);
-    frame
-        .getEip7928AccessList()
-        .ifPresent(t -> t.addSlotAccessForAccount(frame.getRecipientAddress(), key));
+    frame.getEip7928AccessList().ifPresent(t -> t.addSlotAccessForAccount(address, key));
 
     final byte[] valueBytes = value.toArrayUnsafe();
     StackArithmetic.fromBytesAt(s, top, 0, valueBytes, 0, valueBytes.length);
+    warmStorage.fillCurrentValue(entry, value, s[off], s[off + 1], s[off + 2], s[off + 3]);
 
     return slotIsWarm ? warmSuccess : coldSuccess;
   }

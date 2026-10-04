@@ -22,6 +22,7 @@ import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.gascalculator.StateGasCostCalculator;
 import org.hyperledger.besu.evm.gascalculator.StorageTransition;
+import org.hyperledger.besu.evm.internal.WarmStorageTable;
 import org.hyperledger.besu.evm.v2.StackArithmetic;
 
 import java.util.function.Supplier;
@@ -108,6 +109,16 @@ public class SStoreOperationV2 extends AbstractOperationV2 {
     }
 
     final int top = frame.stackTopV2();
+    final int keyOff = (top - 1) << 2;
+    final long key0 = s[keyOff];
+    final long key1 = s[keyOff + 1];
+    final long key2 = s[keyOff + 2];
+    final long key3 = s[keyOff + 3];
+    final int valueOff = (top - 2) << 2;
+    final long value0 = s[valueOff];
+    final long value1 = s[valueOff + 1];
+    final long value2 = s[valueOff + 2];
+    final long value3 = s[valueOff + 3];
 
     // Extract key (depth 0) and new value (depth 1) as raw 32-byte arrays
     final byte[] keyBytes = new byte[32];
@@ -141,7 +152,10 @@ public class SStoreOperationV2 extends AbstractOperationV2 {
     final UInt256 newValue = UInt256.fromBytes(Bytes32.wrap(newValueBytes));
 
     final Address address = account.getAddress();
-    final boolean slotIsWarm = frame.warmUpStorage(address, keyBytes32);
+    final WarmStorageTable warmStorage = frame.getWarmedUpStorage();
+    final int found = warmStorage.warmUp(address, key0, key1, key2, key3);
+    final boolean slotIsWarm = found >= 0;
+    final int entry = slotIsWarm ? found : ~found;
 
     // EIP-8038: the repriced access cost can exceed the EIP-2200 stipend, so the sentry above no
     // longer guarantees the access is affordable. Check before the current-value read below, which
@@ -154,9 +168,9 @@ public class SStoreOperationV2 extends AbstractOperationV2 {
     }
 
     final Supplier<UInt256> currentValueSupplier =
-        Suppliers.memoize(() -> getStorageValue(account, key, frame));
+        Suppliers.memoize(() -> currentValue(warmStorage, entry, account, key, frame));
     final Supplier<UInt256> originalValueSupplier =
-        Suppliers.memoize(() -> account.getOriginalStorageValue(key));
+        Suppliers.memoize(() -> originalValue(warmStorage, entry, account, key));
 
     final long cost =
         gasCalculator.slotAccessCost(newValue, currentValueSupplier, originalValueSupplier)
@@ -191,9 +205,43 @@ public class SStoreOperationV2 extends AbstractOperationV2 {
     frame.incrementRemainingGas(cost);
 
     account.setStorageValue(key, newValue);
+    warmStorage.writeCurrentValue(entry, newValue, value0, value1, value2, value3);
     frame.storageWasUpdated(key, Bytes.wrap(newValueBytes));
     frame.getEip7928AccessList().ifPresent(t -> t.addSlotAccessForAccount(address, key));
 
     return new OperationResult(cost, null);
+  }
+
+  private static UInt256 currentValue(
+      final WarmStorageTable warmStorage,
+      final int entry,
+      final MutableAccount account,
+      final UInt256 key,
+      final MessageFrame frame) {
+    final UInt256 known = warmStorage.currentValue(entry);
+    if (known != null) {
+      frame
+          .getEip7928AccessList()
+          .ifPresent(t -> t.addSlotAccessForAccount(account.getAddress(), key));
+      return known;
+    }
+    final UInt256 value = getStorageValue(account, key, frame);
+    if (value != null) {
+      warmStorage.fillCurrentValue(entry, value);
+    }
+    return value;
+  }
+
+  private static UInt256 originalValue(
+      final WarmStorageTable warmStorage,
+      final int entry,
+      final MutableAccount account,
+      final UInt256 key) {
+    UInt256 value = warmStorage.originalValue(entry);
+    if (value == null) {
+      value = account.getOriginalStorageValue(key);
+      warmStorage.fillOriginalValue(entry, value);
+    }
+    return value;
   }
 }
