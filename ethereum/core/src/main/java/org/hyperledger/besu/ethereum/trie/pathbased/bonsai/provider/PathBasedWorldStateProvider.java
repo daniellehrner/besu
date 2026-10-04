@@ -388,15 +388,14 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
   private boolean moveHeadWithStateWrites(final Hash blockHash) {
     final Optional<BlockHeader> header =
         blockchain.getBlockHeader(blockHash).map(BlockHeader.class::cast);
-    // the writes are over the parent's state, and persisting them saves no trie log of its own
-    if (header.isEmpty()
-        || !header.get().getParentHash().equals(headWorldState.blockHash())
-        || worldStateKeyValueStorage.getTrieLog(blockHash).isEmpty()) {
+    // the writes are over the parent's state
+    if (header.isEmpty() || !header.get().getParentHash().equals(headWorldState.blockHash())) {
       return false;
     }
     final Optional<StateRootComputation> stateWrites =
         worldStateCacheManager.takeStateWrites(blockHash);
-    if (stateWrites.isEmpty()) {
+    // persisting the writes saves no trie log of its own
+    if (stateWrites.isEmpty() || worldStateKeyValueStorage.getTrieLog(blockHash).isEmpty()) {
       return false;
     }
     try {
