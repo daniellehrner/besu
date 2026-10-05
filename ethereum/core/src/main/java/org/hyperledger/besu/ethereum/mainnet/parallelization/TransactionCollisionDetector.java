@@ -88,11 +88,14 @@ public class TransactionCollisionDetector {
     final Set<Address> addressesTouchedByTransaction =
         getAddressesTouchedByTransaction(
             transaction, Optional.of(parallelizedTransactionContext.transactionAccumulator()));
-    if (addressesTouchedByTransaction.contains(miningBeneficiary)) {
-      return true;
-    }
     final PathBasedWorldStateUpdateAccumulator<?> chainPredecessor =
         parallelizedTransactionContext.chainPredecessorAccumulator();
+    // every earlier transaction paid the beneficiary, so a transaction that touched it can only
+    // keep its result by having paid it too, without depending on its balance
+    if (addressesTouchedByTransaction.contains(miningBeneficiary)
+        && (creditedAccounts == null || chainPredecessor != null)) {
+      return true;
+    }
     if (chainPredecessor != null) {
       return hasCollisionWithChainedState(
           addressesTouchedByTransaction,

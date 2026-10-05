@@ -404,7 +404,9 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       // a reverted execution is as repeatable as a successful one when nothing it read changed
       if (!transactionProcessingResult.isInvalid() && !hasCollision) {
         final Wei reward = parallelizedTransactionContext.miningBeneficiaryReward();
-        if (!reward.isZero() || !transactionProcessor.getClearEmptyAccounts()) {
+        // a result that touched the beneficiary before its reward already holds the reward
+        if (!parallelizedTransactionContext.isMiningBeneficiaryTouchedPreRewardByTransaction()
+            && (!reward.isZero() || !transactionProcessor.getClearEmptyAccounts())) {
           final MutableAccount miningBeneficiaryAccount =
               blockAccumulator.getOrCreate(miningBeneficiary);
           miningBeneficiaryAccount.incrementBalance(reward);
