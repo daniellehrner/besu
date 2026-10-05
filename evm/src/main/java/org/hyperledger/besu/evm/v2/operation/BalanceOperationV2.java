@@ -84,6 +84,7 @@ public class BalanceOperationV2 extends AbstractOperationV2 {
       return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
     }
     final Account account = getAccount(address, frame);
+    frame.getWorldUpdater().observeBalance(address);
     // Overwrite in place (pop 1, push 1)
     if (account == null) {
       StackArithmetic.putAt(s, top, 0, UInt256.ZERO);

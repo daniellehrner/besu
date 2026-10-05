@@ -53,6 +53,7 @@ import com.google.common.base.Suppliers;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -80,6 +81,9 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
 
   protected boolean isAccumulatorStateChanged;
 
+  // the balances a speculatively executed transaction depends on, null when not recorded
+  private @Nullable Set<Address> observedBalances;
+
   public PathBasedWorldStateUpdateAccumulator(
       final BonsaiWorldView world,
       final Consumer<BonsaiValue<ACCOUNT>> accountPreloader,
@@ -91,6 +95,30 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
     this.storagePreloader = storagePreloader;
     this.isAccumulatorStateChanged = false;
     this.evmConfiguration = evmConfiguration;
+  }
+
+  /**
+   * Starts recording which balances the transaction executed on this accumulator depends on, so
+   * that a change of any other balance by an earlier transaction does not invalidate it.
+   */
+  public void recordBalanceObservations() {
+    observedBalances = new HashSet<>();
+  }
+
+  /**
+   * The balances the transaction executed on this accumulator depends on.
+   *
+   * @return the accounts, or null if they were not recorded
+   */
+  public @Nullable Set<Address> getObservedBalances() {
+    return observedBalances;
+  }
+
+  @Override
+  public void observeBalance(final Address address) {
+    if (observedBalances != null) {
+      observedBalances.add(address);
+    }
   }
 
   public void cloneFromUpdater(final PathBasedWorldStateUpdateAccumulator<ACCOUNT> source) {

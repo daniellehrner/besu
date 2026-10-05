@@ -277,6 +277,9 @@ public abstract class AbstractCallOperationV2 extends AbstractOperationV2 {
 
     final Account account = getAccount(frame.getRecipientAddress(), frame);
     final Wei balance = account == null ? Wei.ZERO : account.getBalance();
+    if (!transferValue.isZero()) {
+      frame.getWorldUpdater().observeBalance(frame.getRecipientAddress());
+    }
 
     final boolean insufficientBalance = transferValue.compareTo(balance) > 0;
     final boolean isFrameDepthTooDeep = frame.getDepth() >= 1024;

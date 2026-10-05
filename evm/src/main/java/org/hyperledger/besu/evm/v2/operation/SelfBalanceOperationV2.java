@@ -53,6 +53,7 @@ public class SelfBalanceOperationV2 extends AbstractFixedCostOperationV2 {
     if (!frame.stackHasSpaceV2(1)) return OVERFLOW_RESPONSE;
     final int top = frame.stackTopV2();
     final Account account = getAccount(frame.getRecipientAddress(), frame);
+    frame.getWorldUpdater().observeBalance(frame.getRecipientAddress());
     if (account == null) {
       frame.setTopV2(StackArithmetic.pushZero(s, top));
     } else {
