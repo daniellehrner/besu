@@ -435,8 +435,8 @@ class AbstractBlockCreatorTest extends TrustedSetupClassLoaderExtension {
       // the evaluation ignores the interrupt sent at the timeout, but stops before the wait ends
       final CreateOn miningOn =
           blockCreatorWithSlowTransactionSelection(
-              400,
-              550,
+              500,
+              600,
               evaluationRunning,
               blockCreationScheduler,
               () -> closedDuringEvaluation.complete(evaluationRunning.get()));

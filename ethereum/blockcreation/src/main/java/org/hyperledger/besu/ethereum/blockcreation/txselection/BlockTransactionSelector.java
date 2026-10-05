@@ -219,15 +219,6 @@ public class BlockTransactionSelector implements BlockTransactionSelectionServic
     return transactionSelectionResults;
   }
 
-  public void cancel() {
-    isCancelled.set(true);
-    final var selectionTask = currTxSelectionTask;
-    if (selectionTask != null) {
-      selectionTask.cancel(true);
-      LOG.debug("Cancelled transaction selection task");
-    }
-  }
-
   /**
    * Runs the action once no selection task can use the world state anymore, immediately if none is
    * running, otherwise on the selection thread when its task stops.
@@ -240,6 +231,14 @@ public class BlockTransactionSelector implements BlockTransactionSelectionServic
       action.run();
     } else {
       selectionTask.stopped().thenRun(action);
+    }
+  }
+
+  public void cancel() {
+    isCancelled.set(true);
+    if (currTxSelectionTask != null) {
+      currTxSelectionTask.cancel(true);
+      LOG.debug("Cancelled transaction selection task");
     }
   }
 
@@ -278,7 +277,7 @@ public class BlockTransactionSelector implements BlockTransactionSelectionServic
         new ConcurrentHashMap<PendingTransaction, TransactionSelectionResult>(
             candidateTransactions.size());
 
-    final SelectionTask selectionTask =
+    currTxSelectionTask =
         new SelectionTask(
             () -> {
               LOG.atDebug()
@@ -296,13 +295,12 @@ public class BlockTransactionSelector implements BlockTransactionSelectionServic
                 }
               }
             });
-    currTxSelectionTask = selectionTask;
 
     ethScheduler.scheduleBlockCreationTask(
-        blockSelectionContext.pendingBlockHeader().getNumber(), selectionTask);
+        blockSelectionContext.pendingBlockHeader().getNumber(), currTxSelectionTask);
 
     try {
-      selectionTask.get(remainingSelectionTime, TimeUnit.NANOSECONDS);
+      currTxSelectionTask.get(remainingSelectionTime, TimeUnit.NANOSECONDS);
     } catch (ExecutionException e) {
       LOG.warn("Error during block transaction selection", e);
       // force rollback
@@ -322,7 +320,7 @@ public class BlockTransactionSelector implements BlockTransactionSelectionServic
       }
 
       // a transaction still evaluating can no longer be included, so it is interrupted now
-      selectionTask.cancel(true);
+      currTxSelectionTask.cancel(true);
 
       LOG.warn(
           "Interrupting the internal selection of transactions for block inclusion as it exceeds"
@@ -330,7 +328,7 @@ public class BlockTransactionSelector implements BlockTransactionSelectionServic
           nanosToMillis(remainingSelectionTime));
     }
 
-    awaitSelectionTaskStopped("Internal", selectionTask);
+    awaitSelectionTaskStopped("Internal", currTxSelectionTask);
 
     return selectionResults;
   }
@@ -340,7 +338,7 @@ public class BlockTransactionSelector implements BlockTransactionSelectionServic
     validTxSelectionTimeoutResult = PLUGIN_SELECTION_TIMEOUT;
     invalidTxSelectionTimeoutResult = PLUGIN_SELECTION_TIMEOUT_INVALID_TX;
 
-    final SelectionTask selectionTask =
+    currTxSelectionTask =
         new SelectionTask(
             () -> {
               LOG.atDebug()
@@ -350,13 +348,12 @@ public class BlockTransactionSelector implements BlockTransactionSelectionServic
               transactionSelectionService.selectPendingTransactions(
                   this, blockSelectionContext.pendingBlockHeader(), candidatePendingTransactions);
             });
-    currTxSelectionTask = selectionTask;
 
     ethScheduler.scheduleBlockCreationTask(
-        blockSelectionContext.pendingBlockHeader().getNumber(), selectionTask);
+        blockSelectionContext.pendingBlockHeader().getNumber(), currTxSelectionTask);
 
     try {
-      selectionTask.get(pluginTxsSelectionMaxTimeNanos, TimeUnit.NANOSECONDS);
+      currTxSelectionTask.get(pluginTxsSelectionMaxTimeNanos, TimeUnit.NANOSECONDS);
     } catch (ExecutionException e) {
       LOG.error("Unhandled exception during plugin transaction selection", e);
       // force a rollback
@@ -373,7 +370,7 @@ public class BlockTransactionSelector implements BlockTransactionSelectionServic
       }
 
       // cancelling the task and interrupting the thread running it
-      selectionTask.cancel(true);
+      currTxSelectionTask.cancel(true);
       LOG.warn(
           "Interrupting the plugin selection of transactions for block inclusion after {}ms,"
               + " as it exceeds the maximum configured duration of {}ms",
@@ -381,7 +378,7 @@ public class BlockTransactionSelector implements BlockTransactionSelectionServic
           nanosToMillis(pluginTxsSelectionMaxTimeNanos));
     }
 
-    awaitSelectionTaskStopped("Plugin", selectionTask);
+    awaitSelectionTaskStopped("Plugin", currTxSelectionTask);
   }
 
   /**
