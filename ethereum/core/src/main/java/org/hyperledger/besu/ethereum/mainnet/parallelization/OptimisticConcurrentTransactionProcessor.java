@@ -393,7 +393,8 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       final boolean hasCollision =
           transactionCollisionDetector.hasCollision(
               transaction, miningBeneficiary, parallelizedTransactionContext, blockAccumulator);
-      if (transactionProcessingResult.isSuccessful() && !hasCollision) {
+      // a reverted execution is as repeatable as a successful one when nothing it read changed
+      if (!transactionProcessingResult.isInvalid() && !hasCollision) {
         final Wei reward = parallelizedTransactionContext.miningBeneficiaryReward();
         if (!reward.isZero() || !transactionProcessor.getClearEmptyAccounts()) {
           final MutableAccount miningBeneficiaryAccount =

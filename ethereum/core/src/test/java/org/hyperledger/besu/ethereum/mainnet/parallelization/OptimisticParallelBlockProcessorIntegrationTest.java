@@ -20,6 +20,7 @@ import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBloc
 import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBlockProcessorTestSupport.ACCOUNT_6;
 import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBlockProcessorTestSupport.ACCOUNT_GENESIS_1;
 import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBlockProcessorTestSupport.ACCOUNT_GENESIS_1_KEYPAIR;
+import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBlockProcessorTestSupport.ACCOUNT_GENESIS_2;
 import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBlockProcessorTestSupport.ACCOUNT_GENESIS_2_KEYPAIR;
 import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBlockProcessorTestSupport.CONTRACT_ADDRESS;
 import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBlockProcessorTestSupport.PARALLEL_TEST_CONTRACT;
@@ -140,8 +141,8 @@ class OptimisticParallelBlockProcessorIntegrationTest {
   }
 
   @Nested
-  @DisplayName("Same-Sender Chains")
-  class SameSenderChains extends AbstractParallelBlockProcessorIntegrationTest {
+  @DisplayName("Reuse of Speculative Results")
+  class SpeculativeResultReuse extends AbstractParallelBlockProcessorIntegrationTest {
     private final Address sender = Address.fromHexStringStrict(ACCOUNT_GENESIS_1);
 
     @Override
@@ -215,6 +216,28 @@ class OptimisticParallelBlockProcessorIntegrationTest {
             result.seqWorldState(), result.parWorldState(), contract, slot);
       }
       assertThat(result.parResult().getNbParallelizedTransactions()).contains(3);
+    }
+
+    @Test
+    @DisplayName("A reverted transaction keeps its speculative result")
+    void revertedTransactionIsReused() {
+      final Address contract = Address.fromHexStringStrict(CONTRACT_ADDRESS);
+      final ComparisonResult result =
+          executeAndCompare(
+              Wei.of(5),
+              createContractCallTransaction(
+                  0, contract, "setSlot1", ACCOUNT_GENESIS_1_KEYPAIR, Optional.of(100)),
+              createContractCallTransaction(
+                  0, contract, "noSuchMethod", ACCOUNT_GENESIS_2_KEYPAIR, Optional.empty()));
+
+      assertThat(result.seqResult().getYield().orElseThrow().getReceipts().get(1).getStatus())
+          .as("the call of a missing method reverts")
+          .isZero();
+      assertAccountsMatch(
+          result.seqWorldState(),
+          result.parWorldState(),
+          Address.fromHexStringStrict(ACCOUNT_GENESIS_2));
+      assertThat(result.parResult().getNbParallelizedTransactions()).contains(2);
     }
 
     @Test
