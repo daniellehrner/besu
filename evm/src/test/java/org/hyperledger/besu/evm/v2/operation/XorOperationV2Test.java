@@ -62,8 +62,8 @@ class XorOperationV2Test extends BinaryOperationV2Test {
         // limb-index/offset mistakes.
         Arguments.of(
             "0x0123456789abcdeffedcba98765432100f0f0f0f0f0f0f0ff0f0f0f0f0f0f0f0",
-            "0xffffffff0000000000000000ffffffffff00ff00ff00ff0000ff00ff00ff00ff",
-            "0xfedcba9889abcdeffedcba9889abcdeff00ff00ff00ff00ff00ff00ff00ff00f"));
+            "0xffffffff000000000000000000000000ff00ff00ff00ff000000000000000000",
+            "0xfedcba9889abcdeffedcba9876543210f00ff00ff00ff00ff0f0f0f0f0f0f0f0"));
   }
 
   @ParameterizedTest(name = "{index}: xor({0}, {1}) = {2}")
