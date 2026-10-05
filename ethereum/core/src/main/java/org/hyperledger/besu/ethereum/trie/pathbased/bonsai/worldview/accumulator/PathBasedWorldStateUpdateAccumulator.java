@@ -621,8 +621,17 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
           Suppliers.memoize(() -> wrappedWorldView().getCode(address, codeHash).orElse(null));
       final BonsaiValue<Bytes> codeValue = BonsaiValue.withLazy(loader, loader);
       onCodeValueLoaded(address, codeValue);
+      final Bytes code = codeValue.getUpdated();
+      if (code == null && !Hash.EMPTY.equals(codeHash)) {
+        // a storage fault, not empty code; left unrecorded so a retry reads the code again
+        throw new MerkleTrieException(
+            "invalid account code",
+            Optional.of(address),
+            Bytes32.wrap(codeHash.getBytes()),
+            Bytes.EMPTY);
+      }
       codeToUpdate.put(address, codeValue);
-      return Optional.ofNullable(codeValue.getUpdated());
+      return Optional.ofNullable(code);
     } else {
       return Optional.ofNullable(localCode.getUpdated());
     }

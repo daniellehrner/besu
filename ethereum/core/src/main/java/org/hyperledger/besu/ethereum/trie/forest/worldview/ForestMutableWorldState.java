@@ -22,6 +22,7 @@ import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPException;
 import org.hyperledger.besu.ethereum.rlp.RLPInput;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
+import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.forest.storage.ForestWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.patricia.StoredMerklePatriciaTrie;
@@ -296,7 +297,16 @@ public class ForestMutableWorldState implements MutableWorldState {
       if (codeHash.equals(Hash.EMPTY)) {
         return Bytes.EMPTY;
       }
-      return worldStateKeyValueStorage.getCode(codeHash).orElse(Bytes.EMPTY);
+      // a storage fault, not empty code, so it must not run
+      return worldStateKeyValueStorage
+          .getCode(codeHash)
+          .orElseThrow(
+              () ->
+                  new MerkleTrieException(
+                      "invalid account code",
+                      Optional.of(address),
+                      Bytes32.wrap(codeHash.getBytes()),
+                      Bytes.EMPTY));
     }
 
     @Override
