@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.mainnet.parallelization;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
+import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.account.BonsaiAccount;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiValue;
@@ -66,17 +67,18 @@ public class TransactionCollisionDetector {
   /**
    * Like {@link #hasCollision(Transaction, Address, ParallelizedTransactionContext,
    * PathBasedWorldStateUpdateAccumulator)}, except that an account of which earlier transactions
-   * changed only the balance, while this transaction neither depended on that balance nor saw the
-   * account empty, is no collision. Such accounts are added to {@code creditedAccounts}: taking the
-   * result over must then carry the transaction's credit onto the balance the block has reached.
+   * changed only the balance, while this transaction did not depend on that balance beyond it
+   * sufficing for what the transaction spent and did not see the account empty, is no collision.
+   * Such accounts are added to {@code creditedAccounts}: taking the result over must then carry the
+   * transaction's balance change onto the balance the block has reached.
    *
    * @param transaction The transaction to check for conflicts with the block's state.
    * @param miningBeneficiary The beneficiary of the block's rewards.
    * @param parallelizedTransactionContext The context for the parallelized execution of the
    *     transaction.
    * @param blockAccumulator The accumulator containing the state updates of the current block.
-   * @param creditedAccounts receives the accounts whose credit must be carried over, or null to
-   *     treat every balance change as a collision
+   * @param creditedAccounts receives the accounts whose balance change must be carried over, or
+   *     null to treat every balance change as a collision
    * @return true if there is a conflict between the transaction and the block's state
    */
   public boolean hasCollision(
@@ -113,7 +115,7 @@ public class TransactionCollisionDetector {
       }
       if (!areAccountDetailsEqualExcludingStorage(inBlock.getPrior(), inBlock.getUpdated())) {
         if (creditedAccounts == null
-            || !isOnlyCredited(transaction, transactionAccumulator, next, inBlock)) {
+            || !isBalanceChangeCarried(transaction, transactionAccumulator, next, inBlock)) {
           return true;
         }
         creditedAccounts.add(next);
@@ -138,11 +140,12 @@ public class TransactionCollisionDetector {
 
   /**
    * Whether earlier transactions changed only the balance of an account whose balance the
-   * transaction neither read nor spent from, so it ends the same on the balance the block has
-   * reached. Emptiness depends on the balance and decides call costs and state clearing, so an
-   * account empty on either side does not qualify.
+   * transaction did not read, and spent from only while it sufficed by a margin the block's balance
+   * keeps, so the transaction ends the same on the balance the block has reached. Emptiness depends
+   * on the balance and decides call costs and state clearing, so an account empty on either side
+   * does not qualify.
    */
-  private static boolean isOnlyCredited(
+  private static boolean isBalanceChangeCarried(
       final Transaction transaction,
       final PathBasedWorldStateUpdateAccumulator<?> transactionAccumulator,
       final Address address,
@@ -162,16 +165,21 @@ public class TransactionCollisionDetector {
         || blockUpdated == null
         || inTransaction == null
         || inTransaction.getPrior() == null
-        || inTransaction.getUpdated() == null) {
+        || inTransaction.getUpdated() == null
+        || blockPrior.getNonce() != blockUpdated.getNonce()
+        || !blockPrior.getCodeHash().equals(blockUpdated.getCodeHash())
+        || blockPrior.isEmpty()
+        || blockUpdated.isEmpty()
+        || inTransaction.getUpdated().isEmpty()) {
       return false;
     }
-    return blockPrior.getNonce() == blockUpdated.getNonce()
-        && blockPrior.getCodeHash().equals(blockUpdated.getCodeHash())
-        && !blockPrior.isEmpty()
-        && !blockUpdated.isEmpty()
-        && !inTransaction.getUpdated().isEmpty()
-        && inTransaction.getUpdated().getBalance().compareTo(inTransaction.getPrior().getBalance())
-            >= 0;
+    final Wei startingBalance = inTransaction.getPrior().getBalance();
+    return transactionAccumulator
+        .getBalanceMargin(address)
+        // every spending found the balance sufficient by at least the margin
+        .map(margin -> blockUpdated.getBalance().add(margin).compareTo(startingBalance) >= 0)
+        // without spending, only a credit can be carried over
+        .orElseGet(() -> inTransaction.getUpdated().getBalance().compareTo(startingBalance) >= 0);
   }
 
   /**

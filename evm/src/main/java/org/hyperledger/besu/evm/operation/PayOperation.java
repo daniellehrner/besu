@@ -75,7 +75,9 @@ public class PayOperation extends AbstractOperation {
     }
 
     final MutableAccount senderAccount = getSenderAccount(frame);
-    frame.getWorldUpdater().observeBalance(senderAccount.getAddress());
+    frame
+        .getWorldUpdater()
+        .observeSpending(senderAccount.getAddress(), senderAccount.getBalance(), value);
     if (value.compareTo(senderAccount.getBalance()) > 0) {
       frame.popStackItems(getStackItemsConsumed());
       frame.pushStackItem(LEGACY_FAILURE_STACK_ITEM);

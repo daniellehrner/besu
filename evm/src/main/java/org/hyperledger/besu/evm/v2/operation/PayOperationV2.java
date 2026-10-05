@@ -93,7 +93,9 @@ public class PayOperationV2 extends AbstractOperationV2 {
 
     final MutableAccount senderAccount =
         frame.getWorldUpdater().getOrCreate(frame.getSenderAddress());
-    frame.getWorldUpdater().observeBalance(frame.getSenderAddress());
+    frame
+        .getWorldUpdater()
+        .observeSpending(frame.getSenderAddress(), senderAccount.getBalance(), value);
     if (value.compareTo(senderAccount.getBalance()) > 0) {
       StackArithmetic.putAt(s, top, 1, 0, 0, 0, 0);
       frame.setTopV2(top - 1);
