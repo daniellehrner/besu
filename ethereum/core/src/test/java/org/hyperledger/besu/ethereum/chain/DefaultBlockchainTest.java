@@ -21,7 +21,9 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockDataGenerator;
 import org.hyperledger.besu.ethereum.core.BlockDataGenerator.BlockOptions;
@@ -35,6 +37,7 @@ import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
 import org.hyperledger.besu.ethereum.mainnet.DefaultProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
+import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPInput;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
@@ -1091,6 +1094,40 @@ public class DefaultBlockchainTest {
     assertThat(blockchain.getTotalDifficultyCache().get().size()).isEqualTo(1);
     assertThat(blockchain.getTotalDifficultyCache().get().getIfPresent(newBlock.getHash()))
         .isEqualTo(newBlock.getHeader().getDifficulty());
+  }
+
+  @Test
+  public void blockAccessListIsReadFromStorageWhenBlocksAreCached() {
+    final BlockDataGenerator gen = new BlockDataGenerator();
+    final Block genesisBlock = gen.genesisBlock();
+    final DefaultBlockchain blockchain =
+        createMutableBlockchain(
+            new InMemoryKeyValueStorage(),
+            new InMemoryKeyValueStorage(),
+            genesisBlock,
+            "/data/test",
+            512,
+            0);
+    final Block newBlock =
+        gen.block(new BlockOptions().setBlockNumber(1L).setParentHash(genesisBlock.getHash()));
+    final BlockAccessList builtBlockAccessList =
+        new BlockAccessList(
+            List.of(
+                new BlockAccessList.AccountChanges(
+                    Address.fromHexString("0x1000000000000000000000000000000000000001"),
+                    List.of(),
+                    List.of(),
+                    List.of(new BlockAccessList.BalanceChange(1, Wei.ONE)),
+                    List.of(),
+                    List.of())));
+
+    blockchain.appendBlock(newBlock, gen.receipts(newBlock), Optional.of(builtBlockAccessList));
+
+    final Optional<BlockAccessList> blockAccessList =
+        blockchain.getBlockAccessList(newBlock.getHash());
+    assertThat(blockAccessList).contains(builtBlockAccessList);
+    // peers are served the stored RLP, so it has to come with the list
+    assertThat(blockAccessList.get().rawRlp()).isPresent();
   }
 
   @Test
