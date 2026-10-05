@@ -908,6 +908,42 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
   }
 
   @Test
+  public void shouldUseExtraDataFromMiningParameters() {
+    final Bytes extraData = Bytes.fromHexString("0x1234");
+
+    miningConfiguration =
+        ImmutableMiningConfiguration.builder()
+            .mutableInitValues(MutableInitValues.builder().extraData(extraData).build())
+            .build();
+
+    this.coordinator =
+        new MergeCoordinator(
+            protocolContext,
+            protocolSchedule,
+            ethScheduler,
+            transactionPool,
+            miningConfiguration,
+            backwardSyncContext);
+
+    final PayloadIdentifier payloadId =
+        this.coordinator.preparePayload(
+            new PreparePayloadArgsBuilder()
+                .parentHeader(genesisState.getBlock().getHeader())
+                .timestamp(1L)
+                .prevRandao(Bytes32.ZERO)
+                .feeRecipient(suggestedFeeRecipient)
+                .build());
+
+    ArgumentCaptor<PayloadWrapper> payloadWrapper = ArgumentCaptor.forClass(PayloadWrapper.class);
+
+    verify(mergeContext, atLeastOnce()).putPayloadById(payloadWrapper.capture());
+
+    assertThat(payloadWrapper.getValue().payloadIdentifier()).isEqualTo(payloadId);
+    assertThat(payloadWrapper.getValue().blockWithReceipts().getHeader().getExtraData())
+        .isEqualTo(extraData);
+  }
+
+  @Test
   public void firstBlockWithTransactionsIsStoredBeforeTheConfiguredSelectionTimeIsOver()
       throws Exception {
     final Duration configuredSelectionMaxTime = Duration.ofSeconds(60);
@@ -1002,42 +1038,6 @@ public class MergeCoordinatorTest implements MergeGenesisConfigHelper {
           }
         });
     return transactionSelectionService;
-  }
-
-  @Test
-  public void shouldUseExtraDataFromMiningParameters() {
-    final Bytes extraData = Bytes.fromHexString("0x1234");
-
-    miningConfiguration =
-        ImmutableMiningConfiguration.builder()
-            .mutableInitValues(MutableInitValues.builder().extraData(extraData).build())
-            .build();
-
-    this.coordinator =
-        new MergeCoordinator(
-            protocolContext,
-            protocolSchedule,
-            ethScheduler,
-            transactionPool,
-            miningConfiguration,
-            backwardSyncContext);
-
-    final PayloadIdentifier payloadId =
-        this.coordinator.preparePayload(
-            new PreparePayloadArgsBuilder()
-                .parentHeader(genesisState.getBlock().getHeader())
-                .timestamp(1L)
-                .prevRandao(Bytes32.ZERO)
-                .feeRecipient(suggestedFeeRecipient)
-                .build());
-
-    ArgumentCaptor<PayloadWrapper> payloadWrapper = ArgumentCaptor.forClass(PayloadWrapper.class);
-
-    verify(mergeContext, atLeastOnce()).putPayloadById(payloadWrapper.capture());
-
-    assertThat(payloadWrapper.getValue().payloadIdentifier()).isEqualTo(payloadId);
-    assertThat(payloadWrapper.getValue().blockWithReceipts().getHeader().getExtraData())
-        .isEqualTo(extraData);
   }
 
   @Test
