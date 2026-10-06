@@ -29,7 +29,9 @@
 ### Bug fixes
 - `eth_simulateV1` blocks after Amsterdam now carry `slotNumber` (the parent's plus one), a block access list that includes the system calls, and a header `gasUsed` that follows EIP-8037, as real blocks do. Previously `slotNumber` was missing, and the block hash differed from other clients. [#11394](https://github.com/besu-eth/besu/pull/11394)
 - `eth_simulateV1` now returns `-38014` when a call's value exceeds the sender balance. It returned `-32603`. [#11394](https://github.com/besu-eth/besu/pull/11394)
+- Publish the chain head only after sync block bodies and receipts are committed, so readers cannot observe a head absent from storage. [#10842](https://github.com/besu-eth/besu/pull/10842)
 - Transaction objects returned by `eth_getTransactionBy*`, `eth_getBlockBy*` with full transactions, `eth_simulateV1` and the `txpool` methods now carry `"to": null` for a contract creation instead of omitting the field, as other clients do and the execution-apis schema describes. [#11434](https://github.com/besu-eth/besu/pull/11434)
+- `debug_traceCall` now accepts a block hash as its block parameter, as execution-apis specifies. A hash was rejected with `-32602 Invalid block param`; an unknown hash now returns `-32000 Block not found`, as an unknown block number does. [#11433](https://github.com/besu-eth/besu/pull/11433)
 - A contract created from within a system call now gets its initial nonce and deployed code. `SystemCallProcessor` ran every frame with the message-call processor, so a `CREATE` in a system call's code, reachable when a system contract's code is replaced on a custom or test chain, left the new account with nonce 0 and ran its initcode without deploying anything.
 - Block access lists now record the net change of the withdrawals and the system calls that share the post-execution index, measured from the state at the start of that index, and include writes made in a system call's own frame. When replaced system contract code changed a value across calls, or changed it twice, each call was diffed against the one before it, giving extra or duplicate entries.
 - `BlobCache.restoreBlob` now reports that a blob transaction cannot be restored instead of throwing `NullPointerException` when any of its blobs is no longer cached.
@@ -41,6 +43,7 @@
 - `trace_callMany` now answers a bundle with an invalid call with a JSON-RPC error. Previously it returned the complete error response (`{"jsonrpc":"2.0","id":1,"error":{...}}`) as the `result` of a successful response. An unavailable world state now returns `World state unavailable` instead of a `null` result. [#11401](https://github.com/besu-eth/besu/pull/11401)
 - `txpool_besuPendingTransactions`: the `gasPrice` filter no longer fails on EIP-1559 transactions, and a negative `limit` is rejected as an invalid parameter. [#11374](https://github.com/besu-eth/besu/pull/11374)
 - `engine_getPayload` no longer waits up to 500ms before returning an empty block when no block is being built. [#11426](https://github.com/besu-eth/besu/pull/11426)
+- GraphQL `sendRawTransaction` accepts typed transactions in their standard encoding (`type || rlp(payload)`), as `eth_sendRawTransaction` does. It decoded the data as a block body transaction, so an EIP-1559 transaction was rejected with `-32602 Invalid params`. [#11444](https://github.com/besu-eth/besu/pull/11444)
 
 ### Additions and Improvements
 - Update `Bouncycastle` to 1.85 to address CVEs `CVE-2026-8763` and `CVE-2026-13506`. [#11336](https://github.com/besu-eth/besu/pull/11336)
