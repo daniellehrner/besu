@@ -17,7 +17,6 @@ package org.hyperledger.besu.evm.v2.operation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.evm.v2.testutils.TestMessageFrameBuilderV2.getV2StackItem;
 
-import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.internal.OverflowException;
@@ -36,7 +35,6 @@ import java.util.function.Function;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
-import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -73,7 +71,6 @@ class StackOperationsV2ComparisonTest {
   void dupMatchesOriginal(final int n, final int depth) {
     assertMatches(
         depth,
-        new byte[] {(byte) (DupOperationV2.DUP_BASE + n)},
         frame -> DupOperation.staticOperation(frame, n),
         frame -> DupOperationV2.staticOperation(frame, n));
   }
@@ -83,7 +80,6 @@ class StackOperationsV2ComparisonTest {
   void swapMatchesOriginal(final int n, final int depth) {
     assertMatches(
         depth,
-        new byte[] {(byte) (SwapOperationV2.SWAP_BASE + n)},
         frame -> SwapOperation.staticOperation(frame, n),
         frame -> SwapOperationV2.staticOperation(frame, n));
   }
@@ -106,15 +102,12 @@ class StackOperationsV2ComparisonTest {
    */
   private static void assertMatches(
       final int depth,
-      final byte[] code,
       final Function<MessageFrame, Operation.OperationResult> original,
       final Function<MessageFrame, Operation.OperationResult> v2) {
     final List<Bytes32> items = items(depth);
 
-    final TestMessageFrameBuilder v1Builder =
-        new TestMessageFrameBuilder().code(new Code(Bytes.wrap(code)));
-    final TestMessageFrameBuilderV2 v2Builder =
-        new TestMessageFrameBuilderV2().code(new Code(Bytes.wrap(code)));
+    final TestMessageFrameBuilder v1Builder = new TestMessageFrameBuilder();
+    final TestMessageFrameBuilderV2 v2Builder = new TestMessageFrameBuilderV2();
     items.forEach(
         item -> {
           v1Builder.pushStackItem(item);
@@ -136,16 +129,17 @@ class StackOperationsV2ComparisonTest {
     final Operation.OperationResult v2Result = v2.apply(v2Frame);
 
     assertThat(v2Result.getHaltReason()).isEqualTo(v1Halt);
-    // The original DUP and SWAP signal stack errors by exception, so only returned results carry
-    // a gas cost and PC increment to compare.
     if (v1Result != null) {
       assertThat(v2Result.getGasCost()).isEqualTo(v1Result.getGasCost());
       assertThat(v2Result.getPcIncrement()).isEqualTo(v1Result.getPcIncrement());
+    } else {
+      // The original signals stack errors by exception, which the v1 loop answers with 0 gas.
+      assertThat(v2Result.getGasCost()).isZero();
     }
     assertThat(v2Stack(v2Frame)).isEqualTo(v1Stack(v1Frame));
   }
 
-  /** Distinct items whose four limbs all differ, so any misplaced limb is detected. */
+  /** Random items, so any misplaced item or limb is detected. */
   private static List<Bytes32> items(final int depth) {
     final Random random = new Random(depth);
     final List<Bytes32> items = new ArrayList<>(depth);

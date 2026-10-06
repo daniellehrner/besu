@@ -34,9 +34,7 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.BenchmarkParams;
 import org.openjdk.jmh.infra.Blackhole;
 
-/**
- * JMH benchmark for the SWAP1-16 operation, which exchanges the top with the item at depth n + 1.
- */
+/** JMH benchmark for the SWAP1-16 operation, which exchanges the top with the (n+1)-th item. */
 @State(Scope.Thread)
 @Warmup(iterations = 3, time = 1, timeUnit = TimeUnit.SECONDS)
 @OutputTimeUnit(value = TimeUnit.NANOSECONDS)

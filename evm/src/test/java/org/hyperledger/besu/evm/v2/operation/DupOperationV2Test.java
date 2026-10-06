@@ -17,15 +17,11 @@ package org.hyperledger.besu.evm.v2.operation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.evm.v2.testutils.TestMessageFrameBuilderV2.getV2StackItem;
 
-import org.hyperledger.besu.evm.UInt256;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.FrontierGasCalculator;
-import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
-import org.hyperledger.besu.evm.v2.testutils.TestMessageFrameBuilderV2;
 
-import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -34,8 +30,16 @@ import org.junit.jupiter.params.provider.ValueSource;
  * Structural tests for DUP1-16. Equivalence with the original implementation at every index and at
  * the stack limits is covered by StackOperationsV2ComparisonTest.
  */
-class DupOperationV2Test {
-  private final GasCalculator gasCalculator = new FrontierGasCalculator();
+class DupOperationV2Test extends StackManipulationOperationV2Test {
+
+  public DupOperationV2Test() {
+    super(n -> new DupOperationV2(n, new FrontierGasCalculator()));
+  }
+
+  @Override
+  protected int itemsNeeded(final int n) {
+    return n;
+  }
 
   /** DUPn copies the item at depth n to the top; all other items stay in place. */
   @ParameterizedTest(name = "DUP{0}")
@@ -43,7 +47,7 @@ class DupOperationV2Test {
   void dupOperation(final int n) {
     final MessageFrame frame = frameWithItems(17);
 
-    final Operation.OperationResult result = DupOperationV2.staticOperation(frame, n);
+    final Operation.OperationResult result = operation(n).execute(frame, null);
 
     assertThat(result.getHaltReason()).isNull();
     assertThat(result.getPcIncrement()).isEqualTo(1);
@@ -54,60 +58,14 @@ class DupOperationV2Test {
     }
   }
 
-  @ParameterizedTest(name = "DUP{0}")
-  @ValueSource(ints = {1, 2, 15, 16})
-  void shouldHaltOnStackUnderflow(final int n) {
-    final MessageFrame frame = frameWithItems(n - 1);
-
-    final Operation.OperationResult result = DupOperationV2.staticOperation(frame, n);
-
-    assertThat(result.getHaltReason()).isEqualTo(ExceptionalHaltReason.INSUFFICIENT_STACK_ITEMS);
-    assertThat(frame.stackTopV2()).isEqualTo(n - 1);
-  }
-
   @Test
   void shouldHaltOnStackOverflow() {
     final MessageFrame frame = frameWithItems(16);
     frame.setTopV2(MessageFrame.DEFAULT_MAX_STACK_SIZE);
 
-    final Operation.OperationResult result = DupOperationV2.staticOperation(frame, 16);
+    final Operation.OperationResult result = operation(16).execute(frame, null);
 
     assertThat(result.getHaltReason()).isEqualTo(ExceptionalHaltReason.TOO_MANY_STACK_ITEMS);
     assertThat(frame.stackTopV2()).isEqualTo(MessageFrame.DEFAULT_MAX_STACK_SIZE);
-  }
-
-  @Test
-  void shouldHaltOnInsufficientGas() {
-    final MessageFrame frame = new TestMessageFrameBuilderV2().initialGas(1).build();
-    frame.setTopV2(17);
-
-    final Operation.OperationResult result =
-        new DupOperationV2(16, gasCalculator).execute(frame, null);
-
-    assertThat(result.getHaltReason()).isEqualTo(ExceptionalHaltReason.INSUFFICIENT_GAS);
-    assertThat(frame.stackTopV2()).isEqualTo(17);
-  }
-
-  @Test
-  void gasCostIsVeryLowTier() {
-    final Operation.OperationResult result =
-        new DupOperationV2(1, gasCalculator).execute(frameWithItems(17), null);
-
-    assertThat(result.getGasCost()).isEqualTo(gasCalculator.getVeryLowTierGasCost());
-  }
-
-  /** A frame whose item at depth k (1 = top) is word(k). */
-  private static MessageFrame frameWithItems(final int count) {
-    final TestMessageFrameBuilderV2 builder = new TestMessageFrameBuilderV2();
-    for (int depth = count; depth >= 1; depth--) {
-      builder.pushStackItem(Bytes32.wrap(word(depth).toBytesBE()));
-    }
-    return builder.build();
-  }
-
-  /** A value with four distinct limbs, so any misplaced limb is detected. */
-  private static UInt256 word(final int depth) {
-    final long tag = (long) depth << 32;
-    return new UInt256(tag | 0xa, tag | 0xb, tag | 0xc, tag | 0xd);
   }
 }

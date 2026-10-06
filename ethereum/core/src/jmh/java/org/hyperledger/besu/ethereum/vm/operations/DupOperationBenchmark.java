@@ -34,7 +34,7 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.BenchmarkParams;
 import org.openjdk.jmh.infra.Blackhole;
 
-/** JMH benchmark for the DUP1-16 operation, which duplicates the item at depth n. */
+/** JMH benchmark for the DUP1-16 operation, which duplicates the n-th item onto the top. */
 @State(Scope.Thread)
 @Warmup(iterations = 3, time = 1, timeUnit = TimeUnit.SECONDS)
 @OutputTimeUnit(value = TimeUnit.NANOSECONDS)

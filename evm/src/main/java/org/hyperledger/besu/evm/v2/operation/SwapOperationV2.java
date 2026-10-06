@@ -37,7 +37,7 @@ public class SwapOperationV2 extends AbstractFixedCostOperationV2 {
   /**
    * Instantiates a new Swap operation.
    *
-   * @param index the depth of the item swapped with the top, 1-16
+   * @param index the n of SWAPn, 1-16; the top is exchanged with the item at depth n + 1
    * @param gasCalculator the gas calculator
    */
   public SwapOperationV2(final int index, final GasCalculator gasCalculator) {
@@ -62,7 +62,7 @@ public class SwapOperationV2 extends AbstractFixedCostOperationV2 {
    * <p>SWAPn: exchange stack[top-1] and stack[top-1-n], top unchanged.
    *
    * @param frame the message frame
-   * @param index the depth of the item swapped with the top, 1 for the item below the top
+   * @param index the n of SWAPn; the top is exchanged with the item at depth n + 1
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame, final int index) {
