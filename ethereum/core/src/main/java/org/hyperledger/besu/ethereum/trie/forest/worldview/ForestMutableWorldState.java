@@ -297,16 +297,10 @@ public class ForestMutableWorldState implements MutableWorldState {
       if (codeHash.equals(Hash.EMPTY)) {
         return Bytes.EMPTY;
       }
-      // a storage fault, not empty code, so it must not run
-      return worldStateKeyValueStorage
-          .getCode(codeHash)
-          .orElseThrow(
-              () ->
-                  new MerkleTrieException(
-                      "invalid account code",
-                      Optional.of(address),
-                      Bytes32.wrap(codeHash.getBytes()),
-                      Bytes.EMPTY));
+      final Optional<Bytes> code = worldStateKeyValueStorage.getCode(codeHash);
+      // a storage fault, not empty code; asserted so that nodes without -ea skip the check
+      assert MerkleTrieException.checkCodeFound(address, codeHash, code.isPresent());
+      return code.orElse(Bytes.EMPTY);
     }
 
     @Override
