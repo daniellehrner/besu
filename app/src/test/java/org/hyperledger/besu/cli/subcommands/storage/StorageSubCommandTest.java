@@ -26,10 +26,13 @@ import static org.hyperledger.besu.ethereum.core.VariablesStorageHelper.populate
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.BLOCKCHAIN;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.CODE_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.VARIABLES;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.cli.CommandTestAbstract;
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.core.VersionMetadata;
 import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.code.CodeStorageMigration;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.code.JumpDestCodeStorageStrategy;
@@ -92,6 +95,7 @@ public class StorageSubCommandTest extends CommandTestAbstract {
     CodeStorageMigration.migrate(codeStorage);
     new DatabaseMetadata(BaseVersionedStorageFormat.BONSAI_WITH_JUMPDEST_ANALYSIS)
         .writeToDirectory(dataDir);
+    new VersionMetadata("99.1.0").writeToDirectory(dataDir);
 
     parseCommand("--data-path", dataDir.toString(), "storage", "revert-code-format");
 
@@ -100,6 +104,52 @@ public class StorageSubCommandTest extends CommandTestAbstract {
     assertThat(codeStorage.get(CODE_STORAGE, JumpDestCodeStorageStrategy.MARKER_KEY)).isEmpty();
     assertThat(DatabaseMetadata.lookUpFrom(dataDir).getVersionedStorageFormat())
         .isEqualTo(BaseVersionedStorageFormat.BONSAI_WITH_RECEIPT_COMPACTION);
+    assertThat(dataDir.resolve("VERSION_METADATA.json")).doesNotExist();
+  }
+
+  @Test
+  public void revertCodeFormatFailsWithoutADatabase(@TempDir final Path dataDir) {
+    parseCommand("--data-path", dataDir.toString(), "storage", "revert-code-format");
+
+    assertThat(commandErrorOutput.toString(UTF_8)).contains("No database in " + dataDir);
+    verify(mockControllerBuilder, never()).build();
+    assertThat(dataDir.resolve("DATABASE_METADATA.json")).doesNotExist();
+  }
+
+  @Test
+  public void revertCodeFormatLeavesAnAlreadyRevertedDatabaseAlone(@TempDir final Path dataDir)
+      throws IOException {
+    new DatabaseMetadata(BaseVersionedStorageFormat.BONSAI_WITH_RECEIPT_COMPACTION)
+        .writeToDirectory(dataDir);
+    new VersionMetadata("99.1.0").writeToDirectory(dataDir);
+
+    parseCommand("--data-path", dataDir.toString(), "storage", "revert-code-format");
+
+    assertThat(commandErrorOutput.toString(UTF_8)).isEmpty();
+    verify(mockControllerBuilder, never()).build();
+    assertThat(DatabaseMetadata.lookUpFrom(dataDir).getVersionedStorageFormat())
+        .isEqualTo(BaseVersionedStorageFormat.BONSAI_WITH_RECEIPT_COMPACTION);
+    assertThat(VersionMetadata.lookUpFrom(dataDir).getBesuVersion()).isEqualTo("99.1.0");
+  }
+
+  @Test
+  public void revertCodeFormatLeavesAForestDatabaseAlone(@TempDir final Path dataDir)
+      throws IOException {
+    new DatabaseMetadata(BaseVersionedStorageFormat.FOREST_WITH_RECEIPT_COMPACTION)
+        .writeToDirectory(dataDir);
+
+    parseCommand(
+        "--data-path",
+        dataDir.toString(),
+        "--data-storage-format",
+        "FOREST",
+        "storage",
+        "revert-code-format");
+
+    assertThat(commandErrorOutput.toString(UTF_8)).isEmpty();
+    verify(mockControllerBuilder, never()).build();
+    assertThat(DatabaseMetadata.lookUpFrom(dataDir).getVersionedStorageFormat())
+        .isEqualTo(BaseVersionedStorageFormat.FOREST_WITH_RECEIPT_COMPACTION);
   }
 
   @Test

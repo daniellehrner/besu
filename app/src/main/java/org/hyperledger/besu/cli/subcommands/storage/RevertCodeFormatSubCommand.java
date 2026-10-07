@@ -23,6 +23,7 @@ import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration
 
 import org.hyperledger.besu.cli.util.VersionProvider;
 import org.hyperledger.besu.controller.BesuController;
+import org.hyperledger.besu.ethereum.core.VersionMetadata;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.code.CodeStorageMigration;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.DatabaseMetadata;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.VersionedStorageFormat;
@@ -30,6 +31,7 @@ import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.Versio
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,6 +49,10 @@ import picocli.CommandLine.ParentCommand;
     versionProvider = VersionProvider.class)
 public class RevertCodeFormatSubCommand implements Runnable {
   private static final Logger LOG = LoggerFactory.getLogger(RevertCodeFormatSubCommand.class);
+  private static final Map<VersionedStorageFormat, VersionedStorageFormat> REVERTED_FORMATS =
+      Map.of(
+          BONSAI_WITH_JUMPDEST_ANALYSIS, BONSAI_WITH_RECEIPT_COMPACTION,
+          BONSAI_ARCHIVE_WITH_JUMPDEST_ANALYSIS, BONSAI_ARCHIVE_WITH_RECEIPT_COMPACTION);
 
   @SuppressWarnings("unused")
   @ParentCommand
@@ -58,33 +64,46 @@ public class RevertCodeFormatSubCommand implements Runnable {
   @Override
   public void run() {
     checkNotNull(parentCommand);
-    // opening the database migrates a code storage keyed by code hash that holds bare code, so a
-    // reverted one is migrated first and then reverted again
+    final Path dataDir = parentCommand.besuCommand.dataDir();
+    // checked before anything opens the database, which would create a missing one and write the
+    // newer version into the metadata of a reverted one
+    final VersionedStorageFormat current = storageFormat(dataDir);
+    final VersionedStorageFormat reverted = REVERTED_FORMATS.get(current);
+    if (reverted == null) {
+      LOG.info("Database in {} is {}, which needs no revert", dataDir, current);
+      return;
+    }
+    // opening the database migrates a code storage keyed by code hash that holds bare code, so one
+    // reverted without its metadata is migrated first and then reverted again
     try (final BesuController controller = parentCommand.besuCommand.buildController()) {
       CodeStorageMigration.revert(
           controller.getStorageProvider().getStorageBySegmentIdentifiers(List.of(CODE_STORAGE)));
     }
-    revertMetadata(parentCommand.besuCommand.dataDir());
-    LOG.info("The contract code storage can be read by older Besu versions again");
-  }
-
-  private static void revertMetadata(final Path dataDir) {
     try {
-      final VersionedStorageFormat current =
-          DatabaseMetadata.lookUpFrom(dataDir).getVersionedStorageFormat();
-      final VersionedStorageFormat reverted;
-      if (current == BONSAI_WITH_JUMPDEST_ANALYSIS) {
-        reverted = BONSAI_WITH_RECEIPT_COMPACTION;
-      } else if (current == BONSAI_ARCHIVE_WITH_JUMPDEST_ANALYSIS) {
-        reverted = BONSAI_ARCHIVE_WITH_RECEIPT_COMPACTION;
-      } else {
-        LOG.info("Database metadata is {}, which needs no revert", current);
-        return;
-      }
       new DatabaseMetadata(reverted).writeToDirectory(dataDir);
-      LOG.info("Reverted database metadata from {} to {}", current, reverted);
+      // the version metadata records this Besu version, below which an older one refuses to start
+      VersionMetadata.deleteFrom(dataDir);
     } catch (final IOException e) {
       throw new IllegalStateException("Could not revert the database metadata in " + dataDir, e);
+    }
+    LOG.info(
+        "Reverted database metadata from {} to {}, the contract code storage can be read by older"
+            + " Besu versions again",
+        current,
+        reverted);
+  }
+
+  private static VersionedStorageFormat storageFormat(final Path dataDir) {
+    try {
+      if (!DatabaseMetadata.isPresent(dataDir)) {
+        throw new IllegalArgumentException(
+            "No database in "
+                + dataDir
+                + ", run the subcommand with the data path and configuration of the node");
+      }
+      return DatabaseMetadata.lookUpFrom(dataDir).getVersionedStorageFormat();
+    } catch (final IOException e) {
+      throw new IllegalStateException("Could not read the database metadata in " + dataDir, e);
     }
   }
 }
