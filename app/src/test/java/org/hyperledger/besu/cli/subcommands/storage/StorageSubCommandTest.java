@@ -43,6 +43,7 @@ import org.hyperledger.besu.services.kvstore.SegmentedInMemoryKeyValueStorage;
 import org.hyperledger.besu.services.kvstore.SegmentedKeyValueStorageAdapter;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -105,6 +106,24 @@ public class StorageSubCommandTest extends CommandTestAbstract {
     assertThat(DatabaseMetadata.lookUpFrom(dataDir).getVersionedStorageFormat())
         .isEqualTo(BaseVersionedStorageFormat.BONSAI_WITH_RECEIPT_COMPACTION);
     assertThat(dataDir.resolve("VERSION_METADATA.json")).doesNotExist();
+  }
+
+  @Test
+  public void revertCodeFormatKeepsTheNewerMetadataWhenTheVersionMetadataCannotBeDeleted(
+      @TempDir final Path dataDir) throws IOException {
+    when(storageProvider.getStorageBySegmentIdentifiers(List.of(CODE_STORAGE)))
+        .thenReturn(new SegmentedInMemoryKeyValueStorage());
+    new DatabaseMetadata(BaseVersionedStorageFormat.BONSAI_WITH_JUMPDEST_ANALYSIS)
+        .writeToDirectory(dataDir);
+    // a non-empty directory cannot be deleted like the file
+    Files.createDirectories(dataDir.resolve("VERSION_METADATA.json").resolve("blocker"));
+
+    parseCommand("--data-path", dataDir.toString(), "storage", "revert-code-format");
+
+    assertThat(commandErrorOutput.toString(UTF_8))
+        .contains("Could not revert the database metadata in " + dataDir);
+    assertThat(DatabaseMetadata.lookUpFrom(dataDir).getVersionedStorageFormat())
+        .isEqualTo(BaseVersionedStorageFormat.BONSAI_WITH_JUMPDEST_ANALYSIS);
   }
 
   @Test

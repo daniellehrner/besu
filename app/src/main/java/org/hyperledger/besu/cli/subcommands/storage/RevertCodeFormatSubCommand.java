@@ -16,22 +16,19 @@ package org.hyperledger.besu.cli.subcommands.storage;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.CODE_STORAGE;
-import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_ARCHIVE_WITH_JUMPDEST_ANALYSIS;
-import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_ARCHIVE_WITH_RECEIPT_COMPACTION;
-import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_WITH_JUMPDEST_ANALYSIS;
-import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_WITH_RECEIPT_COMPACTION;
 
 import org.hyperledger.besu.cli.util.VersionProvider;
 import org.hyperledger.besu.controller.BesuController;
 import org.hyperledger.besu.ethereum.core.VersionMetadata;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.code.CodeStorageMigration;
+import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.DatabaseMetadata;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.VersionedStorageFormat;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,10 +46,6 @@ import picocli.CommandLine.ParentCommand;
     versionProvider = VersionProvider.class)
 public class RevertCodeFormatSubCommand implements Runnable {
   private static final Logger LOG = LoggerFactory.getLogger(RevertCodeFormatSubCommand.class);
-  private static final Map<VersionedStorageFormat, VersionedStorageFormat> REVERTED_FORMATS =
-      Map.of(
-          BONSAI_WITH_JUMPDEST_ANALYSIS, BONSAI_WITH_RECEIPT_COMPACTION,
-          BONSAI_ARCHIVE_WITH_JUMPDEST_ANALYSIS, BONSAI_ARCHIVE_WITH_RECEIPT_COMPACTION);
 
   @SuppressWarnings("unused")
   @ParentCommand
@@ -68,8 +61,11 @@ public class RevertCodeFormatSubCommand implements Runnable {
     // checked before anything opens the database, which would create a missing one and write the
     // newer version into the metadata of a reverted one
     final VersionedStorageFormat current = storageFormat(dataDir);
-    final VersionedStorageFormat reverted = REVERTED_FORMATS.get(current);
-    if (reverted == null) {
+    final Optional<BaseVersionedStorageFormat> maybeReverted =
+        current instanceof BaseVersionedStorageFormat base
+            ? base.withoutJumpDestAnalysis()
+            : Optional.empty();
+    if (maybeReverted.isEmpty()) {
       LOG.info("Database in {} is {}, which needs no revert", dataDir, current);
       return;
     }
@@ -79,10 +75,12 @@ public class RevertCodeFormatSubCommand implements Runnable {
       CodeStorageMigration.revert(
           controller.getStorageProvider().getStorageBySegmentIdentifiers(List.of(CODE_STORAGE)));
     }
+    final VersionedStorageFormat reverted = maybeReverted.get();
     try {
-      new DatabaseMetadata(reverted).writeToDirectory(dataDir);
-      // the version metadata records this Besu version, below which an older one refuses to start
+      // the version metadata records this Besu version, below which an older one refuses to start;
+      // deleted first, as a run after the database metadata is reverted has nothing to revert
       VersionMetadata.deleteFrom(dataDir);
+      new DatabaseMetadata(reverted).writeToDirectory(dataDir);
     } catch (final IOException e) {
       throw new IllegalStateException("Could not revert the database metadata in " + dataDir, e);
     }
@@ -99,7 +97,8 @@ public class RevertCodeFormatSubCommand implements Runnable {
         throw new IllegalArgumentException(
             "No database in "
                 + dataDir
-                + ", run the subcommand with the data path and configuration of the node");
+                + ", pass the data path named in the upgrade warning with --data-path before"
+                + " `storage`");
       }
       return DatabaseMetadata.lookUpFrom(dataDir).getVersionedStorageFormat();
     } catch (final IOException e) {
