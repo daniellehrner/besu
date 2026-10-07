@@ -14,8 +14,8 @@
  */
 package org.hyperledger.besu.cli.subcommands.storage;
 
-import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_ARCHIVE_WITH_CODE_FORMAT;
-import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_WITH_CODE_FORMAT;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_ARCHIVE_WITH_JUMPDEST_ANALYSIS;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_WITH_JUMPDEST_ANALYSIS;
 
 import org.hyperledger.besu.cli.DefaultCommandValues;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.DatabaseMetadata;
@@ -89,7 +89,8 @@ public final class CodeFormatDowngradeWarning {
     if (before.isEmpty() || after.isEmpty() || before.get().equals(after.get())) {
       return Optional.empty();
     }
-    if (after.get() != BONSAI_WITH_CODE_FORMAT && after.get() != BONSAI_ARCHIVE_WITH_CODE_FORMAT) {
+    if (after.get() != BONSAI_WITH_JUMPDEST_ANALYSIS
+        && after.get() != BONSAI_ARCHIVE_WITH_JUMPDEST_ANALYSIS) {
       return Optional.empty();
     }
     return Optional.of(

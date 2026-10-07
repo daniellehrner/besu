@@ -15,9 +15,9 @@
 package org.hyperledger.besu.cli.subcommands.storage;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_ARCHIVE_WITH_CODE_FORMAT;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_ARCHIVE_WITH_JUMPDEST_ANALYSIS;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_ARCHIVE_WITH_RECEIPT_COMPACTION;
-import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_WITH_CODE_FORMAT;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_WITH_JUMPDEST_ANALYSIS;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_WITH_RECEIPT_COMPACTION;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.FOREST_WITH_RECEIPT_COMPACTION;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.FOREST_WITH_VARIABLES;
@@ -44,7 +44,7 @@ class CodeFormatDowngradeWarningTest {
         CodeFormatDowngradeWarning.after(
             DATA_DIR,
             Optional.of(BONSAI_WITH_RECEIPT_COMPACTION),
-            Optional.of(BONSAI_WITH_CODE_FORMAT),
+            Optional.of(BONSAI_WITH_JUMPDEST_ANALYSIS),
             EXECUTABLE,
             "besu",
             ARGUMENTS);
@@ -65,7 +65,7 @@ class CodeFormatDowngradeWarningTest {
             CodeFormatDowngradeWarning.after(
                 DATA_DIR,
                 Optional.of(BONSAI_ARCHIVE_WITH_RECEIPT_COMPACTION),
-                Optional.of(BONSAI_ARCHIVE_WITH_CODE_FORMAT),
+                Optional.of(BONSAI_ARCHIVE_WITH_JUMPDEST_ANALYSIS),
                 EXECUTABLE,
                 "besu",
                 ARGUMENTS))
@@ -80,8 +80,8 @@ class CodeFormatDowngradeWarningTest {
     assertThat(
             CodeFormatDowngradeWarning.after(
                 DATA_DIR,
-                Optional.of(BONSAI_WITH_CODE_FORMAT),
-                Optional.of(BONSAI_WITH_CODE_FORMAT),
+                Optional.of(BONSAI_WITH_JUMPDEST_ANALYSIS),
+                Optional.of(BONSAI_WITH_JUMPDEST_ANALYSIS),
                 EXECUTABLE,
                 "besu",
                 ARGUMENTS))
@@ -94,7 +94,7 @@ class CodeFormatDowngradeWarningTest {
             CodeFormatDowngradeWarning.after(
                 DATA_DIR,
                 Optional.empty(),
-                Optional.of(BONSAI_WITH_CODE_FORMAT),
+                Optional.of(BONSAI_WITH_JUMPDEST_ANALYSIS),
                 EXECUTABLE,
                 "besu",
                 ARGUMENTS))

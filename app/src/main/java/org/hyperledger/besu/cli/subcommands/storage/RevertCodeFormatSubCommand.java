@@ -16,9 +16,9 @@ package org.hyperledger.besu.cli.subcommands.storage;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.CODE_STORAGE;
-import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_ARCHIVE_WITH_CODE_FORMAT;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_ARCHIVE_WITH_JUMPDEST_ANALYSIS;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_ARCHIVE_WITH_RECEIPT_COMPACTION;
-import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_WITH_CODE_FORMAT;
+import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_WITH_JUMPDEST_ANALYSIS;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_WITH_RECEIPT_COMPACTION;
 
 import org.hyperledger.besu.cli.util.VersionProvider;
@@ -73,9 +73,9 @@ public class RevertCodeFormatSubCommand implements Runnable {
       final VersionedStorageFormat current =
           DatabaseMetadata.lookUpFrom(dataDir).getVersionedStorageFormat();
       final VersionedStorageFormat reverted;
-      if (current == BONSAI_WITH_CODE_FORMAT) {
+      if (current == BONSAI_WITH_JUMPDEST_ANALYSIS) {
         reverted = BONSAI_WITH_RECEIPT_COMPACTION;
-      } else if (current == BONSAI_ARCHIVE_WITH_CODE_FORMAT) {
+      } else if (current == BONSAI_ARCHIVE_WITH_JUMPDEST_ANALYSIS) {
         reverted = BONSAI_ARCHIVE_WITH_RECEIPT_COMPACTION;
       } else {
         LOG.info("Database metadata is {}, which needs no revert", current);

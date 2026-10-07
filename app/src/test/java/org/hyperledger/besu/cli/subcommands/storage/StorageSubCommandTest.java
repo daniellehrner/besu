@@ -90,7 +90,7 @@ public class StorageSubCommandTest extends CommandTestAbstract {
     setup.put(CODE_STORAGE, key, code.toArrayUnsafe());
     setup.commit();
     CodeStorageMigration.migrate(codeStorage);
-    new DatabaseMetadata(BaseVersionedStorageFormat.BONSAI_WITH_CODE_FORMAT)
+    new DatabaseMetadata(BaseVersionedStorageFormat.BONSAI_WITH_JUMPDEST_ANALYSIS)
         .writeToDirectory(dataDir);
 
     parseCommand("--data-path", dataDir.toString(), "storage", "revert-code-format");
