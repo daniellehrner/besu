@@ -545,6 +545,7 @@ public class WorldStateSortedIngest {
     final byte[] account = accountHash.toArrayUnsafe();
     final Batch batch = withoutEntriesOfNextRange(accountHash, rangeEnd, response);
     synchronized (partition) {
+      storeOwnRangesOf(partition, accountHash);
       // an account that was not announced takes the place it arrives at
       final Optional<QueuedAccount> waitedFor =
           Optional.ofNullable(partition.announcedAccounts.remove(accountHash))
@@ -910,6 +911,35 @@ public class WorldStateSortedIngest {
     }
     final QueuedAccount head = partition.queue.peekFirst();
     return head != null && Arrays.compareUnsigned(account, head.account) >= 0;
+  }
+
+  /**
+   * Stores what the ranges of an account have written so far, ahead of the storage of the account
+   * that starts again, which is newer. Waiting for the main stream, as these ranges do otherwise,
+   * would put it on top.
+   */
+  private void storeOwnRangesOf(final StoragePartition partition, final Bytes accountHash) {
+    final byte[] account = accountHash.toArrayUnsafe();
+    // what they wrote before comes first
+    final List<Waiting> waitingOfAccount =
+        partition.waiting.stream().filter(write -> Arrays.equals(write.account, account)).toList();
+    partition.waiting.removeAll(waitingOfAccount);
+    waitingOfAccount.forEach(write -> write.action.run());
+    partition.ownRanges.forEach(
+        (key, range) -> {
+          if (!key.account().equals(accountHash)) {
+            return;
+          }
+          if (range.run == null) {
+            bufferedSize.addAndGet(-range.bufferedSize);
+            range.directSize += range.bufferedSize;
+            range.buffered.forEach(this::writeDirect);
+            range.buffered = new ArrayList<>();
+            range.bufferedSize = 0;
+          } else if (range.run.hasOpenFile()) {
+            range.run.seal().run();
+          }
+        });
   }
 
   /** Writes a response of a range of an account that is not waited for. */

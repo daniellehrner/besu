@@ -747,6 +747,56 @@ public class WorldStateSortedIngestTest {
   }
 
   @Test
+  public void shouldStoreTheFileOfARangeBeforeTheStorageOfItsAccountThatIsDownloadedAgain() {
+    // a range of a large contract with a file of its own that is still open
+    ingest.writeStorageContinuation(
+        ACCOUNT_1,
+        ANY_START,
+        RANGE_END,
+        largeSlots("old range", ACCOUNT_1, 0x05, 0x06),
+        List.of(RANGE_END));
+    // the storage changed with a new pivot block and is downloaded again from its start
+    ingest.writeStorageStart(
+        ACCOUNT_1, WHOLE_STORAGE, slots("new storage", ACCOUNT_1, 0x05), List.of());
+    ingest.finishAll();
+
+    // the newer entry has to reach the storage last, or the older one ends up on top
+    assertThat(storage.events)
+        .containsExactly(
+            "file ACCOUNT_STORAGE_STORAGE [11:05, 11:06]", "file ACCOUNT_STORAGE_STORAGE [11:05]");
+  }
+
+  @Test
+  public void shouldStoreTheFilesOfARangeInOrderBeforeTheStorageOfItsAccountThatStartsAgain() {
+    // the file of the partition is open from an account before the range on
+    final Bytes32 accountBefore = account(0x10);
+    ingest.writeStorageStart(
+        accountBefore, WHOLE_STORAGE, slots("before", accountBefore, 0x01), List.of());
+    // a full file of the range, which waits for the file of the partition, and an open one
+    ingest.writeStorageContinuation(
+        ACCOUNT_1,
+        ANY_START,
+        RANGE_END,
+        largeSlots("old range", ACCOUNT_1, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08),
+        List.of(RANGE_END));
+    ingest.writeStorageContinuation(
+        ACCOUNT_1,
+        ANY_START,
+        RANGE_END,
+        largeSlots("old range", ACCOUNT_1, 0x09),
+        List.of(RANGE_END));
+    ingest.writeStorageStart(
+        ACCOUNT_1, WHOLE_STORAGE, slots("new storage", ACCOUNT_1, 0x05, 0x09), List.of());
+    ingest.finishAll();
+
+    assertThat(storage.events)
+        .containsExactly(
+            "file ACCOUNT_STORAGE_STORAGE [11:01, 11:02, 11:03, 11:04, 11:05, 11:06, 11:07, 11:08]",
+            "file ACCOUNT_STORAGE_STORAGE [11:09]",
+            "file ACCOUNT_STORAGE_STORAGE [10:01, 11:05, 11:09]");
+  }
+
+  @Test
   public void shouldStoreWhatARangeWroteBeforeABatchThatDoesNotFollowIt() {
     ingest.writeStorageContinuation(
         ACCOUNT_1,
@@ -1137,6 +1187,18 @@ public class WorldStateSortedIngestTest {
       final String name, final SegmentIdentifier segment, final long size, final byte[] key) {
     final SortedIngestTransaction collected = new SortedIngestTransaction();
     collected.put(segment, key, new byte[(int) size]);
+    return collected.toBatch(() -> stored.add(name));
+  }
+
+  /** Slots that are together large enough for a file of their own. */
+  private Batch largeSlots(final String name, final Bytes32 account, final int... slots) {
+    final SortedIngestTransaction collected = new SortedIngestTransaction();
+    for (final int slot : slots) {
+      collected.put(
+          ACCOUNT_STORAGE_STORAGE,
+          slotKey(account, slot).toArrayUnsafe(),
+          new byte[(int) LIMITS.rangeFileThreshold()]);
+    }
     return collected.toBatch(() -> stored.add(name));
   }
 
