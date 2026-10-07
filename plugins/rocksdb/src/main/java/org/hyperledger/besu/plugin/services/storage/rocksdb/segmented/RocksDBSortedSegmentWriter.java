@@ -66,8 +66,9 @@ final class RocksDBSortedSegmentWriter implements SortedSegmentWriter {
   private boolean opened;
   private boolean done;
   private long size;
-  private byte[] firstKey;
-  private byte[] lastKey;
+  // only read for a file that is opened, which the first entry sets them for
+  private byte[] firstKey = new byte[0];
+  private byte[] lastKey = new byte[0];
 
   RocksDBSortedSegmentWriter(
       final RocksDBColumnarKeyValueStorage storage, final SegmentIdentifier segment) {
