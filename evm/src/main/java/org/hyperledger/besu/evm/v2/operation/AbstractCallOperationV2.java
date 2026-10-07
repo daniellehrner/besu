@@ -396,7 +396,7 @@ public abstract class AbstractCallOperationV2 extends AbstractOperationV2 {
 
     final Hash codeHash = account.getCodeHash();
     frame.getEip7928AccessList().ifPresent(t -> t.addTouchedAccount(account.getAddress()));
-    if (codeHash == null || codeHash.equals(Hash.EMPTY)) {
+    if (codeHash == null || Hash.EMPTY.getBytes().equals(codeHash.getBytes())) {
       return Code.EMPTY_CODE;
     }
 

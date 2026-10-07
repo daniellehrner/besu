@@ -62,7 +62,6 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
       final TransactionReceiptFactory transactionReceiptFactory,
       final Wei blockReward,
       final MiningBeneficiaryCalculator miningBeneficiaryCalculator,
-      final boolean skipZeroBlockRewards,
       final ProtocolSchedule protocolSchedule,
       final BalConfiguration balConfiguration,
       final MetricsSystem metricsSystem) {
@@ -71,7 +70,6 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
         transactionReceiptFactory,
         blockReward,
         miningBeneficiaryCalculator,
-        skipZeroBlockRewards,
         protocolSchedule,
         balConfiguration,
         metricsSystem);
@@ -182,7 +180,6 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
         final TransactionReceiptFactory transactionReceiptFactory,
         final Wei blockReward,
         final MiningBeneficiaryCalculator miningBeneficiaryCalculator,
-        final boolean skipZeroBlockRewards,
         final ProtocolSchedule protocolSchedule,
         final BalConfiguration balConfiguration) {
       return new MainnetParallelBlockProcessor(
@@ -190,7 +187,6 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
           transactionReceiptFactory,
           blockReward,
           miningBeneficiaryCalculator,
-          skipZeroBlockRewards,
           protocolSchedule,
           balConfiguration,
           metricsSystem);

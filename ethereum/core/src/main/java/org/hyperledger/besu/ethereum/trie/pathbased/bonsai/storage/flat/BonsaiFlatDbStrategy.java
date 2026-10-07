@@ -126,6 +126,7 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
     storage.clear(ACCOUNT_INFO_STATE);
     storage.clear(ACCOUNT_STORAGE_STORAGE);
     storage.clear(CODE_STORAGE);
+    codeStorageStrategy.markEmpty(storage);
   }
 
   @Override

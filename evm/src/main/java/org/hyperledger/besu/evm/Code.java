@@ -32,6 +32,12 @@ public class Code {
   /** The constant EMPTY_CODE. */
   public static final Code EMPTY_CODE = new Code(Bytes.EMPTY);
 
+  /**
+   * The version of the jump destination analysis. Bitmasks are stored next to the code they were
+   * computed from, so this has to change whenever the bitmask of any code does.
+   */
+  public static final int JUMP_DEST_ANALYSIS_VERSION = 1;
+
   /** The bytes representing the code. */
   private final Bytes bytes;
 
@@ -44,8 +50,22 @@ public class Code {
   // has built them, rather than holding them in locals: five more locals leave the loop too few
   // registers for its own state.
 
-  /** Bit mask for jump destinations, used to optimize JUMP/JUMPI operations */
-  private long[] jumpDestBitMask = null;
+  /**
+   * Bit mask for jump destinations, used to optimize JUMP/JUMPI operations.
+   *
+   * <p>Volatile because it is computed on the first JUMP while the same instance may already be in
+   * use by other threads, through the code caches and parallel transaction execution. Without it, a
+   * thread could see the array before its contents and reject a valid jump destination.
+   */
+  private volatile long[] jumpDestBitMask = null;
+
+  /**
+   * Set once the PUSH tables below are complete. The tables stay plain fields, as the v2 loop reads
+   * them on every PUSH, and are published through this flag instead, for the same reason the jump
+   * destinations are volatile: {@link #analyse()} sets it after building them, and every reader
+   * calls {@link #analyse()} first.
+   */
+  private volatile boolean pushTablesBuilt = false;
 
   private long[] pushBits = null;
   private int[] pushBase = null;
@@ -141,14 +161,15 @@ public class Code {
       return true;
     }
 
-    if (jumpDestBitMask == null) {
-      jumpDestBitMask = calculateJumpDestBitMask();
+    long[] bitMask = jumpDestBitMask;
+    if (bitMask == null) {
+      bitMask = initJumpDestBitMask();
     }
 
     // This selects which long in the array holds the bit for the given offset:
     //	1)	>>> 6 is equivalent to jumpDestination / 64
     //	2)	Each long holds 64 bits, so this finds the correct chunk
-    final long targetLong = jumpDestBitMask[jumpDestination >>> 6];
+    final long targetLong = bitMask[jumpDestination >>> 6];
 
     // 1) & 0x3F is jumpDestination % 64
     // 2)	1L << ... gives a mask for the specific bit in that long
@@ -156,6 +177,17 @@ public class Code {
 
     // If the bit is not set, then it is an invalid jump destination
     return (targetLong & targetBit) == 0L;
+  }
+
+  // Separate method so that isJumpDestInvalid stays small enough to be inlined into JUMP and JUMPI.
+  // Synchronized so that threads reaching the first JUMP together analyse the code only once.
+  private synchronized long[] initJumpDestBitMask() {
+    long[] bitMask = jumpDestBitMask;
+    if (bitMask == null) {
+      bitMask = calculateJumpDestBitMask();
+      jumpDestBitMask = bitMask;
+    }
+    return bitMask;
   }
 
   /**
@@ -181,10 +213,8 @@ public class Code {
    * @return the bitmask, one bit per byte of code
    */
   long[] jumpDestinations() {
-    if (jumpDestBitMask == null) {
-      jumpDestBitMask = calculateJumpDestBitMask();
-    }
-    return jumpDestBitMask;
+    final long[] bitMask = jumpDestBitMask;
+    return bitMask != null ? bitMask : initJumpDestBitMask();
   }
 
   /**
@@ -210,17 +240,25 @@ public class Code {
   /**
    * Builds the jump destinations and the PUSH tables that the EVM v2 loop reads, unless they are
    * built already. The PUSH tables are only read by the v2 loop, so the standard interpreter never
-   * builds them; the jump destinations come out of the same pass.
+   * builds them; the jump destinations come out of the same pass, unless the code came with them.
    */
   public void analyse() {
-    if (pushValues == null) {
-      final long[] mask = scan(true);
-      if (jumpDestBitMask == null) {
-        jumpDestBitMask = mask;
-      }
-    } else if (jumpDestBitMask == null) {
-      jumpDestBitMask = calculateJumpDestBitMask();
+    if (!pushTablesBuilt) {
+      buildPushTables();
     }
+  }
+
+  // Synchronized, like initJumpDestBitMask, so that threads reaching the code together analyse it
+  // only once.
+  private synchronized void buildPushTables() {
+    if (pushTablesBuilt) {
+      return;
+    }
+    final long[] mask = scan(true);
+    if (jumpDestBitMask == null) {
+      jumpDestBitMask = mask;
+    }
+    pushTablesBuilt = true;
   }
 
   /**
@@ -263,8 +301,22 @@ public class Code {
   }
 
   /**
+   * Computes the jump destination bitmask of the given code without keeping a {@link Code} for it,
+   * so that it can be stored next to the code and set with {@link #setJumpDestBitMask} later.
+   *
+   * @param byteCode The byte representation of the code.
+   * @return the bitmask, one bit per code byte
+   */
+  public static long[] jumpDestBitMaskOf(final Bytes byteCode) {
+    return new Code(byteCode).calculateJumpDestBitMask();
+  }
+
+  /**
    * Computes a bitmask where each bit set to 1 indicates a valid {@code JUMPDEST} opcode in the
    * bytecode, one long per 64 bytes of code, used to validate dynamic jumps at runtime.
+   *
+   * <p>A change to the bitmask this returns for any code needs a new {@link
+   * #JUMP_DEST_ANALYSIS_VERSION}.
    */
   long[] calculateJumpDestBitMask() {
     return scan(false);
