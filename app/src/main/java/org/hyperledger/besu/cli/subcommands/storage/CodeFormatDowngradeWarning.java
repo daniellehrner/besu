@@ -17,25 +17,19 @@ package org.hyperledger.besu.cli.subcommands.storage;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_ARCHIVE_WITH_JUMPDEST_ANALYSIS;
 import static org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.BaseVersionedStorageFormat.BONSAI_WITH_JUMPDEST_ANALYSIS;
 
-import org.hyperledger.besu.cli.DefaultCommandValues;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.DatabaseMetadata;
 import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.VersionedStorageFormat;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Optional;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * Tells the operator how to undo the upgrade to code stored with its analysis, once it has
- * happened, with a command that can be pasted as it is: the same Besu executable and arguments this
- * process was started with, run as the same user, followed by the revert subcommand.
+ * happened. The arguments of this process are not repeated: they can hold secrets and miss the
+ * configuration given by environment variables.
  */
 public final class CodeFormatDowngradeWarning {
-  private static final Pattern SAFE_ARGUMENT = Pattern.compile("[A-Za-z0-9_@%+=:,./-]+");
 
   private CodeFormatDowngradeWarning() {}
 
@@ -63,29 +57,17 @@ public final class CodeFormatDowngradeWarning {
    *
    * @param dataDir the data directory
    * @param before the storage format recorded before the storage was opened
-   * @param arguments the arguments this process was started with
    * @return the warning, empty when nothing was upgraded
    */
   public static Optional<String> after(
-      final Path dataDir,
-      final Optional<VersionedStorageFormat> before,
-      final List<String> arguments) {
-    return after(
-        dataDir,
-        before,
-        storageFormat(dataDir),
-        executable(System.getProperty(DefaultCommandValues.BESU_HOME_PROPERTY_NAME)),
-        System.getProperty("user.name"),
-        arguments);
+      final Path dataDir, final Optional<VersionedStorageFormat> before) {
+    return after(dataDir, before, storageFormat(dataDir));
   }
 
   static Optional<String> after(
       final Path dataDir,
       final Optional<VersionedStorageFormat> before,
-      final Optional<VersionedStorageFormat> after,
-      final String executable,
-      final String user,
-      final List<String> arguments) {
+      final Optional<VersionedStorageFormat> after) {
     if (before.isEmpty() || after.isEmpty() || before.get().equals(after.get())) {
       return Optional.empty();
     }
@@ -95,34 +77,15 @@ public final class CodeFormatDowngradeWarning {
     }
     return Optional.of(
         String.format(
-            "The database in %s was upgraded from %s to %s, which Besu versions before this one"
-                + " cannot open. To downgrade Besu, stop it and revert the database first with:%n%s",
-            dataDir,
-            describe(before.get()),
-            describe(after.get()),
-            command(executable, user, arguments)));
-  }
-
-  static String executable(final String besuHome) {
-    return besuHome == null ? "besu" : Path.of(besuHome, "bin", "besu").toString();
-  }
-
-  static String command(final String executable, final String user, final List<String> arguments) {
-    return Stream.concat(
-            Stream.of("sudo", "-u", user, executable),
-            Stream.concat(arguments.stream(), Stream.of("storage", "revert-code-format")))
-        .map(CodeFormatDowngradeWarning::quote)
-        .collect(Collectors.joining(" "));
+            "The database in %1$s was upgraded from %2$s to %3$s, which Besu versions before this"
+                + " one cannot open. To downgrade Besu, stop it and revert the database first: run"
+                + " `besu storage revert-code-format` as the user Besu runs as, with the same"
+                + " options, config file and BESU_* environment variables as the node, so that it"
+                + " opens the database in %1$s",
+            dataDir.toAbsolutePath(), describe(before.get()), describe(after.get())));
   }
 
   private static String describe(final VersionedStorageFormat format) {
     return format.getFormat() + " version " + format.getVersion();
-  }
-
-  private static String quote(final String argument) {
-    if (SAFE_ARGUMENT.matcher(argument).matches()) {
-      return argument;
-    }
-    return "'" + argument.replace("'", "'\\''") + "'";
   }
 }

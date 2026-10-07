@@ -26,7 +26,6 @@ import org.hyperledger.besu.plugin.services.storage.rocksdb.configuration.Databa
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
@@ -35,28 +34,38 @@ import org.junit.jupiter.api.io.TempDir;
 class CodeFormatDowngradeWarningTest {
 
   private static final Path DATA_DIR = Path.of("/data/besu");
-  private static final String EXECUTABLE = "/opt/besu/current/bin/besu";
-  private static final List<String> ARGUMENTS = List.of("--config-file=/etc/besu/config.toml");
 
   @Test
-  void warnsWithAPastableCommandAfterTheUpgradeToTheCodeFormat() {
+  void warnsWithTheRevertSubcommandAfterTheUpgradeToTheCodeFormat() {
     final Optional<String> warning =
         CodeFormatDowngradeWarning.after(
             DATA_DIR,
             Optional.of(BONSAI_WITH_RECEIPT_COMPACTION),
-            Optional.of(BONSAI_WITH_JUMPDEST_ANALYSIS),
-            EXECUTABLE,
-            "besu",
-            ARGUMENTS);
+            Optional.of(BONSAI_WITH_JUMPDEST_ANALYSIS));
 
     assertThat(warning)
         .contains(
-            "The database in /data/besu was upgraded from BONSAI version 3 to BONSAI version 4,"
-                + " which Besu versions before this one cannot open. To downgrade Besu, stop it and"
-                + " revert the database first with:"
-                + System.lineSeparator()
-                + "sudo -u besu /opt/besu/current/bin/besu --config-file=/etc/besu/config.toml"
-                + " storage revert-code-format");
+            "The database in "
+                + DATA_DIR.toAbsolutePath()
+                + " was upgraded from BONSAI version 3 to BONSAI version 4, which Besu versions"
+                + " before this one cannot open. To downgrade Besu, stop it and revert the database"
+                + " first: run `besu storage revert-code-format` as the user Besu runs as, with the"
+                + " same options, config file and BESU_* environment variables as the node, so that"
+                + " it opens the database in "
+                + DATA_DIR.toAbsolutePath());
+  }
+
+  @Test
+  void namesTheAbsoluteDataPath() {
+    assertThat(
+            CodeFormatDowngradeWarning.after(
+                Path.of("data"),
+                Optional.of(BONSAI_WITH_RECEIPT_COMPACTION),
+                Optional.of(BONSAI_WITH_JUMPDEST_ANALYSIS)))
+        .hasValueSatisfying(
+            warning ->
+                assertThat(warning)
+                    .contains("opens the database in " + Path.of("data").toAbsolutePath()));
   }
 
   @Test
@@ -65,10 +74,7 @@ class CodeFormatDowngradeWarningTest {
             CodeFormatDowngradeWarning.after(
                 DATA_DIR,
                 Optional.of(BONSAI_ARCHIVE_WITH_RECEIPT_COMPACTION),
-                Optional.of(BONSAI_ARCHIVE_WITH_JUMPDEST_ANALYSIS),
-                EXECUTABLE,
-                "besu",
-                ARGUMENTS))
+                Optional.of(BONSAI_ARCHIVE_WITH_JUMPDEST_ANALYSIS)))
         .hasValueSatisfying(
             warning ->
                 assertThat(warning)
@@ -81,10 +87,7 @@ class CodeFormatDowngradeWarningTest {
             CodeFormatDowngradeWarning.after(
                 DATA_DIR,
                 Optional.of(BONSAI_WITH_JUMPDEST_ANALYSIS),
-                Optional.of(BONSAI_WITH_JUMPDEST_ANALYSIS),
-                EXECUTABLE,
-                "besu",
-                ARGUMENTS))
+                Optional.of(BONSAI_WITH_JUMPDEST_ANALYSIS)))
         .isEmpty();
   }
 
@@ -92,12 +95,7 @@ class CodeFormatDowngradeWarningTest {
   void staysSilentForANewDatabase() {
     assertThat(
             CodeFormatDowngradeWarning.after(
-                DATA_DIR,
-                Optional.empty(),
-                Optional.of(BONSAI_WITH_JUMPDEST_ANALYSIS),
-                EXECUTABLE,
-                "besu",
-                ARGUMENTS))
+                DATA_DIR, Optional.empty(), Optional.of(BONSAI_WITH_JUMPDEST_ANALYSIS)))
         .isEmpty();
   }
 
@@ -107,32 +105,8 @@ class CodeFormatDowngradeWarningTest {
             CodeFormatDowngradeWarning.after(
                 DATA_DIR,
                 Optional.of(FOREST_WITH_VARIABLES),
-                Optional.of(FOREST_WITH_RECEIPT_COMPACTION),
-                EXECUTABLE,
-                "besu",
-                ARGUMENTS))
+                Optional.of(FOREST_WITH_RECEIPT_COMPACTION)))
         .isEmpty();
-  }
-
-  @Test
-  void quotesArgumentsTheShellWouldSplitOrExpand() {
-    final String command =
-        CodeFormatDowngradeWarning.command(
-            "/opt/besu 1/bin/besu",
-            "besu",
-            List.of("--data-path", "/data/my node", "--identity=it's", "--network=mainnet"));
-
-    assertThat(command)
-        .isEqualTo(
-            "sudo -u besu '/opt/besu 1/bin/besu' --data-path '/data/my node' '--identity=it'\\''s'"
-                + " --network=mainnet storage revert-code-format");
-  }
-
-  @Test
-  void fallsBackToTheExecutableOnThePathWithoutAnInstallDirectory() {
-    assertThat(CodeFormatDowngradeWarning.executable(null)).isEqualTo("besu");
-    assertThat(CodeFormatDowngradeWarning.executable("/opt/besu/current"))
-        .isEqualTo(Path.of("/opt/besu/current/bin/besu").toString());
   }
 
   @Test

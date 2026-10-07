@@ -709,7 +709,6 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
   private DataStorageConfiguration dataStorageConfiguration;
   private Collection<EnodeURLImpl> staticNodes;
   private BesuController besuController;
-  private List<String> originalArguments = List.of();
   private BesuConfigurationImpl pluginCommonConfiguration;
 
   private Optional<Checkpoint> checkpoint = Optional.empty();
@@ -867,7 +866,6 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
       throw new IllegalArgumentException("BesuComponent must be provided");
     }
     this.besuComponent = besuComponent;
-    this.originalArguments = List.of(args);
     initializeCommandLineSettings(in);
 
     // Create the execution strategy chain.
@@ -1105,8 +1103,7 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
     final Optional<VersionedStorageFormat> storageFormatBeforeStart =
         CodeFormatDowngradeWarning.storageFormat(dataDir());
     besuController = buildController();
-    CodeFormatDowngradeWarning.after(dataDir(), storageFormatBeforeStart, originalArguments)
-        .ifPresent(logger::warn);
+    CodeFormatDowngradeWarning.after(dataDir(), storageFormatBeforeStart).ifPresent(logger::warn);
 
     besuPluginContext.beforeExternalServices();
 
