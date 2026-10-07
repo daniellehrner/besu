@@ -22,8 +22,10 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.Bonsai
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListOverlay;
 import org.hyperledger.besu.ethereum.mainnet.staterootcommitter.DefaultStateRootCommitter;
+import org.hyperledger.besu.ethereum.mainnet.staterootcommitter.StateRootComputations;
 import org.hyperledger.besu.ethereum.mainnet.staterootcommitter.TrieDisabledStateRootCommitter;
 import org.hyperledger.besu.ethereum.trie.common.StateRootMismatchException;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiSnapshotWorldStateKeyValueStorage;
@@ -33,6 +35,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.StorageSubscr
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.cache.PathBasedWorldStateCacheManager;
+import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.plugin.data.BlockHeader;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
@@ -94,6 +97,9 @@ public abstract class PathBasedWorldState
    * - All modifications are temporary and will be lost once the world state is discarded.
    */
   protected boolean isStorageFrozen;
+
+  private boolean deferTrieLog;
+  private Runnable trieLogWrite = () -> {};
 
   protected PathBasedWorldState(
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
@@ -167,6 +173,26 @@ public abstract class PathBasedWorldState
   }
 
   /**
+   * Leaves the trie log of the block persisted next to {@link #takeTrieLogWrite()}, for the caller
+   * to write once it has found the block valid. Only a frozen world state defers it: any other
+   * writes its trie log ahead of the state it persists.
+   */
+  public void deferTrieLog() {
+    deferTrieLog = isStorageFrozen;
+  }
+
+  /**
+   * Hands over the write of a deferred trie log.
+   *
+   * @return the write, which does nothing if no trie log was deferred
+   */
+  public Runnable takeTrieLogWrite() {
+    final Runnable write = trieLogWrite;
+    trieLogWrite = () -> {};
+    return write;
+  }
+
+  /**
    * Reset the worldState to this block header
    *
    * @param blockHeader block to use
@@ -210,26 +236,45 @@ public abstract class PathBasedWorldState
     final BonsaiWorldStateKeyValueStorage.Updater stateUpdater =
         worldStateKeyValueStorage.updater();
     try {
-      final StateRootComputation computation = committer.compute(this, blockHeader, accumulator);
+      final StateRootComputation computation =
+          BlockImportTimings.time(
+              BlockImportTimings.Phase.STATE_ROOT,
+              () -> committer.compute(this, blockHeader, accumulator));
       if (!isStorageFrozen()) {
-        computation.applyTo(stateUpdater);
+        BlockImportTimings.time(
+            BlockImportTimings.Phase.STATE_COMMIT, () -> computation.applyTo(stateUpdater));
       }
       final Hash calculatedRootHash = computation.root();
       stageWorldStateKeys(stateUpdater, blockHeader, calculatedRootHash);
 
       if (blockHeader != null) {
         verifyWorldStateRoot(calculatedRootHash, blockHeader);
-        // Trie log first, ahead of composed state, in case of an abnormal shutdown.
-        trieLogManager.saveTrieLog(accumulator, calculatedRootHash, blockHeader, this);
+        if (isStorageFrozen && StateRootComputations.holdsAllWrites(computation)) {
+          worldStateCacheManager.cacheStateWrites(blockHeader.getBlockHash(), computation);
+        }
+        if (deferTrieLog) {
+          trieLogWrite =
+              BlockImportTimings.time(
+                  BlockImportTimings.Phase.TRIE_LOG,
+                  () -> trieLogManager.deferTrieLog(accumulator, calculatedRootHash, blockHeader));
+        } else {
+          // Trie log first, ahead of composed state, in case of an abnormal shutdown.
+          BlockImportTimings.time(
+              BlockImportTimings.Phase.TRIE_LOG,
+              () -> trieLogManager.saveTrieLog(accumulator, calculatedRootHash, blockHeader, this));
+        }
       }
 
-      stateUpdater.commitComposedOnly();
+      BlockImportTimings.time(
+          BlockImportTimings.Phase.STATE_COMMIT, stateUpdater::commitComposedOnly);
       // Advance in-memory head only after trielog + composed commit succeeded, so a failing
       // observer (e.g. TrieLogPruner during EthScheduler shutdown) cannot leave a half-updated
       // worldstate that later cascades into MerkleTrieException / heal.
       setWorldStateHead(blockHeader, calculatedRootHash);
       if (blockHeader != null && !isStorageFrozen) {
-        worldStateCacheManager.addCachedLayer(blockHeader, calculatedRootHash, this);
+        BlockImportTimings.time(
+            BlockImportTimings.Phase.STATE_COMMIT,
+            () -> worldStateCacheManager.addCachedLayer(blockHeader, calculatedRootHash, this));
       }
     } catch (final RuntimeException | Error e) {
       try {
@@ -428,7 +473,7 @@ public abstract class PathBasedWorldState
       final Address address, final StorageSlotKey storageSlotKey);
 
   @Override
-  public abstract Optional<Bytes> getCode(@NotNull final Address address, final Hash codeHash);
+  public abstract Optional<Code> getCode(@NotNull final Address address, final Hash codeHash);
 
   /**
    * Attaches a Block Access List overlay to this world state, replacing its accumulator with a

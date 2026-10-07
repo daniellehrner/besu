@@ -30,6 +30,7 @@ import org.hyperledger.besu.ethereum.BlockValidationResult;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.blockcreation.BlockCreationTiming;
 import org.hyperledger.besu.ethereum.blockcreation.BlockCreator.BlockCreationResult;
+import org.hyperledger.besu.ethereum.blockcreation.MempoolPrewarmer;
 import org.hyperledger.besu.ethereum.chain.BadBlockCause;
 import org.hyperledger.besu.ethereum.chain.BadBlockManager;
 import org.hyperledger.besu.ethereum.chain.Blockchain;
@@ -46,6 +47,7 @@ import org.hyperledger.besu.ethereum.eth.sync.backwardsync.BackwardSyncContext;
 import org.hyperledger.besu.ethereum.eth.sync.backwardsync.BadChainListener;
 import org.hyperledger.besu.ethereum.eth.transactions.TransactionPool;
 import org.hyperledger.besu.ethereum.mainnet.AbstractGasLimitSpecification;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
@@ -64,6 +66,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -99,6 +102,8 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
   /** The Protocol schedule. */
   protected final ProtocolSchedule protocolSchedule;
 
+  private final Optional<MempoolPrewarmer> mempoolPrewarmer;
+
   private final Map<PayloadIdentifier, BlockCreationTask> blockCreationTasks =
       new ConcurrentHashMap<>();
 
@@ -123,6 +128,35 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
         protocolContext,
         protocolSchedule,
         ethScheduler,
+        transactionPool,
+        miningParams,
+        backwardSyncContext,
+        Optional.empty());
+  }
+
+  /**
+   * Instantiates a new Merge coordinator.
+   *
+   * @param protocolContext the protocol context
+   * @param protocolSchedule the protocol schedule
+   * @param ethScheduler the block builder executor
+   * @param transactionPool the pending transactions
+   * @param miningParams the mining params
+   * @param backwardSyncContext the backward sync context
+   * @param mempoolPrewarmer prewarms the state for the next block between blocks, if enabled
+   */
+  public MergeCoordinator(
+      final ProtocolContext protocolContext,
+      final ProtocolSchedule protocolSchedule,
+      final EthScheduler ethScheduler,
+      final TransactionPool transactionPool,
+      final MiningConfiguration miningParams,
+      final BackwardSyncContext backwardSyncContext,
+      final Optional<MempoolPrewarmer> mempoolPrewarmer) {
+    this(
+        protocolContext,
+        protocolSchedule,
+        ethScheduler,
         miningParams,
         backwardSyncContext,
         (parentHeader, address) -> {
@@ -135,7 +169,8 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
               protocolSchedule,
               parentHeader,
               ethScheduler);
-        });
+        },
+        mempoolPrewarmer);
   }
 
   /**
@@ -156,6 +191,36 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
       final MiningConfiguration miningParams,
       final BackwardSyncContext backwardSyncContext,
       final MergeBlockCreatorFactory mergeBlockCreatorFactory) {
+    this(
+        protocolContext,
+        protocolSchedule,
+        ethScheduler,
+        miningParams,
+        backwardSyncContext,
+        mergeBlockCreatorFactory,
+        Optional.empty());
+  }
+
+  /**
+   * Instantiates a new Merge coordinator.
+   *
+   * @param protocolContext the protocol context
+   * @param protocolSchedule the protocol schedule
+   * @param ethScheduler the block builder executor
+   * @param miningParams the mining params
+   * @param backwardSyncContext the backward sync context
+   * @param mergeBlockCreatorFactory the merge block creator factory
+   * @param mempoolPrewarmer prewarms the state for the next block between blocks, if enabled
+   */
+  @VisibleForTesting
+  public MergeCoordinator(
+      final ProtocolContext protocolContext,
+      final ProtocolSchedule protocolSchedule,
+      final EthScheduler ethScheduler,
+      final MiningConfiguration miningParams,
+      final BackwardSyncContext backwardSyncContext,
+      final MergeBlockCreatorFactory mergeBlockCreatorFactory,
+      final Optional<MempoolPrewarmer> mempoolPrewarmer) {
     this.protocolContext = protocolContext;
     this.protocolSchedule = protocolSchedule;
     this.ethScheduler = ethScheduler;
@@ -171,6 +236,7 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
     this.miningConfiguration = miningParams;
 
     this.mergeBlockCreatorFactory = mergeBlockCreatorFactory;
+    this.mempoolPrewarmer = mempoolPrewarmer;
 
     this.backwardSyncContext.subscribeBadChainListener(this);
   }
@@ -179,7 +245,10 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
   public void start() {}
 
   @Override
-  public void stop() {}
+  public void stop() {
+    // mining can be started again, so the prewarmer's threads stay
+    mempoolPrewarmer.ifPresent(prewarmer -> prewarmer.stop(Optional.empty()));
+  }
 
   @Override
   public void awaitStop() throws InterruptedException {}
@@ -237,6 +306,9 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
     // we assume that preparePayload is always called sequentially, since the RPC Engine calls
     // are sequential, if this assumption changes then more synchronization should be added to
     // shared data structures
+
+    // building executes the pool's transactions itself
+    mempoolPrewarmer.ifPresent(prewarmer -> prewarmer.stop(Optional.empty()));
 
     final PayloadIdentifier payloadIdentifier =
         PayloadIdentifier.forPayloadParams(preparePayloadArgs);
@@ -645,6 +717,7 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
 
   private BlockProcessingResult validateBlock(
       final Block block, final Optional<BlockAccessList> blockAccessList) {
+    mempoolPrewarmer.ifPresent(prewarmer -> prewarmer.stop(Optional.of(block)));
     final var validationResult =
         protocolSchedule
             .getByBlockHeader(block.getHeader())
@@ -686,17 +759,41 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
   @Override
   public BlockProcessingResult rememberBlock(
       final Block block, final Optional<BlockAccessList> blockAccessList) {
+    return rememberBlock(block, blockAccessList, Runnable::run);
+  }
+
+  @Override
+  public BlockProcessingResult rememberBlock(
+      final Block block,
+      final Optional<BlockAccessList> blockAccessList,
+      final Executor blockWriter) {
     LOG.atDebug().setMessage("Remember block {}").addArgument(block::toLogString).log();
+    mempoolPrewarmer.ifPresent(prewarmer -> prewarmer.stop(Optional.of(block)));
     final var chain = protocolContext.getBlockchain();
-    final var validationResult = validateBlock(block, blockAccessList);
+    final var validationResult =
+        protocolSchedule
+            .getByBlockHeader(block.getHeader())
+            .getBlockValidator()
+            .validateAndProcessBlockDeferringTrieLog(
+                protocolContext,
+                block,
+                HeaderValidationMode.FULL,
+                HeaderValidationMode.NONE,
+                blockAccessList);
     validationResult
         .getYield()
         .ifPresentOrElse(
             result ->
-                chain.storeBlock(
-                    block,
-                    result.getReceipts(),
-                    validationResult.getYield().flatMap(y -> y.getBlockAccessList())),
+                blockWriter.execute(
+                    () -> {
+                      BlockImportTimings.time(
+                          BlockImportTimings.Phase.TRIE_LOG, result.getTrieLogWrite());
+                      BlockImportTimings.time(
+                          BlockImportTimings.Phase.STORE_BLOCK,
+                          () ->
+                              chain.storeBlock(
+                                  block, result.getReceipts(), result.getBlockAccessList()));
+                    }),
             () -> LOG.debug("empty yield in blockProcessingResult"));
     return validationResult;
   }
@@ -731,6 +828,9 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
           INTERNAL_ERROR, "Failed to set new head", Optional.empty());
     }
 
+    mempoolPrewarmer.ifPresent(prewarmer -> prewarmer.start(newHead));
+
+    final long finalityStart = System.nanoTime();
     // set and persist the new finalized block if it is present
     newFinalized.ifPresent(
         blockHeader -> {
@@ -745,6 +845,7 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
               blockchain.setSafeBlock(safeBlockHash);
               mergeContext.setSafeBlock(newSafeBlock);
             });
+    BlockImportTimings.addSince(BlockImportTimings.Phase.FORK_CHOICE_FINALITY, finalityStart);
 
     return ForkchoiceResult.withResult(newFinalized, Optional.of(newHead));
   }
@@ -759,20 +860,25 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
       return true;
     }
 
-    if (moveWorldStateTo(newHead)) {
+    if (BlockImportTimings.time(
+        BlockImportTimings.Phase.FORK_CHOICE_WORLD_STATE, () -> moveWorldStateTo(newHead))) {
       if (newHead.getParentHash().equals(blockchain.getChainHeadHash())) {
         LOG.atDebug()
             .setMessage(
                 "Forwarding chain head to the block {} saved from a previous newPayload invocation")
             .addArgument(newHead::toLogString)
             .log();
-        return blockchain.forwardToBlock(newHead);
+        return BlockImportTimings.time(
+            BlockImportTimings.Phase.FORK_CHOICE_CHAIN_HEAD,
+            () -> blockchain.forwardToBlock(newHead));
       } else {
         LOG.atDebug()
             .setMessage("New head {} is a chain reorg, rewind chain head to it")
             .addArgument(newHead::toLogString)
             .log();
-        return blockchain.rewindToBlock(newHead.getHash());
+        return BlockImportTimings.time(
+            BlockImportTimings.Phase.FORK_CHOICE_CHAIN_HEAD,
+            () -> blockchain.rewindToBlock(newHead.getHash()));
       }
     }
     LOG.atDebug()

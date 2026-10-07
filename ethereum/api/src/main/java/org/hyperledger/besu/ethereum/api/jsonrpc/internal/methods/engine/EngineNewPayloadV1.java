@@ -48,16 +48,19 @@ import org.hyperledger.besu.ethereum.core.BlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.eth.manager.EthPeers;
-import org.hyperledger.besu.ethereum.mainnet.BodyValidation;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 import org.hyperledger.besu.ethereum.mainnet.ValidationResult;
+import org.hyperledger.besu.plugin.services.metrics.Histogram;
+import org.hyperledger.besu.plugin.services.metrics.LabelledMetric;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.Executor;
 
 import com.fasterxml.jackson.databind.JsonMappingException;
 import org.jspecify.annotations.NonNull;
@@ -80,6 +83,7 @@ public sealed class EngineNewPayloadV1<
   private static final Hash OMMERS_HASH_CONSTANT = Hash.EMPTY_LIST_HASH;
   private static final BlockHeaderFunctions HEADER_FUNCTIONS = new MainnetBlockHeaderFunctions();
   private final EthPeers ethPeers;
+  private final LabelledMetric<Histogram> importPhaseHistogram;
   private long lastExecutionTimeInNs = 0L;
   private long lastInvalidWarn = 0L;
   protected final MergeMiningCoordinator mergeCoordinator;
@@ -97,6 +101,8 @@ public sealed class EngineNewPayloadV1<
     this.mergeCoordinator =
         checkNotNull(constructorArguments.mergeCoordinator(), "mergeCoordinator must not be null");
     this.ethPeers = constructorArguments.ethPeers();
+    this.importPhaseHistogram =
+        BlockImportTimings.createHistogram(constructorArguments.metricsSystem());
 
     constructorArguments
         .metricsSystem()
@@ -154,8 +160,11 @@ public sealed class EngineNewPayloadV1<
     // EIP-3675, extended with the corresponding section of EIP-4399. Client software MUST run this
     // validation in all cases even if this branch or any other branches of the block tree are in an
     // active sync process.
+    // the body memoizes its transactions root, which the body validation needs again
+    final BlockBody blockBody = createBlockBody(blockParam);
     final BlockHeaderBuilder blockHeaderBuilder = BlockHeaderBuilder.create();
     setBlockHeaderFields(blockHeaderBuilder, requestParameters);
+    blockHeaderBuilder.transactionsRoot(blockBody.getTransactionsRoot());
     final BlockHeader newBlockHeader = blockHeaderBuilder.buildBlockHeader();
 
     // ensure the block hash matches the blockParam hash
@@ -197,7 +206,7 @@ public sealed class EngineNewPayloadV1<
           maybeBadBlockError.get());
     }
 
-    final var unvalidatedBlock = new Block(newBlockHeader, createBlockBody(blockParam));
+    final var unvalidatedBlock = new Block(newBlockHeader, blockBody);
 
     // 3. Client software MAY initiate a sync process if requisite data for payload validation is
     // missing. Sync process is specified in the Sync section.
@@ -269,11 +278,22 @@ public sealed class EngineNewPayloadV1<
 
     // execute block and return result response
     final long startTimeNs = System.nanoTime();
-    final BlockProcessingResult executionResult = rememberBlock(block, blockParam);
+    final BlockImportTimings timings = BlockImportTimings.begin();
+    final BlockProcessingResult executionResult;
+    try {
+      executionResult = rememberBlock(block, blockParam);
+    } finally {
+      timings.finish();
+    }
     if (executionResult.isSuccessful()) {
       lastExecutionTimeInNs = System.nanoTime() - startTimeNs;
       logImportedBlockInfo(
-          block, lastExecutionTimeInNs, executionResult.getNbParallelizedTransactions());
+          block,
+          lastExecutionTimeInNs,
+          executionResult.getNbParallelizedTransactions(),
+          executionResult.getParallelizedGasUsed());
+      timings.log("Import", newBlockHeader.getNumber());
+      timings.recordTo(importPhaseHistogram);
       return respondWithValid(reqId, blockParam, newBlockHeader, executionResult);
     } else {
       logger().debug("New payload is invalid: {}", executionResult);
@@ -498,7 +518,6 @@ public sealed class EngineNewPayloadV1<
         .ommersHash(OMMERS_HASH_CONSTANT)
         .coinbase(blockParam.getFeeRecipient())
         .stateRoot(blockParam.getStateRoot())
-        .transactionsRoot(BodyValidation.transactionsRoot(blockParam.getTransactions()))
         .receiptsRoot(blockParam.getReceiptsRoot())
         .logsBloom(blockParam.getLogsBloom())
         .difficulty(Difficulty.ZERO)
@@ -518,7 +537,30 @@ public sealed class EngineNewPayloadV1<
   }
 
   protected BlockProcessingResult rememberBlock(final Block block, final EP executionPayload) {
-    return mergeCoordinator.rememberBlock(block, Optional.empty());
+    return mergeCoordinator.rememberBlock(block, Optional.empty(), writeAfterReply(block));
+  }
+
+  /**
+   * Stores a valid block once the reply is sent. The calls that need the block are only sent after
+   * the reply, and they run behind the writes.
+   *
+   * @param block the block being validated
+   * @return the writer of the block
+   */
+  protected Executor writeAfterReply(final Block block) {
+    return writes ->
+        queueOnOrderedThread(
+            () -> {
+              final BlockImportTimings timings = BlockImportTimings.begin();
+              try {
+                writes.run();
+              } catch (final RuntimeException e) {
+                logger().error("Failed to store valid block {}", block.toLogString(), e);
+              } finally {
+                timings.finish();
+                timings.log("Write", block.getHeader().getNumber());
+              }
+            });
   }
 
   protected void appendNewPayloadToSync(final Block block, final EP executionPayload) {
@@ -526,7 +568,10 @@ public sealed class EngineNewPayloadV1<
   }
 
   private void logImportedBlockInfo(
-      final Block block, final long timeInNs, final Optional<Integer> nbParallelizedTransactions) {
+      final Block block,
+      final long timeInNs,
+      final Optional<Integer> nbParallelizedTransactions,
+      final long parallelizedGasUsed) {
     final StringBuilder message = new StringBuilder();
     final int nbTransactions = block.getBody().getTransactions().size();
     message.append("Imported #%,d  (%s)| %4d tx");
@@ -535,10 +580,14 @@ public sealed class EngineNewPayloadV1<
             List.of(
                 block.getHeader().getNumber(), block.getHash().toShortLogString(), nbTransactions));
     if (nbParallelizedTransactions.isPresent()) {
-      double parallelizedTxPercentage =
+      final double parallelizedTxPercentage =
           (double) (nbParallelizedTransactions.get() * 100) / nbTransactions;
-      message.append(" (%5.1f%% parallel)");
+      final long gasUsed = block.getHeader().getGasUsed();
+      final double parallelizedGasPercentage =
+          gasUsed == 0 ? 0.0 : (double) (parallelizedGasUsed * 100) / gasUsed;
+      message.append(" (%5.1f%% txs parallel, %5.1f%% gas parallel)");
       messageArgs.add(parallelizedTxPercentage);
+      messageArgs.add(parallelizedGasPercentage);
     }
     appendVersionSpecificLogInfo(message, messageArgs, block);
     double mgasPerSec =

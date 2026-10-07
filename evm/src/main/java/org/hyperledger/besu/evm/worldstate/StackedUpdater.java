@@ -21,6 +21,7 @@ import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 
 /**
  * The Stacked updater.
@@ -39,7 +40,36 @@ public class StackedUpdater<W extends WorldView, A extends Account>
    */
   public StackedUpdater(
       final AbstractWorldUpdater<W, A> world, final EvmConfiguration evmConfiguration) {
-    super(world, evmConfiguration);
+    // only the thread executing the frame uses its updater
+    super(world, evmConfiguration, new HashSet<>());
+  }
+
+  @Override
+  public Account get(final Address address) {
+    // a read needs no tracker of its own, so it takes the account of the nearest level that has one
+    StackedUpdater<?, ?> level = this;
+    while (true) {
+      final Account tracked = level.updatedAccounts.get(address);
+      if (tracked != null) {
+        return tracked;
+      }
+      if (level.deletedAccounts.contains(address)) {
+        return null;
+      }
+      final AbstractWorldUpdater<?, ?> below = level.wrappedWorldView();
+      if (below instanceof StackedUpdater<?, ?> stacked) {
+        level = stacked;
+        continue;
+      }
+      final Account trackedBelow = below.updatedAccounts.get(address);
+      if (trackedBelow != null) {
+        return trackedBelow;
+      }
+      if (below.deletedAccounts.contains(address)) {
+        return null;
+      }
+      return below.getForMutation(address);
+    }
   }
 
   @Override

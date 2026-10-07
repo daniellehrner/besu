@@ -14,7 +14,13 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import org.hyperledger.besu.evm.UInt256;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
+
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
@@ -27,9 +33,6 @@ import org.hyperledger.besu.evm.operation.Operation;
  * word, with overflow silently truncated (mod 2^256).
  */
 public class AddOperationV2 extends AbstractFixedCostOperationV2 {
-
-  private static final Operation.OperationResult ADD_SUCCESS =
-      new Operation.OperationResult(3, null);
 
   /**
    * Instantiates a new Add operation.
@@ -54,25 +57,33 @@ public class AddOperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static Operation.OperationResult staticOperation(final MessageFrame frame) {
-    if (!frame.stackHasItemsV2(2)) return UNDERFLOW_RESPONSE;
-    long[] stack = frame.stackDataV2();
-    int top = frame.stackTopV2();
-    final int aOffset = (top - 1) << 2;
-    final int bOffset = (top - 2) << 2;
+    final int sp = frame.stackTopV2();
+    return result(frame, add(frame.stackDataV2(), sp, top(sp), ANY_GAS), 2, 1);
+  }
 
-    final UInt256 valueA =
-        new UInt256(stack[aOffset], stack[aOffset + 1], stack[aOffset + 2], stack[aOffset + 3]);
-    final UInt256 valueB =
-        new UInt256(stack[bOffset], stack[bOffset + 1], stack[bOffset + 2], stack[bOffset + 3]);
-
-    final UInt256 r = valueA.add(valueB);
-
-    stack[bOffset] = r.u3();
-    stack[bOffset + 1] = r.u2();
-    stack[bOffset + 2] = r.u1();
-    stack[bOffset + 3] = r.u0();
-
-    frame.setTopV2(top - 1);
-    return ADD_SUCCESS;
+  @InlineInEvmLoop(opcodes = 0x01)
+  static long add(final long[] s, final int sp, final int top, final long gas) {
+    if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+      final int a = top;
+      final int b = a - 4;
+      final long x0 = s[a + 3];
+      final long y0 = s[b + 3];
+      final long r0 = x0 + y0;
+      final long c0 = ((x0 & y0) | ((x0 | y0) & ~r0)) >>> 63;
+      final long x1 = s[a + 2];
+      final long y1 = s[b + 2];
+      final long r1 = x1 + y1 + c0;
+      final long c1 = ((x1 & y1) | ((x1 | y1) & ~r1)) >>> 63;
+      final long x2 = s[a + 1];
+      final long y2 = s[b + 1];
+      final long r2 = x2 + y2 + c1;
+      final long c2 = ((x2 & y2) | ((x2 | y2) & ~r2)) >>> 63;
+      s[b] = s[a] + s[b] + c2;
+      s[b + 1] = r2;
+      s[b + 2] = r1;
+      s[b + 3] = r0;
+      return done(VERY_LOW_TIER_GAS, 1, -1);
+    }
+    return FALLBACK;
   }
 }

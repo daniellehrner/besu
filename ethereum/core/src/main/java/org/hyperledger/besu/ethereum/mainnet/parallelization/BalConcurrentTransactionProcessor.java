@@ -20,6 +20,7 @@ import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.mainnet.BalConfiguration;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.MainnetTransactionProcessor;
 import org.hyperledger.besu.ethereum.mainnet.TransactionValidationParams;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.AccessLocationTracker;
@@ -58,6 +59,8 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
   private final BlockAccessList blockAccessList;
   private final BlockAccessListAccountLookup blockAccessListAccountLookup;
   private final Optional<BalPrefetcher> maybePrefetcher;
+  // only while debug logging is on: when each transaction ran, to see what the import waits for
+  private ExecutionTrace trace;
 
   public BalConcurrentTransactionProcessor(
       final MainnetTransactionProcessor transactionProcessor,
@@ -106,6 +109,7 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
       final Optional<BlockAccessListBuilder> blockAccessListBuilder,
       final Optional<BlockHeader> maybeParentHeader) {
 
+    trace = LOG.isDebugEnabled() ? new ExecutionTrace(blockHeader.getNumber(), transactions) : null;
     maybePrefetcher.ifPresent(
         balPrefetchMechanism -> {
           final Optional<BonsaiWorldState> maybeWorldState =
@@ -160,6 +164,7 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
       final Optional<BlockAccessListBuilder> blockAccessListBuilder,
       final Optional<BlockHeader> maybeParentHeader) {
 
+    final long start = System.nanoTime();
     final BonsaiWorldState ws =
         getWorldStateForTransaction(protocolContext, maybeParentHeader, transactionLocation)
             .orElse(null);
@@ -193,10 +198,16 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
               txTracker);
 
       ctxBuilder.transactionProcessingResult(result);
+      // the receipt's bloom depends on this transaction alone, so it is hashed here, in parallel
+      result.getLogsBloom();
 
       return ctxBuilder.build();
     } finally {
       ws.close();
+      final ExecutionTrace current = trace;
+      if (current != null) {
+        current.record(transactionLocation, start, System.nanoTime());
+      }
     }
   }
 
@@ -213,7 +224,12 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
     final CompletableFuture<ParallelizedTransactionContext> future = removeFuture(txIndex);
     if (future != null) {
       try {
+        final long waitStart = System.nanoTime();
         final ParallelizedTransactionContext ctx = future.get();
+        BlockImportTimings.addSince(BlockImportTimings.Phase.TX_WAIT, waitStart);
+        if (trace != null && txIndex == futures.length - 1) {
+          trace.log();
+        }
 
         if (ctx == null) {
           LOG.trace("Transaction context for transaction {} is empty.", txIndex);
@@ -252,5 +268,70 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
 
     LOG.error("No future found for transaction {}.", txIndex);
     return Optional.empty();
+  }
+
+  private static final class ExecutionTrace {
+    private final long blockNumber;
+    private final long dispatchNanos = System.nanoTime();
+    private final long[] gasLimits;
+    private final long[] startNanos;
+    private final long[] endNanos;
+
+    ExecutionTrace(final long blockNumber, final List<Transaction> transactions) {
+      this.blockNumber = blockNumber;
+      this.gasLimits = transactions.stream().mapToLong(Transaction::getGasLimit).toArray();
+      this.startNanos = new long[gasLimits.length];
+      this.endNanos = new long[gasLimits.length];
+    }
+
+    void record(final int txIndex, final long start, final long end) {
+      startNanos[txIndex] = start;
+      endNanos[txIndex] = end;
+    }
+
+    void log() {
+      long busy = 0;
+      long lastEnd = dispatchNanos;
+      long latestStart = dispatchNanos;
+      int longest = 0;
+      for (int i = 0; i < startNanos.length; i++) {
+        final long duration = endNanos[i] - startNanos[i];
+        busy += duration;
+        lastEnd = Math.max(lastEnd, endNanos[i]);
+        latestStart = Math.max(latestStart, startNanos[i]);
+        if (duration > endNanos[longest] - startNanos[longest]) {
+          longest = i;
+        }
+      }
+      LOG.debug(
+          "BAL execution #{}: {} tx, workers busy {} ms, last done {} ms and last started {} ms after"
+              + " dispatch, longest tx #{} ({} gas limit) {} ms, started {} ms after dispatch",
+          blockNumber,
+          startNanos.length,
+          millis(busy),
+          millis(lastEnd - dispatchNanos),
+          millis(latestStart - dispatchNanos),
+          longest,
+          gasLimits.length == 0 ? 0 : gasLimits[longest],
+          startNanos.length == 0 ? 0 : millis(endNanos[longest] - startNanos[longest]),
+          startNanos.length == 0 ? 0 : millis(startNanos[longest] - dispatchNanos));
+      if (LOG.isTraceEnabled()) {
+        final StringBuilder durations = new StringBuilder();
+        for (int i = 0; i < startNanos.length; i++) {
+          durations
+              .append(i == 0 ? "" : ",")
+              .append(gasLimits[i])
+              .append(':')
+              .append((startNanos[i] - dispatchNanos) / 1000)
+              .append(':')
+              .append((endNanos[i] - startNanos[i]) / 1000);
+        }
+        LOG.trace("BAL tx timings #{} gasLimit:startUs:durationUs {}", blockNumber, durations);
+      }
+    }
+
+    private static String millis(final long nanos) {
+      return String.format("%.1f", nanos / 1e6);
+    }
   }
 }

@@ -25,12 +25,15 @@ import org.hyperledger.besu.ethereum.core.BlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.core.BlockImporter;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.core.Transaction;
+import org.hyperledger.besu.ethereum.mainnet.BlockAccessListReplay;
 import org.hyperledger.besu.ethereum.mainnet.BlockHeaderValidator;
 import org.hyperledger.besu.ethereum.mainnet.BlockImportResult;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 import org.hyperledger.besu.ethereum.mainnet.ScheduleBasedBlockHeaderFunctions;
+import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 import org.hyperledger.besu.ethereum.util.RawBlockIterator;
 
 import java.io.Closeable;
@@ -38,6 +41,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -64,6 +68,9 @@ public class RlpBlockImporter implements Closeable {
   private final Stopwatch cumulativeTimer = Stopwatch.createUnstarted();
   private final Stopwatch segmentTimer = Stopwatch.createUnstarted();
   private static final long SEGMENT_SIZE = 1000;
+  // lets the background work of one block settle before the next, as between blocks on a live node
+  private static final long PAUSE_BETWEEN_BLOCKS_MS =
+      Long.getLong("besu.bench.pauseBetweenBlocksMs", 0L);
 
   /** Default Constructor. */
   public RlpBlockImporter() {}
@@ -101,6 +108,29 @@ public class RlpBlockImporter implements Closeable {
       final boolean skipPowValidation,
       final long startBlock,
       final long endBlock)
+      throws IOException {
+    return importBlockchain(blocks, besuController, skipPowValidation, startBlock, endBlock, false);
+  }
+
+  /**
+   * Import blockchain.
+   *
+   * @param blocks the blocks
+   * @param besuController the besu controller
+   * @param skipPowValidation the skip pow validation
+   * @param startBlock the start block
+   * @param endBlock the end block
+   * @param perBlockTimings log the phase breakdown of every block, as the engine API does
+   * @return the rlp block importer - import result
+   * @throws IOException the io exception
+   */
+  public RlpBlockImporter.ImportResult importBlockchain(
+      final Path blocks,
+      final BesuController besuController,
+      final boolean skipPowValidation,
+      final long startBlock,
+      final long endBlock,
+      final boolean perBlockTimings)
       throws IOException {
     final ProtocolSchedule protocolSchedule = besuController.getProtocolSchedule();
     final ProtocolContext context = besuController.getProtocolContext();
@@ -165,7 +195,8 @@ public class RlpBlockImporter implements Closeable {
                         block,
                         header,
                         protocolSchedule.getByBlockHeader(header),
-                        skipPowValidation),
+                        skipPowValidation,
+                        perBlockTimings),
                 importExecutor);
         previousBlockFuture.exceptionally(
             exception -> {
@@ -221,7 +252,15 @@ public class RlpBlockImporter implements Closeable {
       final Block block,
       final BlockHeader header,
       final ProtocolSpec protocolSpec,
-      final boolean skipPowValidation) {
+      final boolean skipPowValidation,
+      final boolean perBlockTimings) {
+    final Optional<BlockAccessList> blockAccessList =
+        BlockAccessListReplay.mode() == BlockAccessListReplay.Mode.REPLAY
+            ? Optional.of(BlockAccessListReplay.load(header.getNumber()))
+            : Optional.empty();
+    // The phase hooks record into a thread local, and this runs on the single import thread that
+    // the block processor itself runs on, so the phases of this block are the ones attributed.
+    final BlockImportTimings timings = perBlockTimings ? BlockImportTimings.begin() : null;
     try {
       cumulativeTimer.start();
       segmentTimer.start();
@@ -233,20 +272,47 @@ public class RlpBlockImporter implements Closeable {
               skipPowValidation
                   ? HeaderValidationMode.LIGHT_SKIP_DETACHED
                   : HeaderValidationMode.SKIP_DETACHED,
-              skipPowValidation ? HeaderValidationMode.LIGHT : HeaderValidationMode.FULL);
+              skipPowValidation ? HeaderValidationMode.LIGHT : HeaderValidationMode.FULL,
+              blockAccessList);
       if (!blockImported.isImported()) {
         throw new IllegalStateException(
             "Invalid block at block number " + header.getNumber() + ".");
+      }
+      if (BlockAccessListReplay.mode() == BlockAccessListReplay.Mode.RECORD) {
+        BlockAccessListReplay.store(
+            header.getNumber(),
+            context
+                .getBlockchain()
+                .getBlockAccessList(block.getHash())
+                .orElseThrow(
+                    () ->
+                        new IllegalStateException(
+                            "No block access list built for block " + header.getNumber())));
       }
     } finally {
       blockBacklog.release();
       cumulativeTimer.stop();
       segmentTimer.stop();
+      if (timings != null) {
+        timings.finish();
+        timings.log("Import", header.getNumber());
+      }
       final long thisGas = block.getHeader().getGasUsed();
       cumulativeGas += thisGas;
       segmentGas += thisGas;
       if (header.getNumber() % SEGMENT_SIZE == 0) {
         logProgress(header.getNumber());
+      }
+      pauseBetweenBlocks();
+    }
+  }
+
+  private static void pauseBetweenBlocks() {
+    if (PAUSE_BETWEEN_BLOCKS_MS > 0) {
+      try {
+        Thread.sleep(PAUSE_BETWEEN_BLOCKS_MS);
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
       }
     }
   }

@@ -22,36 +22,38 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 
-import com.google.common.annotations.VisibleForTesting;
+import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 
-/** The Chain id operation. */
+/**
+ * EVM v2 CHAINID operation — pushes the pre-computed chain ID onto the stack (Istanbul+).
+ *
+ * <p>The four 64-bit limbs of the chain ID are computed once at construction time.
+ */
 public class ChainIdOperationV2 extends AbstractFixedCostOperationV2 {
 
   private static final VarHandle LONG_BE =
       MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
 
-  /** The CHAINID Opcode number */
+  /** CHAINID opcode number. */
   public static final int OPCODE = 0x46;
 
-  private final Bytes32 chainId;
-
-  // Cached big-endian limbs of the chainId for zero-allocation pushes to the EVM v2 stack.
   private final long chainIdU3;
   private final long chainIdU2;
   private final long chainIdU1;
   private final long chainIdU0;
+  private final Bytes32 chainId;
 
   /**
-   * Instantiates a new Chain id operation.
+   * Instantiates a new Chain ID operation.
    *
    * @param gasCalculator the gas calculator
-   * @param chainId the chain id
+   * @param chainId the chain ID (left-padded to 32 bytes big-endian)
    */
-  public ChainIdOperationV2(final GasCalculator gasCalculator, final Bytes32 chainId) {
+  public ChainIdOperationV2(final GasCalculator gasCalculator, final Bytes chainId) {
     super(OPCODE, "CHAINID", 0, 1, gasCalculator, gasCalculator.getBaseTierGasCost());
-    this.chainId = chainId;
-    final byte[] b = chainId.toArrayUnsafe();
+    this.chainId = Bytes32.leftPad(chainId);
+    final byte[] b = this.chainId.toArrayUnsafe();
     this.chainIdU3 = (long) LONG_BE.get(b, 0);
     this.chainIdU2 = (long) LONG_BE.get(b, 8);
     this.chainIdU1 = (long) LONG_BE.get(b, 16);
@@ -59,25 +61,24 @@ public class ChainIdOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /**
-   * Returns the chain ID this operation uses.
+   * Returns the chain id this operation pushes.
    *
-   * @return the chain id
+   * @return the chain id, left-padded to 32 bytes
    */
-  @VisibleForTesting
-  Bytes32 getChainId() {
+  public Bytes getChainId() {
     return chainId;
   }
 
   @Override
   public Operation.OperationResult executeFixedCostOperation(final MessageFrame frame) {
     if (!frame.stackHasSpaceV2(1)) return OVERFLOW_RESPONSE;
-    final long[] stack = frame.stackDataV2();
+    final long[] s = frame.stackDataV2();
     final int top = frame.stackTopV2();
-    final int offset = top << 2;
-    stack[offset] = chainIdU3;
-    stack[offset + 1] = chainIdU2;
-    stack[offset + 2] = chainIdU1;
-    stack[offset + 3] = chainIdU0;
+    final int dst = top << 2;
+    s[dst] = chainIdU3;
+    s[dst + 1] = chainIdU2;
+    s[dst + 2] = chainIdU1;
+    s[dst + 3] = chainIdU0;
     frame.setTopV2(top + 1);
     return successResponse;
   }

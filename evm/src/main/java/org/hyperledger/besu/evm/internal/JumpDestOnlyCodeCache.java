@@ -32,7 +32,10 @@ public class JumpDestOnlyCodeCache {
   static class CodeScale implements Weigher<Hash, Code> {
     @Override
     public int weigh(final Hash key, final Code code) {
-      return ((code.getSize() * 9 + 7) / 8) + key.getBytes().size();
+      // The analysed code holds the bytes, the jump destination bitmap and the decoded PUSH
+      // immediates; mainnet contracts have about one PUSH per nine bytes, which puts the tables at
+      // twice the code size.
+      return code.getSize() * 3 + key.getBytes().size();
     }
   }
 
@@ -62,10 +65,17 @@ public class JumpDestOnlyCodeCache {
   /**
    * Put.
    *
+   * <p>Empty code under a non-empty hash is never cached. Such an entry means the code could not be
+   * read, and the cache is shared by every execution, so caching it would make all later calls to
+   * that code run empty code.
+   *
    * @param key the key
    * @param value the value
    */
   public void put(final Hash key, final Code value) {
+    if (value.getSize() == 0 && !Hash.EMPTY.equals(key)) {
+      return;
+    }
     cache.put(key, value);
   }
 }

@@ -55,7 +55,6 @@ public class ProtocolSpecBuilder {
   private Supplier<GasCalculator> gasCalculatorBuilder;
   private GasLimitCalculatorBuilder gasLimitCalculatorBuilder;
   private Wei blockReward;
-  private boolean skipZeroBlockRewards;
 
   private BlockHeaderFunctions blockHeaderFunctions;
   private AbstractBlockProcessor.TransactionReceiptFactory transactionReceiptFactory;
@@ -125,11 +124,6 @@ public class ProtocolSpecBuilder {
 
   public ProtocolSpecBuilder blockReward(final Wei blockReward) {
     this.blockReward = blockReward;
-    return this;
-  }
-
-  public ProtocolSpecBuilder skipZeroBlockRewards(final boolean skipZeroBlockRewards) {
-    this.skipZeroBlockRewards = skipZeroBlockRewards;
     return this;
   }
 
@@ -349,6 +343,13 @@ public class ProtocolSpecBuilder {
   }
 
   public ProtocolSpec build(final ProtocolSchedule protocolSchedule) {
+    if (blockAccessListFactory == null && BlockAccessListReplay.isEnabled()) {
+      blockAccessListFactory = new BlockAccessListFactory();
+      blockAccessListValidatorBuilder = __ -> BlockAccessListReplay.VALIDATOR;
+      if (BlockAccessListReplay.isBalStateRoot()) {
+        stateRootCommitterFactory = new StateRootCommitterFactory(balConfiguration);
+      }
+    }
     checkNotNull(gasCalculatorBuilder, "Missing gasCalculator");
     checkNotNull(gasLimitCalculatorBuilder, "Missing gasLimitCalculatorBuilder");
     checkNotNull(evmBuilder, "Missing operation registry");
@@ -452,7 +453,6 @@ public class ProtocolSpecBuilder {
         blockReward,
         miningBeneficiaryCalculator,
         precompileContractRegistry,
-        skipZeroBlockRewards,
         gasCalculator,
         gasLimitCalculator,
         feeMarket,
@@ -481,7 +481,6 @@ public class ProtocolSpecBuilder {
         transactionReceiptFactory,
         blockReward,
         miningBeneficiaryCalculator,
-        skipZeroBlockRewards,
         protocolSchedule,
         balConfiguration);
   }
@@ -514,7 +513,6 @@ public class ProtocolSpecBuilder {
         AbstractBlockProcessor.TransactionReceiptFactory transactionReceiptFactory,
         Wei blockReward,
         MiningBeneficiaryCalculator miningBeneficiaryCalculator,
-        boolean skipZeroBlockRewards,
         ProtocolSchedule protocolSchedule,
         BalConfiguration balConfiguration);
   }

@@ -14,6 +14,10 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+
 import org.hyperledger.besu.evm.UInt256;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -70,5 +74,43 @@ public class MulOperationV2 extends AbstractFixedCostOperationV2 {
 
     frame.setTopV2(top - 1);
     return MUL_SUCCESS;
+  }
+
+  /** MUL when either factor fits in 64 bits. */
+  @InlineInEvmLoop(opcodes = 0x02)
+  static long mul(final long[] s, final int sp, final int top, final long gas) {
+    if (sp >= 2 && gas >= LOW_TIER_GAS) {
+      final int a = top;
+      final int b = a - 4;
+      final int wide;
+      if ((s[a] | s[a + 1] | s[a + 2]) == 0) {
+        wide = b;
+      } else if ((s[b] | s[b + 1] | s[b + 2]) == 0) {
+        wide = a;
+      } else {
+        wide = -1;
+      }
+      if (wide >= 0) {
+        final long m = s[(wide == a ? b : a) + 3];
+        final long x3 = s[wide];
+        final long x2 = s[wide + 1];
+        final long x1 = s[wide + 2];
+        final long x0 = s[wide + 3];
+        final long h0 = Math.unsignedMultiplyHigh(x0, m);
+        final long h1 = Math.unsignedMultiplyHigh(x1, m);
+        final long h2 = Math.unsignedMultiplyHigh(x2, m);
+        final long l1 = x1 * m;
+        final long r1 = l1 + h0;
+        // a high half is at most 2^64 - 2, so adding a carry to one cannot overflow
+        final long l2 = x2 * m;
+        final long r2 = l2 + h1 + (Long.compareUnsigned(r1, l1) < 0 ? 1L : 0L);
+        s[b] = x3 * m + h2 + (Long.compareUnsigned(r2, l2) < 0 ? 1L : 0L);
+        s[b + 1] = r2;
+        s[b + 2] = r1;
+        s[b + 3] = x0 * m;
+        return done(LOW_TIER_GAS, 1, -1);
+      }
+    }
+    return FALLBACK;
   }
 }

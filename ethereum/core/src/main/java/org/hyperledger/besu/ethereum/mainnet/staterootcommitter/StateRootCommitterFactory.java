@@ -17,7 +17,6 @@ package org.hyperledger.besu.ethereum.mainnet.staterootcommitter;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.mainnet.BalConfiguration;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
-import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListAccountLookup;
 import org.hyperledger.besu.ethereum.trie.forest.ForestWorldStateArchive;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.PathBasedWorldStateProvider;
 import org.hyperledger.besu.plugin.data.BlockHeader;
@@ -57,16 +56,26 @@ public final class StateRootCommitterFactory {
       final boolean storageFrozen) {
     return switch (resolveMode(protocolContext, maybeBal)) {
       case BAL ->
-          new BalStateRootCommitter(
-                  protocolContext,
-                  blockHeader,
-                  BlockAccessListAccountLookup.of(maybeBal.get()),
-                  storageFrozen)
+          BalStateRootCommitter.forAccessList(
+                  protocolContext, blockHeader, maybeBal.get(), storageFrozen)
               .start();
       case DEFAULT -> new DefaultStateRootCommitter();
       case FOREST -> ForestStateRootCommitter.INSTANCE;
       case TRIE_DISABLED -> TrieDisabledStateRootCommitter.INSTANCE;
     };
+  }
+
+  /**
+   * Whether blocks get their root from the access list in the background, which reads none of the
+   * trie nodes the block's own world state would otherwise preload.
+   *
+   * @param protocolContext the protocol context
+   * @param maybeBal the block access list, if the block has one
+   * @return true when {@link #forBlock} returns the access list committer
+   */
+  public boolean usesBlockAccessList(
+      final ProtocolContext protocolContext, final Optional<BlockAccessList> maybeBal) {
+    return resolveMode(protocolContext, maybeBal) == Mode.BAL;
   }
 
   private Mode resolveMode(

@@ -80,7 +80,6 @@ class BlockImportExceptionHandlingTest {
           transactionReceiptFactory,
           Wei.ZERO,
           BlockHeader::getCoinbase,
-          true,
           protocolSchedule,
           BalConfiguration.DEFAULT);
   private final BlockHeaderValidator blockHeaderValidator = mock(BlockHeaderValidator.class);
@@ -167,6 +166,7 @@ class BlockImportExceptionHandlingTest {
             eq(goodBlock),
             any(),
             any(),
+            any(),
             eq(HeaderValidationMode.DETACHED_ONLY),
             any(),
             any()))
@@ -203,6 +203,7 @@ class BlockImportExceptionHandlingTest {
     when(blockBodyValidator.validateBody(
             eq(protocolContext),
             eq(goodBlock),
+            any(),
             any(),
             any(),
             eq(HeaderValidationMode.DETACHED_ONLY),
@@ -273,6 +274,7 @@ class BlockImportExceptionHandlingTest {
     when(blockBodyValidator.validateBody(
             eq(protocolContext),
             eq(goodBlock),
+            any(),
             any(),
             any(),
             eq(HeaderValidationMode.DETACHED_ONLY),

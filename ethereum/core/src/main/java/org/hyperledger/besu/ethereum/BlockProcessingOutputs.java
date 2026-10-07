@@ -17,12 +17,16 @@ package org.hyperledger.besu.ethereum;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.Request;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
+import org.hyperledger.besu.ethereum.mainnet.BodyValidation;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
+
+import com.google.common.base.Suppliers;
 
 /** Contains the outputs of processing a block. */
 public class BlockProcessingOutputs {
@@ -33,6 +37,8 @@ public class BlockProcessingOutputs {
   private final Optional<BlockAccessList> maybeBlockAccessList;
   private final long cumulativeBlockGasUsed;
   private final Map<Long, Hash> accessedAncestors;
+  private final Supplier<Hash> receiptsRoot;
+  private final Runnable trieLogWrite;
 
   /**
    * Creates a new instance.
@@ -111,12 +117,93 @@ public class BlockProcessingOutputs {
       final Optional<BlockAccessList> blockAccessList,
       final long cumulativeBlockGasUsed,
       final Map<Long, Hash> accessedAncestors) {
+    this(
+        worldState,
+        receipts,
+        maybeRequests,
+        blockAccessList,
+        cumulativeBlockGasUsed,
+        accessedAncestors,
+        Suppliers.memoize(() -> BodyValidation.receiptsRoot(receipts)));
+  }
+
+  /**
+   * Outputs whose receipts root may already be on its way.
+   *
+   * @param worldState the world state after the block
+   * @param receipts the block's receipts
+   * @param maybeRequests the block's requests
+   * @param blockAccessList the block's access list
+   * @param cumulativeBlockGasUsed the gas the block used
+   * @param accessedAncestors the ancestor hashes the block read
+   * @param receiptsRoot the root of the receipts
+   */
+  public BlockProcessingOutputs(
+      final MutableWorldState worldState,
+      final List<TransactionReceipt> receipts,
+      final Optional<List<Request>> maybeRequests,
+      final Optional<BlockAccessList> blockAccessList,
+      final long cumulativeBlockGasUsed,
+      final Map<Long, Hash> accessedAncestors,
+      final Supplier<Hash> receiptsRoot) {
+    this(
+        worldState,
+        receipts,
+        maybeRequests,
+        blockAccessList,
+        cumulativeBlockGasUsed,
+        accessedAncestors,
+        receiptsRoot,
+        () -> {});
+  }
+
+  /**
+   * Outputs of a block whose trie log is left for the caller to write.
+   *
+   * @param worldState the world state after the block
+   * @param receipts the block's receipts
+   * @param maybeRequests the block's requests
+   * @param blockAccessList the block's access list
+   * @param cumulativeBlockGasUsed the gas the block used
+   * @param accessedAncestors the ancestor hashes the block read
+   * @param receiptsRoot the root of the receipts
+   * @param trieLogWrite writes the block's trie log
+   */
+  public BlockProcessingOutputs(
+      final MutableWorldState worldState,
+      final List<TransactionReceipt> receipts,
+      final Optional<List<Request>> maybeRequests,
+      final Optional<BlockAccessList> blockAccessList,
+      final long cumulativeBlockGasUsed,
+      final Map<Long, Hash> accessedAncestors,
+      final Supplier<Hash> receiptsRoot,
+      final Runnable trieLogWrite) {
     this.worldState = worldState;
     this.receipts = receipts;
     this.maybeRequests = maybeRequests;
     this.maybeBlockAccessList = blockAccessList;
     this.cumulativeBlockGasUsed = cumulativeBlockGasUsed;
     this.accessedAncestors = accessedAncestors;
+    this.receiptsRoot = receiptsRoot;
+    this.trieLogWrite = trieLogWrite;
+  }
+
+  /**
+   * Writes the block's trie log, if processing left it to the caller.
+   *
+   * @return the write, which does nothing if processing wrote the trie log
+   */
+  public Runnable getTrieLogWrite() {
+    return trieLogWrite;
+  }
+
+  /**
+   * The root of the receipts.
+   *
+   * @return the receipts root, computed at most once
+   */
+  public Supplier<Hash> getReceiptsRoot() {
+    return receiptsRoot;
   }
 
   /**

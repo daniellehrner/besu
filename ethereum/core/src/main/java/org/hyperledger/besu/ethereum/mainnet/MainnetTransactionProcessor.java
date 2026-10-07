@@ -328,6 +328,13 @@ public class MainnetTransactionProcessor {
           delegationAccesses = codeDelegationResult.authorityAccesses();
           deferredDelegationUpdater = delegationUpdater;
         } else {
+          // Accesses are tracked before Amsterdam only when blocks are replayed through the
+          // access list path, whose parallel import needs the authorities' new nonce and code.
+          accessLocationTracker.ifPresent(
+              tracker ->
+                  codeDelegationResult
+                      .authorityAccesses()
+                      .forEach(access -> tracker.addTouchedAccount(access.authority())));
           // The intrinsic already validated the charge, so there is nothing left to fail.
           codeDelegationRefund =
               gasCalculator.calculateDelegateCodeGasRefund(
@@ -363,6 +370,8 @@ public class MainnetTransactionProcessor {
       final MessageFrame.Builder commonMessageFrameBuilder =
           MessageFrame.builder()
               .maxStackSize(maxStackSize)
+              // gives the top-level frame a pooled v2 stack instead of one allocated on entry
+              .enableEvmV2(messageCallProcessor.getEvm().getEvmConfiguration().enableEvmV2())
               .worldUpdater(worldUpdater.updater())
               .initialGas(initialGas)
               .initialStateGasReservoir(initialStateGasReservoir)

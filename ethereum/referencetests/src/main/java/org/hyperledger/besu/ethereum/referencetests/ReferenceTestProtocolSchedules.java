@@ -74,7 +74,23 @@ public class ReferenceTestProtocolSchedules {
   private record CacheKey(EvmConfiguration evmConfiguration, ObjectNode blobSchedule) {}
 
   public static ReferenceTestProtocolSchedules create() {
-    return create(new StubGenesisConfigOptions(), EvmConfiguration.DEFAULT);
+    return create(new StubGenesisConfigOptions(), evmConfiguration());
+  }
+
+  /**
+   * The EVM configuration the reference tests run with: the v2 interpreter when the system property
+   * test.evm.v2 is set, the default one otherwise.
+   *
+   * @return the EVM configuration
+   */
+  public static EvmConfiguration evmConfiguration() {
+    return Boolean.getBoolean("test.evm.v2")
+        ? new EvmConfiguration(
+            EvmConfiguration.DEFAULT.jumpDestCacheWeightKB(),
+            EvmConfiguration.DEFAULT.worldUpdaterMode(),
+            EvmConfiguration.DEFAULT.enableOptimizedOpcodes(),
+            true)
+        : EvmConfiguration.DEFAULT;
   }
 
   public static ReferenceTestProtocolSchedules create(final EvmConfiguration evmConfiguration) {
@@ -288,7 +304,28 @@ public class ReferenceTestProtocolSchedules {
                         evmConfiguration)),
                 Map.entry(
                     "Bogota",
-                    createSchedule(genesisStub.clone().futureEipsTime(0), evmConfiguration)),
+                    createSchedule(
+                        genesisStub
+                            .clone()
+                            .pragueTime(0)
+                            .osakaTime(0)
+                            .bpo1Time(0)
+                            .bpo2Time(0)
+                            .amsterdamTime(0)
+                            .bogotaTime(0),
+                        evmConfiguration)),
+                Map.entry(
+                    "AmsterdamToBogotaAtTime15k",
+                    createSchedule(
+                        genesisStub
+                            .clone()
+                            .pragueTime(0)
+                            .osakaTime(0)
+                            .bpo1Time(0)
+                            .bpo2Time(0)
+                            .amsterdamTime(0)
+                            .bogotaTime(15000),
+                        evmConfiguration)),
                 Map.entry(
                     "Polis",
                     createSchedule(genesisStub.clone().futureEipsTime(0), evmConfiguration)),

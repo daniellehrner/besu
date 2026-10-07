@@ -23,6 +23,7 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
+import org.hyperledger.besu.ethereum.trie.BytesConcatenation;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.common.PmtStateTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.cache.FlatDbCacheManager;
@@ -34,6 +35,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.trienode.Bons
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.trienode.TrieNodeStrategy;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
+import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.account.AccountStorageEntry;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
@@ -52,6 +54,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -356,7 +360,8 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
       final Hash accountHash,
       final StorageSlotKey storageSlotKey) {
     final Bytes key =
-        Bytes.concatenate(accountHash.getBytes(), storageSlotKey.getSlotHash().getBytes());
+        BytesConcatenation.concatenate(
+            accountHash.getBytes(), storageSlotKey.getSlotHash().getBytes());
     return cacheManager.getFromCacheOrStorage(
         ACCOUNT_STORAGE_STORAGE,
         key,
@@ -387,11 +392,17 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
                 .getMultipleFlat(segmentIdentifier, keysToFetch, composedWorldStateStorage));
   }
 
-  public Optional<Bytes> getCode(final Hash codeHash, final Hash accountHash) {
+  /** The code, with its jump destination analysis when the storage holds it. */
+  public Optional<Code> getCode(final Hash codeHash, final Hash accountHash) {
     if (codeHash.equals(Hash.EMPTY)) {
-      return Optional.of(Bytes.EMPTY);
+      return Optional.of(Code.EMPTY_CODE);
     }
     return getFlatDbStrategy().getFlatCode(codeHash, accountHash, composedWorldStateStorage);
+  }
+
+  /** The bytes of the code alone, for the readers that have no use for its analysis. */
+  public Optional<Bytes> getCodeBytes(final Hash codeHash, final Hash accountHash) {
+    return getFlatDbStrategy().getFlatCodeBytes(codeHash, accountHash, composedWorldStateStorage);
   }
 
   public Optional<Bytes> getAccountStateTrieNode(final Bytes location, final Bytes32 nodeHash) {
@@ -521,6 +532,8 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     protected final FlatDbStrategy flatDbStrategy;
     protected final SegmentedKeyValueStorage worldStorage;
     protected final TrieNodeStrategy trieNodeStrategy;
+    // code keyed by its hash is shared by every account holding it, so it is written only once
+    private final Set<Hash> writtenCodeHashes = ConcurrentHashMap.newKeySet();
 
     public Updater(
         final SegmentedKeyValueStorageTransaction composedWorldStateTransaction,
@@ -548,7 +561,8 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     }
 
     public Updater putCode(final Hash accountHash, final Hash codeHash, final Bytes code) {
-      if (code.isEmpty()) {
+      if (code.isEmpty()
+          || (flatDbStrategy.isCodeByCodeHash() && !writtenCodeHashes.add(codeHash))) {
         return this;
       }
       flatDbStrategy.putFlatCode(
@@ -710,7 +724,7 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
         final Hash accountHash, final Hash slotHash, final Bytes storageValue) {
       stagePut(
           ACCOUNT_STORAGE_STORAGE,
-          Bytes.concatenate(accountHash.getBytes(), slotHash.getBytes()),
+          BytesConcatenation.concatenate(accountHash.getBytes(), slotHash.getBytes()),
           storageValue);
       return super.putStorageValueBySlotHash(accountHash, slotHash, storageValue);
     }
@@ -719,7 +733,8 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     public synchronized void removeStorageValueBySlotHash(
         final Hash accountHash, final Hash slotHash) {
       stageRemoval(
-          ACCOUNT_STORAGE_STORAGE, Bytes.concatenate(accountHash.getBytes(), slotHash.getBytes()));
+          ACCOUNT_STORAGE_STORAGE,
+          BytesConcatenation.concatenate(accountHash.getBytes(), slotHash.getBytes()));
       super.removeStorageValueBySlotHash(accountHash, slotHash);
     }
 

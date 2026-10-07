@@ -57,6 +57,7 @@ import org.hyperledger.besu.evm.tracing.OperationTracer;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -69,7 +70,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
@@ -332,7 +335,7 @@ class OptimisticTransactionProcessorUnitTest {
     void collisionDetectorCalledWithCorrectTransaction() {
       final Transaction transaction = mockTransaction();
       stubSuccessfulTransaction(Optional.empty());
-      when(collisionDetector.hasCollision(any(), any(), any(), any())).thenReturn(false);
+      when(collisionDetector.hasCollision(any(), any(), any(), any(), any())).thenReturn(false);
 
       processor.runAsyncBlock(
           env.protocolContext(),
@@ -353,6 +356,7 @@ class OptimisticTransactionProcessorUnitTest {
               eq(transaction),
               eq(MINING_BENEFICIARY),
               any(ParallelizedTransactionContext.class),
+              any(),
               any());
     }
 
@@ -362,7 +366,7 @@ class OptimisticTransactionProcessorUnitTest {
       final Transaction transaction = mockTransaction();
       final Address customBeneficiary = Address.fromHexString("0xABCDEF");
       stubSuccessfulTransaction(Optional.empty());
-      when(collisionDetector.hasCollision(any(), any(), any(), any())).thenReturn(false);
+      when(collisionDetector.hasCollision(any(), any(), any(), any(), any())).thenReturn(false);
 
       processor.runAsyncBlock(
           env.protocolContext(),
@@ -379,7 +383,7 @@ class OptimisticTransactionProcessorUnitTest {
           env.worldState(), customBeneficiary, transaction, 0, Optional.empty(), Optional.empty());
 
       verify(collisionDetector, times(1))
-          .hasCollision(eq(transaction), eq(customBeneficiary), any(), any());
+          .hasCollision(eq(transaction), eq(customBeneficiary), any(), any(), any());
     }
 
     @Test
@@ -389,7 +393,7 @@ class OptimisticTransactionProcessorUnitTest {
       final Transaction tx2 = mockTransaction();
       final Transaction tx3 = mockTransaction();
       stubSuccessfulTransaction(Optional.empty());
-      when(collisionDetector.hasCollision(any(), any(), any(), any())).thenReturn(false);
+      when(collisionDetector.hasCollision(any(), any(), any(), any(), any())).thenReturn(false);
 
       processor.runAsyncBlock(
           env.protocolContext(),
@@ -410,11 +414,11 @@ class OptimisticTransactionProcessorUnitTest {
           env.worldState(), MINING_BENEFICIARY, tx3, 2, Optional.empty(), Optional.empty());
 
       verify(collisionDetector, times(1))
-          .hasCollision(eq(tx1), eq(MINING_BENEFICIARY), any(), any());
+          .hasCollision(eq(tx1), eq(MINING_BENEFICIARY), any(), any(), any());
       verify(collisionDetector, times(1))
-          .hasCollision(eq(tx2), eq(MINING_BENEFICIARY), any(), any());
+          .hasCollision(eq(tx2), eq(MINING_BENEFICIARY), any(), any(), any());
       verify(collisionDetector, times(1))
-          .hasCollision(eq(tx3), eq(MINING_BENEFICIARY), any(), any());
+          .hasCollision(eq(tx3), eq(MINING_BENEFICIARY), any(), any(), any());
     }
   }
 
@@ -439,7 +443,7 @@ class OptimisticTransactionProcessorUnitTest {
           Optional.empty(),
           env.maybeParentHeader());
 
-      when(collisionDetector.hasCollision(any(), any(), any(), any())).thenReturn(true);
+      when(collisionDetector.hasCollision(any(), any(), any(), any(), any())).thenReturn(true);
 
       final Optional<TransactionProcessingResult> result =
           processor.getProcessingResult(
@@ -491,7 +495,7 @@ class OptimisticTransactionProcessorUnitTest {
     void returnsResultWhenNoCollision() {
       final Transaction transaction = mockTransaction();
       stubSuccessfulTransaction(Optional.empty());
-      when(collisionDetector.hasCollision(any(), any(), any(), any())).thenReturn(false);
+      when(collisionDetector.hasCollision(any(), any(), any(), any(), any())).thenReturn(false);
 
       processor.runAsyncBlock(
           env.protocolContext(),
@@ -536,8 +540,8 @@ class OptimisticTransactionProcessorUnitTest {
           Optional.empty(),
           env.maybeParentHeader());
 
-      when(collisionDetector.hasCollision(eq(tx1), any(), any(), any())).thenReturn(false);
-      when(collisionDetector.hasCollision(eq(tx2), any(), any(), any())).thenReturn(true);
+      when(collisionDetector.hasCollision(eq(tx1), any(), any(), any(), any())).thenReturn(false);
+      when(collisionDetector.hasCollision(eq(tx2), any(), any(), any(), any())).thenReturn(true);
 
       final Optional<TransactionProcessingResult> result1 =
           processor.getProcessingResult(
@@ -595,7 +599,7 @@ class OptimisticTransactionProcessorUnitTest {
       final PartialBlockAccessView partialView = mock(PartialBlockAccessView.class);
 
       stubSuccessfulTransaction(Optional.of(partialView));
-      when(collisionDetector.hasCollision(any(), any(), any(), any())).thenReturn(false);
+      when(collisionDetector.hasCollision(any(), any(), any(), any(), any())).thenReturn(false);
 
       final BlockAccessListBuilder balBuilder = mock(BlockAccessListBuilder.class);
 
@@ -643,7 +647,7 @@ class OptimisticTransactionProcessorUnitTest {
     void zeroRewardDoesNotMaterializeEmptyMiningBeneficiary() {
       final Transaction transaction = mockTransaction();
       stubSuccessfulTransaction(Optional.empty());
-      when(collisionDetector.hasCollision(any(), any(), any(), any())).thenReturn(false);
+      when(collisionDetector.hasCollision(any(), any(), any(), any(), any())).thenReturn(false);
       when(transactionProcessor.getClearEmptyAccounts()).thenReturn(true);
 
       processor.runAsyncBlock(
@@ -681,7 +685,7 @@ class OptimisticTransactionProcessorUnitTest {
     void zeroRewardStillMaterializesBeneficiaryWhenEmptyAccountsAreKept() {
       final Transaction transaction = mockTransaction();
       stubSuccessfulTransaction(Optional.empty());
-      when(collisionDetector.hasCollision(any(), any(), any(), any())).thenReturn(false);
+      when(collisionDetector.hasCollision(any(), any(), any(), any(), any())).thenReturn(false);
       when(transactionProcessor.getClearEmptyAccounts()).thenReturn(false);
 
       processor.runAsyncBlock(
@@ -701,6 +705,200 @@ class OptimisticTransactionProcessorUnitTest {
       assertNotNull(
           env.worldState().updater().get(MINING_BENEFICIARY),
           "pre-EIP-158 the zero-tip fee recipient is still created, matching the serial path");
+    }
+  }
+
+  @Nested
+  @DisplayName("Same-sender chains and serial loop progress")
+  @MockitoSettings(strictness = Strictness.LENIENT) // skipped workers never touch the env
+  class ChainAndProgressTests {
+
+    private final Address sender = Address.fromHexString("0xabc");
+
+    private Transaction mockTransactionFrom(final Address from) {
+      final Transaction transaction = mockTransaction();
+      when(transaction.getSenderIfKnown()).thenReturn(Optional.of(from));
+      return transaction;
+    }
+
+    private void runBlock(final List<Transaction> transactions, final Executor executor) {
+      processor.runAsyncBlock(
+          env.protocolContext(),
+          env.blockHeader(),
+          transactions,
+          MINING_BENEFICIARY,
+          EMPTY_BLOCK_HASH_LOOKUP,
+          BLOB_GAS_PRICE,
+          executor,
+          Optional.empty(),
+          env.maybeParentHeader());
+    }
+
+    @Test
+    @DisplayName("Transactions of one sender run in order on a single task")
+    void sameSenderTransactionsRunInOrderOnOneTask() {
+      final Transaction tx1 = mockTransactionFrom(sender);
+      final Transaction tx2 = mockTransactionFrom(sender);
+      final Transaction other = mockTransactionFrom(Address.fromHexString("0xdef"));
+      stubSuccessfulTransaction(Optional.empty());
+      final List<Runnable> tasks = new ArrayList<>();
+
+      runBlock(List.of(tx1, other, tx2), tasks::add);
+
+      assertThat(tasks).hasSize(2);
+      tasks.forEach(Runnable::run);
+
+      final InOrder inOrder = Mockito.inOrder(transactionProcessor);
+      inOrder
+          .verify(transactionProcessor)
+          .processTransaction(any(), any(), eq(tx1), any(), any(), any(), any(), any(), any());
+      inOrder
+          .verify(transactionProcessor)
+          .processTransaction(any(), any(), eq(tx2), any(), any(), any(), any(), any(), any());
+      assertThat(processor.futures[0]).isDone();
+      assertThat(processor.futures[2]).isDone();
+      assertNotNull(processor.futures[0].resultNow());
+      assertNotNull(processor.futures[2].resultNow());
+    }
+
+    @Test
+    @DisplayName("Transactions of a sender the pool did not know run again chained once recovered")
+    void unknownSenderIsRecoveredAndChained() {
+      final List<Runnable> background = new ArrayList<>();
+      processor =
+          new OptimisticConcurrentTransactionProcessor(
+              transactionProcessor, collisionDetector, background::add);
+      final Transaction tx1 = mockTransaction();
+      final Transaction tx2 = mockTransaction();
+      for (final Transaction transaction : List.of(tx1, tx2)) {
+        when(transaction.getSenderIfKnown())
+            .thenReturn(Optional.empty())
+            .thenReturn(Optional.of(sender));
+      }
+      stubSuccessfulTransaction(Optional.empty());
+      final List<Runnable> tasks = new ArrayList<>();
+
+      runBlock(List.of(tx1, tx2), tasks::add);
+      assertThat(tasks).as("both run alone at first").hasSize(2);
+      // the recovery, then the chaining it leads to
+      runAll(background);
+      runAll(background);
+      verify(tx1).getSender();
+      verify(tx2).getSender();
+      tasks.get(0).run();
+      // the second member runs on the result of the first once that finished
+      assertThat(tasks).hasSize(3);
+      tasks.get(2).run();
+
+      final Optional<TransactionProcessingResult> result =
+          processor.getProcessingResult(
+              env.worldState(), MINING_BENEFICIARY, tx2, 1, Optional.empty(), Optional.empty());
+      verify(collisionDetector)
+          .hasCollision(
+              eq(tx2),
+              eq(MINING_BENEFICIARY),
+              argThat(context -> context.chainPredecessorAccumulator() != null),
+              any(),
+              any());
+      assertThat(result).isNotNull();
+    }
+
+    private void runAll(final List<Runnable> runnables) {
+      final List<Runnable> pending = new ArrayList<>(runnables);
+      runnables.clear();
+      pending.forEach(Runnable::run);
+    }
+
+    @Test
+    @DisplayName("The later members of a chain are warmed up against the parent state meanwhile")
+    void laterChainMembersAreWarmedUp() {
+      final List<Runnable> warmUps = new ArrayList<>();
+      processor =
+          new OptimisticConcurrentTransactionProcessor(
+              transactionProcessor, collisionDetector, warmUps::add);
+      final Transaction tx1 = mockTransactionFrom(sender);
+      final Transaction tx2 = mockTransactionFrom(sender);
+      final Transaction tx3 = mockTransactionFrom(sender);
+      stubSuccessfulTransaction(Optional.empty());
+
+      runBlock(List.of(tx1, tx2, tx3), task -> {});
+
+      assertThat(warmUps).hasSize(2);
+      warmUps.forEach(Runnable::run);
+      verify(transactionProcessor, times(2))
+          .processTransaction(
+              any(),
+              any(),
+              any(),
+              any(),
+              any(),
+              any(),
+              eq(
+                  TransactionValidationParams
+                      .transactionSimulatorAllowExceedingBalanceAndFutureNonce()),
+              any(),
+              any());
+    }
+
+    @Test
+    @DisplayName("A member the serial loop has reached is not warmed up")
+    void memberTheSerialLoopReachedIsNotWarmedUp() {
+      final List<Runnable> warmUps = new ArrayList<>();
+      processor =
+          new OptimisticConcurrentTransactionProcessor(
+              transactionProcessor, collisionDetector, warmUps::add);
+      final Transaction tx1 = mockTransactionFrom(sender);
+      final Transaction tx2 = mockTransactionFrom(sender);
+
+      runBlock(List.of(tx1, tx2), task -> {});
+      processor.getProcessingResult(
+          env.worldState(), MINING_BENEFICIARY, tx2, 1, Optional.empty(), Optional.empty());
+      warmUps.forEach(Runnable::run);
+
+      verify(transactionProcessor, never())
+          .processTransaction(any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("A chain is dropped once the serial loop has reached one of its members")
+    void chainStopsWhenSerialLoopReachedAMember() {
+      final Transaction tx1 = mockTransactionFrom(sender);
+      final Transaction tx2 = mockTransactionFrom(sender);
+      final List<Runnable> tasks = new ArrayList<>();
+
+      runBlock(List.of(tx1, tx2), tasks::add);
+      final CompletableFuture<ParallelizedTransactionContext> future1 = processor.futures[1];
+
+      // the serial loop reaches the first member before the worker started
+      assertThat(
+              processor.getProcessingResult(
+                  env.worldState(), MINING_BENEFICIARY, tx1, 0, Optional.empty(), Optional.empty()))
+          .isEmpty();
+      tasks.forEach(Runnable::run);
+
+      verify(transactionProcessor, never())
+          .processTransaction(any(), any(), any(), any(), any(), any(), any(), any(), any());
+      assertThat(future1).isDone();
+      assertNull(future1.resultNow());
+    }
+
+    @Test
+    @DisplayName("A worker skips a transaction the serial loop has already reached")
+    void workerSkipsTransactionTheSerialLoopReached() {
+      final Transaction tx1 = mockTransaction();
+      final Transaction tx2 = mockTransaction();
+      stubSuccessfulTransaction(Optional.empty());
+      final List<Runnable> tasks = new ArrayList<>();
+
+      runBlock(List.of(tx1, tx2), tasks::add);
+      processor.getProcessingResult(
+          env.worldState(), MINING_BENEFICIARY, tx1, 0, Optional.empty(), Optional.empty());
+      tasks.forEach(Runnable::run);
+
+      verify(transactionProcessor, never())
+          .processTransaction(any(), any(), eq(tx1), any(), any(), any(), any(), any(), any());
+      verify(transactionProcessor)
+          .processTransaction(any(), any(), eq(tx2), any(), any(), any(), any(), any(), any());
     }
   }
 

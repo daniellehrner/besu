@@ -22,6 +22,7 @@ import org.hyperledger.besu.ethereum.chain.Blockchain;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.mainnet.BalConfiguration;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.BlockProcessor;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockProcessor;
 import org.hyperledger.besu.ethereum.mainnet.MainnetTransactionProcessor;
@@ -61,7 +62,6 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
       final TransactionReceiptFactory transactionReceiptFactory,
       final Wei blockReward,
       final MiningBeneficiaryCalculator miningBeneficiaryCalculator,
-      final boolean skipZeroBlockRewards,
       final ProtocolSchedule protocolSchedule,
       final BalConfiguration balConfiguration,
       final MetricsSystem metricsSystem) {
@@ -70,7 +70,6 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
         transactionReceiptFactory,
         blockReward,
         miningBeneficiaryCalculator,
-        skipZeroBlockRewards,
         protocolSchedule,
         balConfiguration,
         metricsSystem);
@@ -103,14 +102,17 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
     return preProcessingContext
         .flatMap(
             ctx ->
-                ctx.processor()
-                    .getProcessingResult(
-                        blockProcessingContext.getWorldState(),
-                        miningBeneficiary,
-                        transaction,
-                        location,
-                        confirmedParallelizedTransactionCounter,
-                        conflictingButCachedTransactionCounter))
+                BlockImportTimings.time(
+                    BlockImportTimings.Phase.TX_REUSE,
+                    () ->
+                        ctx.processor()
+                            .getProcessingResult(
+                                blockProcessingContext.getWorldState(),
+                                miningBeneficiary,
+                                transaction,
+                                location,
+                                confirmedParallelizedTransactionCounter,
+                                conflictingButCachedTransactionCounter)))
         .orElseGet(
             () ->
                 super.getTransactionProcessingResult(
@@ -178,7 +180,6 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
         final TransactionReceiptFactory transactionReceiptFactory,
         final Wei blockReward,
         final MiningBeneficiaryCalculator miningBeneficiaryCalculator,
-        final boolean skipZeroBlockRewards,
         final ProtocolSchedule protocolSchedule,
         final BalConfiguration balConfiguration) {
       return new MainnetParallelBlockProcessor(
@@ -186,7 +187,6 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
           transactionReceiptFactory,
           blockReward,
           miningBeneficiaryCalculator,
-          skipZeroBlockRewards,
           protocolSchedule,
           balConfiguration,
           metricsSystem);

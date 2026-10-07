@@ -64,11 +64,7 @@ public class RocksDBTransaction implements SegmentedKeyValueStorageTransaction {
     try (final OperationTimer.TimingContext ignored = metrics.getWriteLatency().startTimer()) {
       innerTx.put(columnFamilyMapper.apply(segmentId), key, value);
     } catch (final RocksDBException e) {
-      if (isDiskFull(e)) {
-        logger.error("Disk full detected: {}", e.getMessage(), e);
-        System.exit(DISK_FULL_EXIT_CODE);
-      }
-      throw new StorageException(e);
+      throw storageException(e);
     }
   }
 
@@ -77,11 +73,7 @@ public class RocksDBTransaction implements SegmentedKeyValueStorageTransaction {
     try (final OperationTimer.TimingContext ignored = metrics.getRemoveLatency().startTimer()) {
       innerTx.delete(columnFamilyMapper.apply(segmentId), key);
     } catch (final RocksDBException e) {
-      if (isDiskFull(e)) {
-        logger.error("Disk full detected: {}", e.getMessage(), e);
-        System.exit(DISK_FULL_EXIT_CODE);
-      }
-      throw new StorageException(e);
+      throw storageException(e);
     }
   }
 
@@ -90,11 +82,7 @@ public class RocksDBTransaction implements SegmentedKeyValueStorageTransaction {
     try (final OperationTimer.TimingContext ignored = metrics.getCommitLatency().startTimer()) {
       innerTx.commit();
     } catch (final RocksDBException e) {
-      if (isDiskFull(e)) {
-        logger.error("Disk full detected: {}", e.getMessage(), e);
-        System.exit(DISK_FULL_EXIT_CODE);
-      }
-      throw new StorageException(e);
+      throw storageException(e);
     } finally {
       close();
     }
@@ -106,14 +94,24 @@ public class RocksDBTransaction implements SegmentedKeyValueStorageTransaction {
       innerTx.rollback();
       metrics.getRollbackCount().inc();
     } catch (final RocksDBException e) {
-      if (isDiskFull(e)) {
-        logger.error("Disk full detected: {}", e.getMessage(), e);
-        System.exit(DISK_FULL_EXIT_CODE);
-      }
-      throw new StorageException(e);
+      throw storageException(e);
     } finally {
       close();
     }
+  }
+
+  /**
+   * Wraps a RocksDB error, exiting instead when the disk is full.
+   *
+   * @param e the error
+   * @return the exception to throw
+   */
+  static StorageException storageException(final RocksDBException e) {
+    if (isDiskFull(e)) {
+      logger.error("Disk full detected: {}", e.getMessage(), e);
+      System.exit(DISK_FULL_EXIT_CODE);
+    }
+    return new StorageException(e);
   }
 
   static boolean isDiskFull(final RocksDBException e) {

@@ -52,7 +52,7 @@ public record EvmConfiguration(
 
   /** The constant DEFAULT. */
   public static final EvmConfiguration DEFAULT =
-      new EvmConfiguration(32_000L, WorldUpdaterMode.STACKED, true, false);
+      new EvmConfiguration(96_000L, WorldUpdaterMode.STACKED, true, false);
 
   /**
    * Create an EVM Configuration without any overrides

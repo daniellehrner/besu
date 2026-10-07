@@ -29,6 +29,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.PathBasedWo
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.AccountConsumingMap;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.Consumer;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.StorageConsumingMap;
+import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
@@ -39,6 +40,7 @@ import org.hyperledger.besu.plugin.services.trielogs.TrieLogAccumulator;
 
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
@@ -53,6 +55,7 @@ import com.google.common.base.Suppliers;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -60,6 +63,10 @@ import org.slf4j.LoggerFactory;
 public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends BonsaiAccount>
     extends AbstractWorldUpdater<BonsaiWorldView, ACCOUNT>
     implements BonsaiWorldView, TrieLogAccumulator {
+
+  /** Minimum number of updated accounts for {@link #commit} to process them in parallel. */
+  private static final int PARALLEL_COMMIT_MIN_ACCOUNTS = 64;
+
   private static final Logger LOG =
       LoggerFactory.getLogger(PathBasedWorldStateUpdateAccumulator.class);
   protected final Consumer<BonsaiValue<ACCOUNT>> accountPreloader;
@@ -67,6 +74,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
 
   private final AccountConsumingMap<BonsaiValue<ACCOUNT>> accountsToUpdate;
   private final Map<Address, BonsaiValue<Bytes>> codeToUpdate = new ConcurrentHashMap<>();
+  private final Map<Address, Code> loadedCode = new ConcurrentHashMap<>();
   private final Set<Address> storageToClear = Collections.synchronizedSet(new HashSet<>());
   protected final EvmConfiguration evmConfiguration;
 
@@ -76,8 +84,12 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
   private final Map<Address, StorageConsumingMap<StorageSlotKey, BonsaiValue<UInt256>>>
       storageToUpdate = new ConcurrentHashMap<>();
 
-  private final Map<UInt256, Hash> storageKeyHashLookup = new ConcurrentHashMap<>();
   protected boolean isAccumulatorStateChanged;
+
+  // the balances a speculatively executed transaction depends on, null when not recorded
+  private @Nullable Set<Address> observedBalances;
+  // how far the balances it only spends from may be lower, null when not recorded
+  private @Nullable Map<Address, Wei> balanceMargins;
 
   public PathBasedWorldStateUpdateAccumulator(
       final BonsaiWorldView world,
@@ -92,9 +104,56 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
     this.evmConfiguration = evmConfiguration;
   }
 
+  /**
+   * Starts recording which balances the transaction executed on this accumulator depends on, so
+   * that a change of any other balance by an earlier transaction does not invalidate it.
+   */
+  public void recordBalanceObservations() {
+    observedBalances = new HashSet<>();
+    balanceMargins = new HashMap<>();
+  }
+
+  /**
+   * The balances the transaction executed on this accumulator depends on.
+   *
+   * @return the accounts, or null if they were not recorded
+   */
+  public @Nullable Set<Address> getObservedBalances() {
+    return observedBalances;
+  }
+
+  /**
+   * How far below its starting value the balance of an account the transaction only spends from may
+   * be without changing the transaction's outcome.
+   *
+   * @param address the account
+   * @return the margin, or empty if the transaction did not spend from the account or the margins
+   *     were not recorded
+   */
+  public Optional<Wei> getBalanceMargin(final Address address) {
+    return balanceMargins == null
+        ? Optional.empty()
+        : Optional.ofNullable(balanceMargins.get(address));
+  }
+
+  @Override
+  public void observeBalance(final Address address) {
+    if (observedBalances != null) {
+      observedBalances.add(address);
+    }
+  }
+
+  @Override
+  public void observeSufficientBalance(final Address address, final Wei margin) {
+    if (balanceMargins != null) {
+      balanceMargins.merge(address, margin, (a, b) -> a.compareTo(b) <= 0 ? a : b);
+    }
+  }
+
   public void cloneFromUpdater(final PathBasedWorldStateUpdateAccumulator<ACCOUNT> source) {
     accountsToUpdate.putAll(source.getAccountsToUpdate());
     codeToUpdate.putAll(source.codeToUpdate);
+    loadedCode.putAll(source.loadedCode);
     storageToClear.addAll(source.storageToClear);
     storageToUpdate.putAll(source.storageToUpdate);
     updatedAccounts.putAll(source.updatedAccounts);
@@ -292,7 +351,6 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
                   });
             });
 
-    storageKeyHashLookup.putAll(source.storageKeyHashLookup);
     this.isAccumulatorStateChanged = true;
   }
 
@@ -465,6 +523,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
                     .map(BonsaiValue::getPrior)
                     .map(BonsaiAccount::getCodeHash)
                     .orElse(Hash.EMPTY))
+            .map(Code::getBytes)
             .ifPresent(
                 deletedCode ->
                     codeToUpdate.put(deletedAddress, new BonsaiValue<>(deletedCode, null, true)));
@@ -510,120 +569,134 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
       accountValue.setUpdated(null);
     }
 
-    getUpdatedAccounts().parallelStream()
-        .forEach(
-            tracked -> {
-              final Address updatedAddress = tracked.getAddress();
-              final ACCOUNT updatedAccount;
-              final BonsaiValue<ACCOUNT> updatedAccountValue = accountsToUpdate.get(updatedAddress);
-              final Map<StorageSlotKey, BonsaiValue<UInt256>> pendingStorageUpdates =
-                  storageToUpdate.computeIfAbsent(
-                      updatedAddress,
-                      k ->
-                          new StorageConsumingMap<>(
-                              updatedAddress, new ConcurrentHashMap<>(), storagePreloader));
-
-              if (tracked.getWrappedAccount() == null) {
-                updatedAccount = createAccount(this, tracked);
-                tracked.setWrappedAccount(updatedAccount);
-                if (updatedAccountValue == null) {
-                  accountsToUpdate.put(updatedAddress, new BonsaiValue<>(null, updatedAccount));
-                  codeToUpdate.put(
-                      updatedAddress, new BonsaiValue<>(null, updatedAccount.getCode()));
-                } else {
-                  updatedAccountValue.setUpdated(updatedAccount);
-                }
-              } else {
-                updatedAccount = tracked.getWrappedAccount();
-                updatedAccount.setBalance(tracked.getBalance());
-                updatedAccount.setNonce(tracked.getNonce());
-                if (tracked.codeWasUpdated()) {
-                  updatedAccount.setCode(tracked.getCode());
-                }
-                if (tracked.getStorageWasCleared()) {
-                  updatedAccount.clearStorage();
-                }
-                tracked.getUpdatedStorage().forEach(updatedAccount::setStorageValue);
-              }
-
-              if (tracked.codeWasUpdated()) {
-                final BonsaiValue<Bytes> pendingCode =
-                    codeToUpdate.computeIfAbsent(
-                        updatedAddress,
-                        addr ->
-                            new BonsaiValue<>(
-                                wrappedWorldView()
-                                    .getCode(
-                                        addr,
-                                        Optional.ofNullable(updatedAccountValue)
-                                            .map(BonsaiValue::getPrior)
-                                            .map(BonsaiAccount::getCodeHash)
-                                            .orElse(Hash.EMPTY))
-                                    .orElse(null),
-                                null));
-                pendingCode.setUpdated(updatedAccount.getCode());
-              }
-
-              if (tracked.getStorageWasCleared()) {
-                storageToClear.add(updatedAddress);
-                pendingStorageUpdates.clear();
-              }
-
-              // parallel stream here may cause database corruption
-              updatedAccount
-                  .getUpdatedStorage()
-                  .entrySet()
-                  .forEach(
-                      storageUpdate -> {
-                        final UInt256 keyUInt = storageUpdate.getKey();
-                        final StorageSlotKey slotKey =
-                            new StorageSlotKey(
-                                hashAndSaveSlotPreImage(keyUInt), Optional.of(keyUInt));
-                        final UInt256 value = storageUpdate.getValue();
-                        final BonsaiValue<UInt256> pendingValue =
-                            pendingStorageUpdates.get(slotKey);
-                        if (pendingValue == null) {
-                          pendingStorageUpdates.put(
-                              slotKey,
-                              new BonsaiValue<>(
-                                  updatedAccount.getOriginalStorageValue(keyUInt), value));
-                        } else {
-                          pendingValue.setUpdated(value);
-                        }
-                      });
-
-              updatedAccount.getUpdatedStorage().clear();
-
-              if (pendingStorageUpdates.isEmpty()) {
-                storageToUpdate.remove(updatedAddress);
-              }
-
-              if (tracked.getStorageWasCleared()) {
-                tracked.setStorageWasCleared(false); // storage already cleared for this transaction
-              }
-            });
+    final Collection<UpdateTrackingAccount<ACCOUNT>> updatedAccounts = getUpdatedAccounts();
+    // A block commits once per transaction, and the few accounts one transaction touches cost less
+    // to commit here than to hand to the common pool and wait for.
+    if (updatedAccounts.size() < PARALLEL_COMMIT_MIN_ACCOUNTS) {
+      updatedAccounts.forEach(this::commitUpdatedAccount);
+    } else {
+      updatedAccounts.parallelStream().forEach(this::commitUpdatedAccount);
+    }
   }
 
-  @Override
-  public Optional<Bytes> getCode(final Address address, final Hash codeHash) {
-    final BonsaiValue<Bytes> localCode = codeToUpdate.get(address);
-    if (localCode == null) {
-      final Supplier<Bytes> loader =
-          Suppliers.memoize(() -> wrappedWorldView().getCode(address, codeHash).orElse(null));
-      final BonsaiValue<Bytes> codeValue = BonsaiValue.withLazy(loader, loader);
-      onCodeValueLoaded(address, codeValue);
-      codeToUpdate.put(address, codeValue);
-      return Optional.ofNullable(codeValue.getUpdated());
+  private void commitUpdatedAccount(final UpdateTrackingAccount<ACCOUNT> tracked) {
+    final Address updatedAddress = tracked.getAddress();
+    final ACCOUNT updatedAccount;
+    final BonsaiValue<ACCOUNT> updatedAccountValue = accountsToUpdate.get(updatedAddress);
+    final Map<StorageSlotKey, BonsaiValue<UInt256>> pendingStorageUpdates =
+        storageToUpdate.computeIfAbsent(
+            updatedAddress,
+            k ->
+                new StorageConsumingMap<>(
+                    updatedAddress, new ConcurrentHashMap<>(), storagePreloader));
+
+    if (tracked.getWrappedAccount() == null) {
+      updatedAccount = createAccount(this, tracked);
+      tracked.setWrappedAccount(updatedAccount);
+      if (updatedAccountValue == null) {
+        accountsToUpdate.put(updatedAddress, new BonsaiValue<>(null, updatedAccount));
+        codeToUpdate.put(updatedAddress, new BonsaiValue<>(null, updatedAccount.getCode()));
+      } else {
+        updatedAccountValue.setUpdated(updatedAccount);
+      }
     } else {
-      return Optional.ofNullable(localCode.getUpdated());
+      updatedAccount = tracked.getWrappedAccount();
+      updatedAccount.setBalance(tracked.getBalance());
+      updatedAccount.setNonce(tracked.getNonce());
+      if (tracked.codeWasUpdated()) {
+        updatedAccount.setCode(tracked.getCode());
+      }
+      if (tracked.getStorageWasCleared()) {
+        updatedAccount.clearStorage();
+      }
+      tracked.getUpdatedStorage().forEach(updatedAccount::setStorageValue);
+    }
+
+    if (tracked.codeWasUpdated()) {
+      final BonsaiValue<Bytes> pendingCode =
+          codeToUpdate.computeIfAbsent(
+              updatedAddress,
+              addr ->
+                  new BonsaiValue<>(
+                      wrappedWorldView()
+                          .getCode(
+                              addr,
+                              Optional.ofNullable(updatedAccountValue)
+                                  .map(BonsaiValue::getPrior)
+                                  .map(BonsaiAccount::getCodeHash)
+                                  .orElse(Hash.EMPTY))
+                          .map(Code::getBytes)
+                          .orElse(null),
+                      null));
+      pendingCode.setUpdated(updatedAccount.getCode());
+    }
+
+    if (tracked.getStorageWasCleared()) {
+      storageToClear.add(updatedAddress);
+      pendingStorageUpdates.clear();
+    }
+
+    // parallel stream here may cause database corruption
+    updatedAccount
+        .getUpdatedStorage()
+        .entrySet()
+        .forEach(
+            storageUpdate -> {
+              final UInt256 keyUInt = storageUpdate.getKey();
+              final StorageSlotKey slotKey = storageSlotKey(keyUInt);
+              final UInt256 value = storageUpdate.getValue();
+              final BonsaiValue<UInt256> pendingValue = pendingStorageUpdates.get(slotKey);
+              if (pendingValue == null) {
+                pendingStorageUpdates.put(
+                    slotKey,
+                    new BonsaiValue<>(updatedAccount.getOriginalStorageValue(keyUInt), value));
+              } else {
+                pendingValue.setUpdated(value);
+              }
+            });
+
+    updatedAccount.getUpdatedStorage().clear();
+
+    if (pendingStorageUpdates.isEmpty()) {
+      storageToUpdate.remove(updatedAddress);
+    }
+
+    if (tracked.getStorageWasCleared()) {
+      tracked.setStorageWasCleared(false); // storage already cleared for this transaction
     }
   }
 
   @Override
+  public Optional<Code> getCode(final Address address, final Hash codeHash) {
+    BonsaiValue<Bytes> codeValue = codeToUpdate.get(address);
+    if (codeValue == null) {
+      final Supplier<Bytes> loader = Suppliers.memoize(() -> loadCode(address, codeHash));
+      codeValue = BonsaiValue.withLazy(loader, loader);
+      onCodeValueLoaded(address, codeValue);
+      codeToUpdate.put(address, codeValue);
+    }
+    return Optional.ofNullable(codeValue.getUpdated())
+        .map(code -> withLoadedAnalysis(address, code, codeHash));
+  }
+
+  private Bytes loadCode(final Address address, final Hash codeHash) {
+    final Code code = wrappedWorldView().getCode(address, codeHash).orElse(null);
+    if (code == null) {
+      return null;
+    }
+    loadedCode.put(address, code);
+    return code.getBytes();
+  }
+
+  /** Only the code as it was loaded carries its analysis, code set since then does not. */
+  private Code withLoadedAnalysis(final Address address, final Bytes code, final Hash codeHash) {
+    final Code loaded = loadedCode.get(address);
+    return loaded != null && loaded.getBytes() == code ? loaded : new Code(code, codeHash);
+  }
+
+  @Override
   public UInt256 getStorageValue(final Address address, final UInt256 slotKey) {
-    StorageSlotKey storageSlotKey =
-        new StorageSlotKey(hashAndSaveSlotPreImage(slotKey), Optional.of(slotKey));
-    return getStorageValueByStorageSlotKey(address, storageSlotKey).orElse(UInt256.ZERO);
+    return getStorageValueByStorageSlotKey(address, storageSlotKey(slotKey)).orElse(UInt256.ZERO);
   }
 
   @Override
@@ -669,8 +742,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
   @Override
   public UInt256 getPriorStorageValue(final Address address, final UInt256 storageKey) {
     // TODO maybe log the read into the trie layer?
-    StorageSlotKey storageSlotKey =
-        new StorageSlotKey(hashAndSaveSlotPreImage(storageKey), Optional.of(storageKey));
+    final StorageSlotKey storageSlotKey = storageSlotKey(storageKey);
     final Map<StorageSlotKey, BonsaiValue<UInt256>> localAccountStorage =
         storageToUpdate.get(address);
     if (localAccountStorage != null) {
@@ -853,6 +925,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
           wrappedWorldView()
               .getCode(
                   address, Optional.ofNullable(expectedCode).map(Hash::hash).orElse(Hash.EMPTY))
+              .map(Code::getBytes)
               .orElse(Bytes.EMPTY);
       if (!storedCode.isEmpty()) {
         codeValue = new BonsaiValue<>(storedCode, storedCode);
@@ -1011,11 +1084,11 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
     storageToClear.clear();
     storageToUpdate.clear();
     codeToUpdate.clear();
+    loadedCode.clear();
     accountsToUpdate.clear();
     resetAccumulatorStateChanged();
     updatedAccounts.clear();
     deletedAccounts.clear();
-    storageKeyHashLookup.clear();
   }
 
   protected Hash hashAndSaveAccountPreImage(final Address address) {
@@ -1023,13 +1096,8 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
     return Hash.hash(address.getBytes());
   }
 
-  protected Hash hashAndSaveSlotPreImage(final UInt256 slotKey) {
-    Hash hash = storageKeyHashLookup.get(slotKey);
-    if (hash == null) {
-      hash = Hash.hash(slotKey);
-      storageKeyHashLookup.put(slotKey, hash);
-    }
-    return hash;
+  protected StorageSlotKey storageSlotKey(final UInt256 slotKey) {
+    return StorageSlotKeyCache.get(slotKey);
   }
 
   public abstract PathBasedWorldStateUpdateAccumulator<ACCOUNT> copy();

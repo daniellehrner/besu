@@ -263,6 +263,9 @@ public abstract class AbstractCallOperation extends AbstractOperation {
     final Account account = getAccount(frame.getRecipientAddress(), frame);
 
     final Wei balance = account == null ? Wei.ZERO : account.getBalance();
+    if (!transferValue.isZero()) {
+      frame.getWorldUpdater().observeSpending(frame.getRecipientAddress(), balance, transferValue);
+    }
 
     // If the call is sending more value than the account has or the message frame is too deep
     // return a failed call
@@ -410,7 +413,7 @@ public abstract class AbstractCallOperation extends AbstractOperation {
 
     final Hash codeHash = account.getCodeHash();
     frame.getEip7928AccessList().ifPresent(t -> t.addTouchedAccount(account.getAddress()));
-    if (codeHash == null || codeHash.equals(Hash.EMPTY)) {
+    if (codeHash == null || Hash.EMPTY.getBytes().equals(codeHash.getBytes())) {
       return Code.EMPTY_CODE;
     }
 

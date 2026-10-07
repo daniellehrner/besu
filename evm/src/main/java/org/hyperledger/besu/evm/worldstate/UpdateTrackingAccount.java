@@ -59,7 +59,8 @@ public class UpdateTrackingAccount<A extends Account> implements MutableAccount 
   private Wei balance;
 
   @Nullable private Bytes updatedCode; // Null if the underlying code has not been updated.
-  private final Bytes oldCode;
+  // loaded on first use, as most trackers never read the code
+  @Nullable private Bytes oldCode;
   @Nullable private Hash updatedCodeHash;
   private final Hash oldCodeHash;
 
@@ -107,7 +108,6 @@ public class UpdateTrackingAccount<A extends Account> implements MutableAccount 
     this.nonce = account.getNonce();
     this.balance = account.getBalance();
 
-    this.oldCode = account.getCode();
     this.oldCodeHash = account.getCodeHash();
 
     this.updatedStorage = new TreeMap<>();
@@ -207,7 +207,7 @@ public class UpdateTrackingAccount<A extends Account> implements MutableAccount 
   @Override
   public Bytes getCode() {
     // Note that we set code for new account, so it's only null if account isn't.
-    return updatedCode == null ? oldCode : updatedCode;
+    return updatedCode == null ? oldCode() : updatedCode;
   }
 
   @Override
@@ -228,7 +228,17 @@ public class UpdateTrackingAccount<A extends Account> implements MutableAccount 
   @Override
   public boolean hasCode() {
     // Note that we set code for new account, so it's only null if account isn't.
-    return updatedCode == null ? !oldCode.isEmpty() : !updatedCode.isEmpty();
+    return updatedCode == null ? !oldCode().isEmpty() : !updatedCode.isEmpty();
+  }
+
+  private Bytes oldCode() {
+    Bytes code = oldCode;
+    if (code == null) {
+      // trackers of new accounts start with empty code, so only a wrapped account gets here
+      code = account.getCode();
+      oldCode = code;
+    }
+    return code;
   }
 
   @Override
@@ -242,20 +252,24 @@ public class UpdateTrackingAccount<A extends Account> implements MutableAccount 
 
   @Override
   public Code getOrCreateCachedCode() {
+    final Hash codeHash = getCodeHash();
+    if (Hash.EMPTY.getBytes().equals(codeHash.getBytes())) {
+      return Code.EMPTY_CODE;
+    }
     // if it is not a BonsaiAccount, we don't have access to the code cache
     // so we just return the code as is.
     if (codeCache == null) {
-      return new Code(getCode(), getCodeHash());
+      return new Code(getCode(), codeHash);
     }
 
     // if the code already exists in the cache, return it
-    final Code cachedCode = codeCache.getIfPresent(getCodeHash());
+    final Code cachedCode = codeCache.getIfPresent(codeHash);
     if (cachedCode != null) {
       return cachedCode;
     }
 
     // if the code is not in the cache, create a new Code instance and put it in the cache
-    final Code newCode = new Code(getCode(), getCodeHash());
+    final Code newCode = new Code(getCode(), codeHash);
     codeCache.put(getCodeHash(), newCode);
 
     return newCode;

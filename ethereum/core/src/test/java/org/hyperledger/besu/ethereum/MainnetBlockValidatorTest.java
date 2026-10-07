@@ -38,6 +38,7 @@ import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockDataGenerator;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderBuilder;
+import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.BlockchainSetupUtil;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.mainnet.BlockAccessListValidator;
@@ -57,6 +58,7 @@ import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.RejectedExecutionException;
@@ -132,7 +134,7 @@ public class MainnetBlockValidatorTest {
     when(worldStateArchive.getWorldState()).thenReturn(worldState);
     when(blockHeaderValidator.validateHeader(any(), any(), any())).thenReturn(true);
     when(blockHeaderValidator.validateHeader(any(), any(), any(), any())).thenReturn(true);
-    when(blockBodyValidator.validateBody(any(), any(), any(), any(), any(), any(), any()))
+    when(blockBodyValidator.validateBody(any(), any(), any(), any(), any(), any(), any(), any()))
         .thenReturn(true);
     when(blockBodyValidator.validateBodyLight(any(), any(), any(), any(), any())).thenReturn(true);
     when(blockAccessListValidator.validate(any(), any(), anyInt())).thenReturn(true);
@@ -262,6 +264,79 @@ public class MainnetBlockValidatorTest {
   }
 
   @Test
+  public void storesTheSuppliedAccessListWhenTheHeaderCarriesItsHash() {
+    final BlockAccessList executed = accessList();
+    final Optional<BlockAccessList> supplied =
+        Optional.of(BlockAccessList.fromBytes(executed.encode()));
+    final Block blockWithBalHash = childOfParent(Optional.of(Hash.ZERO));
+
+    final BlockProcessingResult result = process(blockWithBalHash, supplied, executed);
+
+    assertThat(result.isSuccessful()).isTrue();
+    assertThat(result.getYield().flatMap(BlockProcessingOutputs::getBlockAccessList))
+        .containsSame(supplied.get());
+  }
+
+  @Test
+  public void storesTheExecutedAccessListWhenTheHeaderCarriesNoHash() {
+    final BlockAccessList executed = accessList();
+    final Optional<BlockAccessList> supplied =
+        Optional.of(BlockAccessList.fromBytes(executed.encode()));
+    final Block blockWithoutBalHash = childOfParent(Optional.empty());
+
+    final BlockProcessingResult result = process(blockWithoutBalHash, supplied, executed);
+
+    assertThat(result.isSuccessful()).isTrue();
+    assertThat(result.getYield().flatMap(BlockProcessingOutputs::getBlockAccessList))
+        .containsSame(executed);
+  }
+
+  private BlockProcessingResult process(
+      final Block block, final Optional<BlockAccessList> supplied, final BlockAccessList executed) {
+    when(blockAccessListValidator.validate(eq(supplied), any(), anyInt())).thenReturn(true);
+    when(blockProcessor.processBlock(eq(protocolContext), any(), any(), any(), eq(supplied)))
+        .thenReturn(
+            new BlockProcessingResult(
+                Optional.of(
+                    new BlockProcessingOutputs(
+                        worldState,
+                        List.of(),
+                        Optional.empty(),
+                        Optional.of(executed),
+                        0L,
+                        Map.of())),
+                false));
+    return mainnetFrontierBlockValidator.validateAndProcessBlock(
+        protocolContext,
+        block,
+        HeaderValidationMode.DETACHED_ONLY,
+        HeaderValidationMode.DETACHED_ONLY,
+        supplied,
+        true);
+  }
+
+  private Block childOfParent(final Optional<Hash> balHash) {
+    final BlockHeaderTestFixture header =
+        new BlockHeaderTestFixture()
+            .parentHash(blockParent.getHash())
+            .number(blockParent.getHeader().getNumber() + 1);
+    balHash.ifPresent(header::balHash);
+    return new Block(header.buildHeader(), BlockBody.empty());
+  }
+
+  private static BlockAccessList accessList() {
+    return new BlockAccessList(
+        List.of(
+            new BlockAccessList.AccountChanges(
+                Address.fromHexString("0x1000000000000000000000000000000000000001"),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of())));
+  }
+
+  @Test
   public void validateAndProcessBlock_whenTransactionExceedsBlockGasLimit() {
     final Transaction oversizedTransaction = mock(Transaction.class);
     when(oversizedTransaction.getGasLimit()).thenReturn(block.getHeader().getGasLimit() + 1);
@@ -327,7 +402,8 @@ public class MainnetBlockValidatorTest {
 
   @Test
   public void validateAndProcessBlock_whenBlockBodyInvalid() {
-    when(blockBodyValidator.validateBody(any(), eq(block), any(), any(), any(), any(), any()))
+    when(blockBodyValidator.validateBody(
+            any(), eq(block), any(), any(), any(), any(), any(), any()))
         .thenReturn(false);
 
     BlockProcessingResult result =
@@ -693,7 +769,7 @@ public class MainnetBlockValidatorTest {
     when(blockProcessor.processBlock(
             eq(protocolContext), any(), any(), any(), eq(Optional.empty())))
         .thenReturn(successfulProcessingResult);
-    when(blockBodyValidator.validateBody(any(), any(), any(), any(), any(), any(), any()))
+    when(blockBodyValidator.validateBody(any(), any(), any(), any(), any(), any(), any(), any()))
         .thenReturn(true);
 
     final Block block = blockchainSetupUtil.getBlock(2);

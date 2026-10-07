@@ -22,14 +22,19 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.Request;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.core.TransactionReceipt;
+import org.hyperledger.besu.ethereum.mainnet.BlockAccessListReplay;
 import org.hyperledger.besu.ethereum.mainnet.BlockAccessListValidator;
 import org.hyperledger.besu.ethereum.mainnet.BlockBodyValidator;
 import org.hyperledger.besu.ethereum.mainnet.BlockHeaderValidator;
+import org.hyperledger.besu.ethereum.mainnet.BlockImportTimings;
 import org.hyperledger.besu.ethereum.mainnet.BlockProcessor;
+import org.hyperledger.besu.ethereum.mainnet.BodyValidation;
 import org.hyperledger.besu.ethereum.mainnet.BodyValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
+import org.hyperledger.besu.ethereum.mainnet.parallelization.BlockProcessingExecutors;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.PathBasedWorldState;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateQueryParams;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
@@ -39,6 +44,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -138,6 +145,44 @@ public class MainnetBlockValidator implements BlockValidator {
       final Optional<BlockAccessList> blockAccessList,
       final boolean shouldUpdateHead,
       final boolean shouldRecordBadBlock) {
+    return validateAndProcessBlock(
+        context,
+        block,
+        headerValidationMode,
+        ommerValidationMode,
+        blockAccessList,
+        shouldUpdateHead,
+        shouldRecordBadBlock,
+        false);
+  }
+
+  @Override
+  public BlockProcessingResult validateAndProcessBlockDeferringTrieLog(
+      final ProtocolContext context,
+      final Block block,
+      final HeaderValidationMode headerValidationMode,
+      final HeaderValidationMode ommerValidationMode,
+      final Optional<BlockAccessList> blockAccessList) {
+    return validateAndProcessBlock(
+        context,
+        block,
+        headerValidationMode,
+        ommerValidationMode,
+        blockAccessList,
+        false,
+        true,
+        true);
+  }
+
+  private BlockProcessingResult validateAndProcessBlock(
+      final ProtocolContext context,
+      final Block block,
+      final HeaderValidationMode headerValidationMode,
+      final HeaderValidationMode ommerValidationMode,
+      final Optional<BlockAccessList> blockAccessList,
+      final boolean shouldUpdateHead,
+      final boolean shouldRecordBadBlock,
+      final boolean deferTrieLog) {
 
     final int blockSize = block.getSize();
     if (blockSize > maxRlpBlockSize) {
@@ -165,8 +210,13 @@ public class MainnetBlockValidator implements BlockValidator {
       }
       parentHeader = maybeParentHeader.get();
 
-      if (!blockHeaderValidator.validateHeader(
-          header, parentHeader, context, headerValidationMode)) {
+      final boolean headerValid =
+          BlockImportTimings.time(
+              BlockImportTimings.Phase.HEADER_VALIDATION,
+              () ->
+                  blockHeaderValidator.validateHeader(
+                      header, parentHeader, context, headerValidationMode));
+      if (!headerValid) {
         final String error = String.format("Header validation failed (%s)", headerValidationMode);
         var retval = new BlockProcessingResult(error);
         handleFailedBlockProcessing(block, blockAccessList, retval, shouldRecordBadBlock, context);
@@ -185,7 +235,10 @@ public class MainnetBlockValidator implements BlockValidator {
             .withShouldWorldStateUpdateHead(shouldUpdateHead)
             .build();
     try (final var worldState =
-        context.getWorldStateArchive().getWorldState(worldStateQueryParams).orElse(null)) {
+        BlockImportTimings.time(
+            BlockImportTimings.Phase.WORLD_STATE_LOOKUP,
+            () ->
+                context.getWorldStateArchive().getWorldState(worldStateQueryParams).orElse(null))) {
 
       if (worldState == null) {
         var retval =
@@ -217,8 +270,19 @@ public class MainnetBlockValidator implements BlockValidator {
         return result;
       }
 
-      context.getWorldStateArchive().prepareWorldStateForBlock(block.getHeader(), worldState);
+      BlockImportTimings.time(
+          BlockImportTimings.Phase.WORLD_STATE_LOOKUP,
+          () ->
+              context
+                  .getWorldStateArchive()
+                  .prepareWorldStateForBlock(block.getHeader(), worldState));
 
+      if (deferTrieLog && worldState instanceof PathBasedWorldState pathBasedWorldState) {
+        pathBasedWorldState.deferTrieLog();
+      }
+      // the transactions root does not depend on execution, so it is computed alongside it
+      CompletableFuture.runAsync(
+          block.getBody()::getTransactionsRoot, BlockProcessingExecutors.ioExecutor());
       var result = processBlock(context, worldState, block, blockAccessList);
       if (result.isFailed()) {
         handleFailedBlockProcessing(block, blockAccessList, result, shouldRecordBadBlock, context);
@@ -234,14 +298,25 @@ public class MainnetBlockValidator implements BlockValidator {
             result.getYield().map(BlockProcessingOutputs::getAccessedAncestors).orElse(Map.of());
         long cumulativeBlockGasUsed =
             result.getYield().map(BlockProcessingOutputs::getCumulativeBlockGasUsed).orElse(0L);
-        if (!blockBodyValidator.validateBody(
-            context,
-            block,
-            receipts,
-            worldState.rootHash(),
-            ommerValidationMode,
-            BodyValidationMode.FULL,
-            OptionalLong.of(cumulativeBlockGasUsed))) {
+        final Supplier<Hash> receiptsRoot =
+            result
+                .getYield()
+                .map(BlockProcessingOutputs::getReceiptsRoot)
+                .orElseGet(() -> () -> BodyValidation.receiptsRoot(receipts));
+        final boolean bodyValid =
+            BlockImportTimings.time(
+                BlockImportTimings.Phase.BODY_VALIDATION,
+                () ->
+                    blockBodyValidator.validateBody(
+                        context,
+                        block,
+                        receipts,
+                        receiptsRoot,
+                        worldState.rootHash(),
+                        ommerValidationMode,
+                        BodyValidationMode.FULL,
+                        OptionalLong.of(cumulativeBlockGasUsed)));
+        if (!bodyValid) {
           result = new BlockProcessingResult("failed to validate output of imported block");
           handleFailedBlockProcessing(
               block, blockAccessList, result, shouldRecordBadBlock, context);
@@ -258,10 +333,15 @@ public class MainnetBlockValidator implements BlockValidator {
                     worldState,
                     receipts,
                     maybeRequests,
-                    processedBlockAccessList,
+                    blockAccessListToStore(block, blockAccessList, processedBlockAccessList),
                     cumulativeBlockGasUsed,
-                    accessedAncestors)),
-            result.getNbParallelizedTransactions());
+                    accessedAncestors,
+                    receiptsRoot,
+                    worldState instanceof PathBasedWorldState pathBasedWorldState
+                        ? pathBasedWorldState.takeTrieLogWrite()
+                        : () -> {})),
+            result.getNbParallelizedTransactions(),
+            result.getParallelizedGasUsed());
       }
     } catch (MerkleTrieException ex) {
       LOG.debug(
@@ -329,6 +409,26 @@ public class MainnetBlockValidator implements BlockValidator {
         LOG.debug("Invalid block {} not added to badBlockManager ", failedBlock.toLogString());
       }
     }
+  }
+
+  /**
+   * The access list to store with a block that processed successfully. A supplied list was checked
+   * against the header's hash in the bytes it was decoded from, before execution, and the list the
+   * execution built in its canonical encoding against the same hash afterwards, so those bytes are
+   * that canonical encoding and the supplied list is stored without encoding the built one again.
+   */
+  private static Optional<BlockAccessList> blockAccessListToStore(
+      final Block block,
+      final Optional<BlockAccessList> supplied,
+      final Optional<BlockAccessList> executed) {
+    final boolean checkedAgainstOneHash =
+        block.getHeader().getBalHash().isPresent() || BlockAccessListReplay.isEnabled();
+    if (executed.isPresent()
+        && checkedAgainstOneHash
+        && supplied.flatMap(BlockAccessList::rawRlp).isPresent()) {
+      return supplied;
+    }
+    return executed;
   }
 
   private static boolean transactionsExceedBlockGasLimit(final Block block) {

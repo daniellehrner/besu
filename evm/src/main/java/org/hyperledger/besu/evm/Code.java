@@ -21,6 +21,7 @@ import org.hyperledger.besu.evm.operation.JumpDestOperation;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 import com.google.common.base.MoreObjects;
 import org.apache.tuweni.bytes.Bytes;
@@ -31,6 +32,12 @@ public class Code {
   /** The constant EMPTY_CODE. */
   public static final Code EMPTY_CODE = new Code(Bytes.EMPTY);
 
+  /**
+   * The version of the jump destination analysis. Bitmasks are stored next to the code they were
+   * computed from, so this has to change whenever the bitmask of any code does.
+   */
+  public static final int JUMP_DEST_ANALYSIS_VERSION = 1;
+
   /** The bytes representing the code. */
   private final Bytes bytes;
 
@@ -39,8 +46,31 @@ public class Code {
 
   private final int size;
 
-  /** Bit mask for jump destinations, used to optimize JUMP/JUMPI operations */
-  private long[] jumpDestBitMask = null;
+  // The untraced v2 loop reads the analysis tables through their plain accessors once analyse()
+  // has built them, rather than holding them in locals: five more locals leave the loop too few
+  // registers for its own state.
+
+  /**
+   * Bit mask for jump destinations, used to optimize JUMP/JUMPI operations.
+   *
+   * <p>Volatile because it is computed on the first JUMP while the same instance may already be in
+   * use by other threads, through the code caches and parallel transaction execution. Without it, a
+   * thread could see the array before its contents and reject a valid jump destination.
+   */
+  private volatile long[] jumpDestBitMask = null;
+
+  /**
+   * Set once the PUSH tables below are complete. The tables stay plain fields, as the v2 loop reads
+   * them on every PUSH, and are published through this flag instead, for the same reason the jump
+   * destinations are volatile: {@link #analyse()} sets it after building them, and every reader
+   * calls {@link #analyse()} first.
+   */
+  private volatile boolean pushTablesBuilt = false;
+
+  private long[] pushBits = null;
+  private int[] pushBase = null;
+  private long[] pushValues = null;
+  private long[] pushWide = null;
 
   /**
    * Public constructor.
@@ -131,14 +161,15 @@ public class Code {
       return true;
     }
 
-    if (jumpDestBitMask == null) {
-      jumpDestBitMask = calculateJumpDestBitMask();
+    long[] bitMask = jumpDestBitMask;
+    if (bitMask == null) {
+      bitMask = initJumpDestBitMask();
     }
 
     // This selects which long in the array holds the bit for the given offset:
     //	1)	>>> 6 is equivalent to jumpDestination / 64
     //	2)	Each long holds 64 bits, so this finds the correct chunk
-    final long targetLong = jumpDestBitMask[jumpDestination >>> 6];
+    final long targetLong = bitMask[jumpDestination >>> 6];
 
     // 1) & 0x3F is jumpDestination % 64
     // 2)	1L << ... gives a mask for the specific bit in that long
@@ -146,6 +177,17 @@ public class Code {
 
     // If the bit is not set, then it is an invalid jump destination
     return (targetLong & targetBit) == 0L;
+  }
+
+  // Separate method so that isJumpDestInvalid stays small enough to be inlined into JUMP and JUMPI.
+  // Synchronized so that threads reaching the first JUMP together analyse the code only once.
+  private synchronized long[] initJumpDestBitMask() {
+    long[] bitMask = jumpDestBitMask;
+    if (bitMask == null) {
+      bitMask = calculateJumpDestBitMask();
+      jumpDestBitMask = bitMask;
+    }
+    return bitMask;
   }
 
   /**
@@ -163,6 +205,16 @@ public class Code {
       i += printInstruction(i, ps);
     }
     return out.toString(StandardCharsets.UTF_8);
+  }
+
+  /**
+   * Returns the bitmask of valid jump destinations, computing it on first use.
+   *
+   * @return the bitmask, one bit per byte of code
+   */
+  long[] jumpDestinations() {
+    final long[] bitMask = jumpDestBitMask;
+    return bitMask != null ? bitMask : initJumpDestBitMask();
   }
 
   /**
@@ -186,189 +238,170 @@ public class Code {
   }
 
   /**
-   * Computes a bitmask where each bit set to 1 indicates a valid `JUMPDEST` opcode in the EVM
-   * bytecode. The bitmap is organized in 64-byte chunks, each represented as a `long` (64 bits).
-   * This is used for efficiently validating dynamic jumps (`JUMP`, `JUMPI`) at runtime.
+   * Builds the jump destinations and the PUSH tables that the EVM v2 loop reads, unless they are
+   * built already. The PUSH tables are only read by the v2 loop, so the standard interpreter never
+   * builds them; the jump destinations come out of the same pass, unless the code came with them.
+   */
+  public void analyse() {
+    if (!pushTablesBuilt) {
+      buildPushTables();
+    }
+  }
+
+  // Synchronized, like initJumpDestBitMask, so that threads reaching the code together analyse it
+  // only once.
+  private synchronized void buildPushTables() {
+    if (pushTablesBuilt) {
+      return;
+    }
+    final long[] mask = scan(true);
+    if (jumpDestBitMask == null) {
+      jumpDestBitMask = mask;
+    }
+    pushTablesBuilt = true;
+  }
+
+  /**
+   * Bit set at the pc of every PUSH, one long per 64 bytes of code. A plain accessor, as the v2
+   * loop's inline code calls it: null until {@link #analyse()} has run.
+   *
+   * @return the bitmap
+   */
+  public long[] pushBits() {
+    return pushBits;
+  }
+
+  /**
+   * Number of PUSHes before each 64-byte block, so that the ordinal of a PUSH is the base of its
+   * block plus the count of PUSH bits below it in {@link #pushBits()}.
+   *
+   * @return the bases, null until {@link #analyse()} has run
+   */
+  public int[] pushBase() {
+    return pushBase;
+  }
+
+  /**
+   * One long per PUSH in code order: the immediate of a PUSH1..PUSH8, or the index of the limbs of
+   * a wider PUSH in {@link #pushWide()}.
+   *
+   * @return the values, null until {@link #analyse()} has run
+   */
+  public long[] pushValues() {
+    return pushValues;
+  }
+
+  /**
+   * Four big-endian limbs per PUSH9..PUSH32, addressed through {@link #pushValues()}.
+   *
+   * @return the limbs, null until {@link #analyse()} has run
+   */
+  public long[] pushWide() {
+    return pushWide;
+  }
+
+  /**
+   * Computes the jump destination bitmask of the given code without keeping a {@link Code} for it,
+   * so that it can be stored next to the code and set with {@link #setJumpDestBitMask} later.
+   *
+   * @param byteCode The byte representation of the code.
+   * @return the bitmask, one bit per code byte
+   */
+  public static long[] jumpDestBitMaskOf(final Bytes byteCode) {
+    return new Code(byteCode).calculateJumpDestBitMask();
+  }
+
+  /**
+   * Computes a bitmask where each bit set to 1 indicates a valid {@code JUMPDEST} opcode in the
+   * bytecode, one long per 64 bytes of code, used to validate dynamic jumps at runtime.
+   *
+   * <p>A change to the bitmask this returns for any code needs a new {@link
+   * #JUMP_DEST_ANALYSIS_VERSION}.
    */
   long[] calculateJumpDestBitMask() {
-    // Total number of bytes in the bytecode
-    final int size = getSize();
+    return scan(false);
+  }
 
-    // Allocate enough longs to cover all bytes, one long (64 bits) per 64-byte chunk
-    final long[] bitmap = new long[(size >> 6) + 1];
+  /**
+   * One walk over the code that skips PUSH immediates and records the valid {@code JUMPDEST}
+   * positions; with {@code withPushes} it also decodes every immediate into the PUSH tables. The
+   * code cache keeps the result, so the interpreter pays for it once per contract.
+   */
+  private long[] scan(final boolean withPushes) {
+    final byte[] raw = bytes.toArrayUnsafe();
+    final int length = raw.length;
+    final long[] bitmap = new long[(length >> 6) + 1];
 
-    // Get the raw EVM bytecode as a byte array (no copying)
-    final byte[] rawCode = getBytes().toArrayUnsafe();
-    final int length = rawCode.length;
-
-    // Iterate through the bytecode
+    int pushCount = 0;
+    int wideCount = 0;
     for (int i = 0; i < length; ) {
-      // One 64-bit entry corresponds to 64 bytecode positions
-      long thisEntry = 0L;
-
-      // Compute which bitmap entry we are in (i / 64)
-      final int entryPos = i >> 6;
-
-      // Compute the number of bytes we can safely examine in this 64-byte window
-      final int max = Math.min(64, length - (entryPos << 6));
-
-      // j is the position within this 64-byte window
-      int j = i & 0x3F;
-
-      // Scan through this 64-byte chunk of the bytecode
-      for (; j < max; i++, j++) {
-        final byte operationNum = rawCode[i];
-
-        // Skip all opcodes below 0x5b (JUMPDEST), since only PUSH1–PUSH32 and JUMPDEST matter
-        if (operationNum >= JumpDestOperation.OPCODE) {
-          switch (operationNum) {
-            // JUMPDEST opcode (0x5b): mark as a valid jump destination
-            case JumpDestOperation.OPCODE:
-              thisEntry |= 1L << j; // Set the bit at position j
-              break;
-            // PUSH1–PUSH32 opcodes (0x60–0x7f): these consume 1-32 bytes of data that should be
-            // skipped
-            case 0x60:
-              i += 1;
-              j += 1;
-              break;
-            case 0x61:
-              i += 2;
-              j += 2;
-              break;
-            case 0x62:
-              i += 3;
-              j += 3;
-              break;
-            case 0x63:
-              i += 4;
-              j += 4;
-              break;
-            case 0x64:
-              i += 5;
-              j += 5;
-              break;
-            case 0x65:
-              i += 6;
-              j += 6;
-              break;
-            case 0x66:
-              i += 7;
-              j += 7;
-              break;
-            case 0x67:
-              i += 8;
-              j += 8;
-              break;
-            case 0x68:
-              i += 9;
-              j += 9;
-              break;
-            case 0x69:
-              i += 10;
-              j += 10;
-              break;
-            case 0x6a:
-              i += 11;
-              j += 11;
-              break;
-            case 0x6b:
-              i += 12;
-              j += 12;
-              break;
-            case 0x6c:
-              i += 13;
-              j += 13;
-              break;
-            case 0x6d:
-              i += 14;
-              j += 14;
-              break;
-            case 0x6e:
-              i += 15;
-              j += 15;
-              break;
-            case 0x6f:
-              i += 16;
-              j += 16;
-              break;
-            case 0x70:
-              i += 17;
-              j += 17;
-              break;
-            case 0x71:
-              i += 18;
-              j += 18;
-              break;
-            case 0x72:
-              i += 19;
-              j += 19;
-              break;
-            case 0x73:
-              i += 20;
-              j += 20;
-              break;
-            case 0x74:
-              i += 21;
-              j += 21;
-              break;
-            case 0x75:
-              i += 22;
-              j += 22;
-              break;
-            case 0x76:
-              i += 23;
-              j += 23;
-              break;
-            case 0x77:
-              i += 24;
-              j += 24;
-              break;
-            case 0x78:
-              i += 25;
-              j += 25;
-              break;
-            case 0x79:
-              i += 26;
-              j += 26;
-              break;
-            case 0x7a:
-              i += 27;
-              j += 27;
-              break;
-            case 0x7b:
-              i += 28;
-              j += 28;
-              break;
-            case 0x7c:
-              i += 29;
-              j += 29;
-              break;
-            case 0x7d:
-              i += 30;
-              j += 30;
-              break;
-            case 0x7e:
-              i += 31;
-              j += 31;
-              break;
-            case 0x7f:
-              i += 32;
-              j += 32;
-              break;
-            default:
-              // No default case needed: any unhandled opcode >= 0x5b but not PUSH or JUMPDEST is
-              // skipped
-          }
+      final int op = raw[i] & 0xff;
+      if (op >= 0x60 && op <= 0x7f) {
+        final int n = op - 0x5f;
+        pushCount++;
+        if (n > 8) {
+          wideCount++;
         }
+        i += 1 + n;
+      } else if (op == JumpDestOperation.OPCODE) {
+        bitmap[i >> 6] |= 1L << (i & 0x3f);
+        i++;
+      } else {
+        i++;
       }
-
-      // Store the computed bitmask for this 64-byte chunk
-      bitmap[entryPos] = thisEntry;
+    }
+    if (!withPushes) {
+      return bitmap;
     }
 
-    // Return the full jump destination bitmask
+    final long[] bits = new long[(length >> 6) + 1];
+    final int[] base = new int[(length >> 6) + 1];
+    final long[] values = new long[pushCount];
+    final long[] wide = new long[wideCount * 4];
+    final long[] limbs = new long[4];
+    int wideAt = 0;
+    int ordinal = 0;
+    for (int i = 0; i < length; ) {
+      final int op = raw[i] & 0xff;
+      if (op >= 0x60 && op <= 0x7f) {
+        final int n = op - 0x5f;
+        bits[i >> 6] |= 1L << (i & 0x3f);
+        if (n > 8) {
+          Arrays.fill(limbs, 0L);
+          decodeImmediate(raw, i + 1, n, limbs);
+          System.arraycopy(limbs, 0, wide, wideAt, 4);
+          values[ordinal] = wideAt;
+          wideAt += 4;
+        } else {
+          limbs[3] = 0L;
+          decodeImmediate(raw, i + 1, n, limbs);
+          values[ordinal] = limbs[3];
+        }
+        ordinal++;
+        i += 1 + n;
+      } else {
+        i++;
+      }
+    }
+    for (int b = 1; b < base.length; b++) {
+      base[b] = base[b - 1] + Long.bitCount(bits[b - 1]);
+    }
+    pushBits = bits;
+    pushBase = base;
+    pushValues = values;
+    pushWide = wide;
     return bitmap;
+  }
+
+  /** Bytes missing at the end of the code read as zero, as the interpreter does. */
+  private static void decodeImmediate(
+      final byte[] raw, final int start, final int n, final long[] limbs) {
+    final int available = Math.max(0, Math.min(n, raw.length - start));
+    int bytePos = n - 1;
+    for (int i = 0; i < available; i++) {
+      limbs[3 - (bytePos >> 3)] |= (raw[start + i] & 0xffL) << ((bytePos & 7) << 3);
+      bytePos--;
+    }
   }
 
   /**

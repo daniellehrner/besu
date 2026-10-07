@@ -48,6 +48,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
@@ -56,7 +57,7 @@ public final class BalStateRootCommitter implements StateRootCommitter {
 
   private final ProtocolContext protocolContext;
   private final BlockHeader blockHeader;
-  private final BlockAccessListAccountLookup accountLookup;
+  private final Supplier<BlockAccessListAccountLookup> accountLookup;
   private final boolean storageFrozen;
 
   private final AtomicBoolean cancelled = new AtomicBoolean(false);
@@ -68,10 +69,41 @@ public final class BalStateRootCommitter implements StateRootCommitter {
       final BlockHeader blockHeader,
       final BlockAccessListAccountLookup accountLookup,
       final boolean storageFrozen) {
+    this(protocolContext, blockHeader, () -> accountLookup, storageFrozen);
+  }
+
+  private BalStateRootCommitter(
+      final ProtocolContext protocolContext,
+      final BlockHeader blockHeader,
+      final Supplier<BlockAccessListAccountLookup> accountLookup,
+      final boolean storageFrozen) {
     this.protocolContext = protocolContext;
     this.blockHeader = blockHeader;
     this.accountLookup = accountLookup;
     this.storageFrozen = storageFrozen;
+  }
+
+  /**
+   * A committer that builds its lookup over the access list on the background thread, which the
+   * block's transactions would otherwise wait for before they are handed out.
+   *
+   * @param protocolContext the protocol context
+   * @param blockHeader the header of the block being processed
+   * @param blockAccessList the block's access list
+   * @param storageFrozen whether the world state discards the computed writes, which then store
+   *     their trie nodes only once they are applied
+   * @return the committer, not yet started
+   */
+  public static BalStateRootCommitter forAccessList(
+      final ProtocolContext protocolContext,
+      final BlockHeader blockHeader,
+      final BlockAccessList blockAccessList,
+      final boolean storageFrozen) {
+    return new BalStateRootCommitter(
+        protocolContext,
+        blockHeader,
+        () -> BlockAccessListAccountLookup.of(blockAccessList),
+        storageFrozen);
   }
 
   /**
@@ -86,9 +118,10 @@ public final class BalStateRootCommitter implements StateRootCommitter {
     this.backgroundComputation =
         CompletableFuture.supplyAsync(
             () -> {
+              final BlockAccessListAccountLookup lookup = accountLookup.get();
               try (BonsaiWorldState parent =
-                  openParentWorldState(protocolContext, blockHeader, accountLookup)) {
-                return runComputation(parent, accountLookup, storageFrozen);
+                  openParentWorldState(protocolContext, blockHeader, lookup)) {
+                return runComputation(parent, lookup, storageFrozen);
               }
             },
             BlockProcessingExecutors.stateRootExecutor());
@@ -132,7 +165,7 @@ public final class BalStateRootCommitter implements StateRootCommitter {
     if (blockHeader != null && !result.root().equals(blockHeader.getStateRoot())) {
       throw new StateRootMismatchException(blockHeader.getStateRoot(), result.root());
     }
-    return StateRootComputations.pathBased(result.root(), result.writes());
+    return StateRootComputations.withAllWrites(result.root(), result.writes());
   }
 
   private BackgroundResult runComputation(
@@ -198,7 +231,9 @@ public final class BalStateRootCommitter implements StateRootCommitter {
     final BonsaiWorldState worldState =
         (BonsaiWorldState)
             protocolContext.getWorldStateArchive().getWorldState(queryParams).orElseThrow();
-    worldState.disableCacheMerkleTrieLoader();
+    // The block's own world state preloads nothing on this path, so these reads are what keeps
+    // the node cache warm for the next root computation over the same paths.
+    worldState.cacheTrieNodeReads();
     return worldState;
   }
 
@@ -206,7 +241,8 @@ public final class BalStateRootCommitter implements StateRootCommitter {
    * Result of the background trie computation.
    *
    * @param root computed state root hash
-   * @param writes deferred KV writes to apply at persist time (empty when storage is frozen)
+   * @param writes deferred KV writes to apply at persist time, or when the head is moved to the
+   *     block if storage is frozen
    * @param storageRoots new per-account storage roots, patched into the EVM accumulator by {@link
    *     #compute}
    */
@@ -220,7 +256,7 @@ public final class BalStateRootCommitter implements StateRootCommitter {
     private final BonsaiWorldState worldState;
     private final BlockAccessListAccountLookup accountLookup;
 
-    /** Strategy that persists deferred writes, or drops them when storage is frozen. */
+    /** Strategy that collects the writes, deferring trie commits when storage is frozen. */
     private final WriteSink sink;
 
     /** Lock-free queue; storage futures and account resolution may append concurrently. */
@@ -242,7 +278,8 @@ public final class BalStateRootCommitter implements StateRootCommitter {
         final boolean storageFrozen) {
       this.worldState = worldState;
       this.accountLookup = accountLookup;
-      this.sink = storageFrozen ? new FrozenSink() : new PersistingSink(writes);
+      // a frozen world state discards the writes, which are then only kept for moving the head
+      this.sink = new PersistingSink(writes, storageFrozen);
     }
 
     /**
@@ -251,7 +288,8 @@ public final class BalStateRootCommitter implements StateRootCommitter {
      * <ol>
      *   <li>Launch storage-trie updates concurrently for accounts with storage changes.
      *   <li>Resolve each changed account in the account trie via {@code putDeferred}.
-     *   <li>Commit the account trie; deferred writes are collected unless storage is frozen.
+     *   <li>Commit the account trie; when storage is frozen, trie commits wait for the writes to be
+     *       applied.
      * </ol>
      */
     BackgroundResult execute() {
@@ -359,8 +397,8 @@ public final class BalStateRootCommitter implements StateRootCommitter {
 
     /**
      * Replays storage slot changes from the BAL on the parent storage trie and returns the new
-     * storage root. When storage is frozen, the trie is updated in memory only and slot/trie-node
-     * KV writes are not recorded.
+     * storage root. When storage is frozen, the trie's nodes are stored only once the writes are
+     * applied.
      */
     private Hash updateStorageTrie(
         final Address address,

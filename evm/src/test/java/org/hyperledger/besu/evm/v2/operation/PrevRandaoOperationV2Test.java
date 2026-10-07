@@ -30,12 +30,12 @@ import java.util.Optional;
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.Test;
 
-class PrevRanDaoOperationV2Test extends NullaryOperationV2Test {
+class PrevRandaoOperationV2Test extends NullaryOperationV2Test {
 
   private final GasCalculator gasCalculator = new BerlinGasCalculator();
 
-  public PrevRanDaoOperationV2Test() {
-    super(new PrevRanDaoOperationV2(new BerlinGasCalculator()));
+  public PrevRandaoOperationV2Test() {
+    super(new PrevRandaoOperationV2(new BerlinGasCalculator()));
   }
 
   @Test
