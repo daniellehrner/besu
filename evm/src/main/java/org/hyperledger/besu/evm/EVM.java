@@ -74,6 +74,7 @@ import org.hyperledger.besu.evm.operation.Operation.OperationResult;
 import org.hyperledger.besu.evm.operation.OperationRegistry;
 import org.hyperledger.besu.evm.operation.OrOperation;
 import org.hyperledger.besu.evm.operation.OrOperationOptimized;
+import org.hyperledger.besu.evm.operation.PayOperation;
 import org.hyperledger.besu.evm.operation.PopOperation;
 import org.hyperledger.besu.evm.operation.Push0Operation;
 import org.hyperledger.besu.evm.operation.PushOperation;
@@ -255,6 +256,7 @@ public class EVM {
   private final boolean enableCancun;
   private final boolean enableAmsterdam;
   private final boolean enableOsaka;
+  private final boolean enablePay;
 
   // V2 operation instances that require constructor arguments
   private final ChainIdOperationV2 chainIdOperationV2;
@@ -302,6 +304,9 @@ public class EVM {
     enableCancun = EvmSpecVersion.CANCUN.ordinal() <= evmSpecVersion.ordinal();
     enableAmsterdam = EvmSpecVersion.AMSTERDAM.ordinal() <= evmSpecVersion.ordinal();
     enableOsaka = EvmSpecVersion.OSAKA.ordinal() <= evmSpecVersion.ordinal();
+    // PAY is registered only for the future EIPs rather than from a fork onwards, so the registry
+    // is the gate.
+    enablePay = operations.get(0xfc) instanceof PayOperation;
 
     // Pre-compute V2 operation instances that require constructor arguments.
     // ChainIdOperation is only registered for Istanbul+, so the instanceof check is the gate.
@@ -2176,8 +2181,8 @@ public class EVM {
               gasCalculator,
               enableCancun,
               enableAmsterdam ? EIP7708TransferLogEmitter.INSTANCE : TransferLogEmitter.NOOP);
-      case 0xfc -> // PAY (EIP-7708, Amsterdam+)
-          enableAmsterdam
+      case 0xfc -> // PAY (EIP-5920)
+          enablePay
               ? PayOperationV2.staticOperation(frame, frame.stackDataV2(), gasCalculator)
               : InvalidOperation.invalidOperationResult(opcode);
       default -> {

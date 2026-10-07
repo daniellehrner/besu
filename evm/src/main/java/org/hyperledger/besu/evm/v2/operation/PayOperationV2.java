@@ -30,7 +30,7 @@ import java.util.Objects;
 
 import org.apache.tuweni.bytes.Bytes;
 
-/** EVM v2 PAY operation (EIP-7708) using long[] stack representation. */
+/** EVM v2 PAY operation (EIP-5920) using long[] stack representation. */
 public class PayOperationV2 extends AbstractOperationV2 {
 
   /**
@@ -76,7 +76,7 @@ public class PayOperationV2 extends AbstractOperationV2 {
     final Address to = StackArithmetic.toAddressAt(s, top, 0);
     final Wei value = Wei.wrap(Bytes.wrap(StackArithmetic.getAt(s, top, 1).toBytesBE()));
     final boolean hasValue = value.greaterThan(Wei.ZERO);
-    final Account recipient = frame.getWorldUpdater().get(to);
+    final Account recipient = getAccount(to, frame);
 
     final boolean accountIsWarm = frame.warmUpAddress(to);
 
@@ -91,18 +91,17 @@ public class PayOperationV2 extends AbstractOperationV2 {
       return new OperationResult(cost, null);
     }
 
-    final MutableAccount senderAccount =
-        frame.getWorldUpdater().getOrCreate(frame.getSenderAddress());
+    final MutableAccount senderAccount = getSenderAccount(frame);
     frame
         .getWorldUpdater()
-        .observeSpending(frame.getSenderAddress(), senderAccount.getBalance(), value);
+        .observeSpending(senderAccount.getAddress(), senderAccount.getBalance(), value);
     if (value.compareTo(senderAccount.getBalance()) > 0) {
       StackArithmetic.putAt(s, top, 1, 0, 0, 0, 0);
       frame.setTopV2(top - 1);
       return new OperationResult(cost, null);
     }
 
-    final MutableAccount recipientAccount = frame.getWorldUpdater().getOrCreate(to);
+    final MutableAccount recipientAccount = getOrCreateAccount(to, frame);
     senderAccount.decrementBalance(value);
     recipientAccount.incrementBalance(value);
 
