@@ -20,6 +20,7 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.trie.BytesConcatenation;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.trienode.TrieNodeKey;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
@@ -87,7 +88,7 @@ public class BonsaiWorldStateLayerStorage extends BonsaiSnapshotWorldStateKeyVal
                     getFlatDbStrategy()
                         .getFlatAccount(
                             this::getWorldStateRootHash,
-                            this::getAccountStateTrieNode,
+                            this::getTrieNode,
                             accountHash,
                             persistentStorage)));
   }
@@ -120,7 +121,7 @@ public class BonsaiWorldStateLayerStorage extends BonsaiSnapshotWorldStateKeyVal
                             this::getWorldStateRootHash,
                             storageRootSupplier,
                             (location, hash) ->
-                                getAccountStorageTrieNode(accountHash, location, hash),
+                                getTrieNode(TrieNodeKey.of(accountHash, location), hash),
                             accountHash,
                             storageSlotKey,
                             persistentStorage)));
