@@ -153,7 +153,7 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
         return shared.readThrough(
             shared.accountNodes,
             nodeHash,
-            () -> worldStateKeyValueStorage.getAccountStateTrieNode(location, nodeHash));
+            () -> worldStateKeyValueStorage.getTrieNode(location, nodeHash));
       }
 
       @Override
@@ -166,8 +166,8 @@ public class BonsaiCachedMerkleTrieLoader implements StorageSubscriber {
             shared.storageNodes,
             nodeHash,
             () ->
-                worldStateKeyValueStorage.getAccountStorageTrieNode(
-                    accountHash, location, nodeHash));
+                worldStateKeyValueStorage.getTrieNode(
+                    TrieNodeKey.of(accountHash, location), nodeHash));
       }
     };
   }
