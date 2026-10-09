@@ -37,7 +37,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.tuweni.bytes.Bytes32;
 import org.slf4j.Logger;
@@ -196,13 +195,7 @@ public class SyncTargetManager extends AbstractSyncTargetManager {
         protocolContext.getBlockchain().getChainHeadHash().equals(pivotBlockHeader.getHash());
     if (!isValidChainHead) {
       if (protocolContext.getBlockchain().contains(pivotBlockHeader.getHash())) {
-        final ReentrantLock headLock = protocolContext.getHeadLock();
-        headLock.lock();
-        try {
-          protocolContext.getBlockchain().rewindToBlock(pivotBlockHeader.getHash());
-        } finally {
-          headLock.unlock();
-        }
+        protocolContext.getBlockchain().rewindToBlock(pivotBlockHeader.getHash());
       } else {
         return true;
       }

@@ -40,7 +40,6 @@ import org.hyperledger.besu.plugin.services.sync.spi.InitialSyncCompletionListen
 import org.hyperledger.besu.plugin.services.sync.spi.SyncStatusListener;
 
 import java.util.Optional;
-import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -116,18 +115,7 @@ public class SynchronizationServiceImpl implements SynchronizationService {
         (org.hyperledger.besu.ethereum.core.BlockHeader) blockHeader;
 
     final MutableBlockchain blockchain = protocolContext.getBlockchain();
-    final ReentrantLock headLock = protocolContext.getHeadLock();
-    headLock.lock();
-    try {
-      return moveHead(coreHeader, blockchain);
-    } finally {
-      headLock.unlock();
-    }
-  }
 
-  private boolean moveHead(
-      final org.hyperledger.besu.ethereum.core.BlockHeader coreHeader,
-      final MutableBlockchain blockchain) {
     if (worldStateArchive
         .flatMap(archive -> archive.getWorldState(withBlockHeaderAndUpdateNodeHead(coreHeader)))
         .isPresent()) {

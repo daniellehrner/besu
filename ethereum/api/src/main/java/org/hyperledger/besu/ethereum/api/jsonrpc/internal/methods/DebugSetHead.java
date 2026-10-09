@@ -33,7 +33,6 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.PathBasedWorldStateProvider;
 
 import java.util.Optional;
-import java.util.concurrent.locks.ReentrantLock;
 
 import graphql.VisibleForTesting;
 import org.slf4j.Logger;
@@ -87,26 +86,13 @@ public class DebugSetHead extends AbstractBlockParameterOrBlockHashMethod {
       return new JsonRpcErrorResponse(request.getRequest().getId(), UNKNOWN_BLOCK);
     }
 
-    final ReentrantLock headLock = protocolContext.getHeadLock();
-    headLock.lock();
-    try {
-      return setHead(maybeBlockHeader.get(), maybeMoveWorldstate, blockchain);
-    } finally {
-      headLock.unlock();
-    }
-  }
-
-  private Object setHead(
-      final BlockHeader target,
-      final Optional<Boolean> maybeMoveWorldstate,
-      final MutableBlockchain blockchain) {
     // Optionally move the worldstate to the specified blockhash, if it is present in the chain
     if (maybeMoveWorldstate.orElse(Boolean.FALSE)) {
-      var archive = getBlockchainQueries().getWorldStateArchive();
+      var archive = blockchainQueries.getWorldStateArchive();
 
       // Only PathBasedWorldState's need to be moved:
       if (archive instanceof PathBasedWorldStateProvider pathBasedArchive) {
-        if (rollIncrementally(target, blockchain, pathBasedArchive)) {
+        if (rollIncrementally(maybeBlockHeader.get(), blockchain, pathBasedArchive)) {
           return JsonRpcSuccessResponse.SUCCESS_RESULT;
         }
       }
@@ -114,7 +100,7 @@ public class DebugSetHead extends AbstractBlockParameterOrBlockHashMethod {
 
     // If we are not rolling incrementally or if there was an error incrementally rolling,
     // move the blockchain to the requested hash:
-    blockchain.rewindToBlock(target.getBlockHash());
+    blockchain.rewindToBlock(maybeBlockHeader.get().getBlockHash());
 
     return JsonRpcSuccessResponse.SUCCESS_RESULT;
   }
@@ -126,8 +112,10 @@ public class DebugSetHead extends AbstractBlockParameterOrBlockHashMethod {
 
     try {
       if (archive.isWorldStateAvailable(target.getStateRoot(), target.getBlockHash())) {
-        // the head lock is held for the whole roll, so block import and the Engine API stall
-        // until it finishes
+        // WARNING, this can be dangerous for a PathBasedWorldstate if a concurrent
+        //          process attempts to move or modify the head worldstate.
+        //          Ensure no block processing is occuring when using this feature.
+        //          No engine-api, block import, sync, mining or other rpc calls should be running.
 
         Optional<BlockHeader> currentHead =
             archive

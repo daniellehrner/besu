@@ -32,7 +32,6 @@ import org.hyperledger.besu.ethereum.mainnet.HeaderValidationMode;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 
 import java.util.Optional;
-import java.util.concurrent.locks.ReentrantLock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -79,17 +78,7 @@ public class DebugReplayBlock extends AbstractBlockParameterMethod {
     }
 
     final Block block = maybeBlock.get();
-    final ReentrantLock headLock = protocolContext.getHeadLock();
-    headLock.lock();
-    try {
-      return replayBlock(request, blockNumber, block);
-    } finally {
-      headLock.unlock();
-    }
-  }
 
-  private Object replayBlock(
-      final JsonRpcRequestContext request, final long blockNumber, final Block block) {
     // rewind to the block before the one we want to replay
     protocolContext.getBlockchain().rewindToBlock(blockNumber - 1);
 
@@ -111,7 +100,7 @@ public class DebugReplayBlock extends AbstractBlockParameterMethod {
     }
 
     // set head to newly imported block
-    protocolContext.getBlockchain().forwardToBlock(block.getHeader());
+    protocolContext.getBlockchain().forwardToBlock(maybeBlock.get().getHeader());
 
     return JsonRpcSuccessResponse.SUCCESS_RESULT;
   }

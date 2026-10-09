@@ -179,6 +179,38 @@ public class MainnetBlockValidator implements BlockValidator {
       return retval;
     }
 
+    if (shouldUpdateHead) {
+      return context
+          .getWorldStateArchive()
+          .withHeadWorldStateLock(
+              () ->
+                  processOnParentWorldState(
+                      context,
+                      block,
+                      parentHeader,
+                      ommerValidationMode,
+                      blockAccessList,
+                      true,
+                      shouldRecordBadBlock));
+    }
+    return processOnParentWorldState(
+        context,
+        block,
+        parentHeader,
+        ommerValidationMode,
+        blockAccessList,
+        false,
+        shouldRecordBadBlock);
+  }
+
+  private BlockProcessingResult processOnParentWorldState(
+      final ProtocolContext context,
+      final Block block,
+      final BlockHeader parentHeader,
+      final HeaderValidationMode ommerValidationMode,
+      final Optional<BlockAccessList> blockAccessList,
+      final boolean shouldUpdateHead,
+      final boolean shouldRecordBadBlock) {
     final WorldStateQueryParams worldStateQueryParams =
         WorldStateQueryParams.newBuilder()
             .withBlockHeader(parentHeader)
