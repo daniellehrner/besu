@@ -1097,37 +1097,60 @@ public class DefaultBlockchainTest {
   }
 
   @Test
-  public void blockAccessListIsReadFromStorageWhenBlocksAreCached() {
+  public void blockAccessListIsCachedWithItsRlpWhenBlocksAreCached() {
+    final BlockDataGenerator gen = new BlockDataGenerator();
+    final Block genesisBlock = gen.genesisBlock();
+    final KeyValueStorage kvStore = new InMemoryKeyValueStorage();
+    final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
+    final DefaultBlockchain blockchain =
+        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock, "/data/test", 512, 0);
+    final Block newBlock =
+        gen.block(new BlockOptions().setBlockNumber(1L).setParentHash(genesisBlock.getHash()));
+    final BlockAccessList builtBlockAccessList = blockAccessList();
+
+    blockchain.appendBlock(newBlock, gen.receipts(newBlock), Optional.of(builtBlockAccessList));
+
+    final BlockchainStorage storage = createStorage(kvStore, kvStoreVariables);
+    assertThat(storage.getBlockAccessList(newBlock.getHash())).contains(builtBlockAccessList);
+
+    final BlockchainStorage.Updater updater = storage.updater();
+    updater.removeBlockAccessList(newBlock.getHash());
+    updater.commit();
+
+    final Optional<BlockAccessList> cached = blockchain.getBlockAccessList(newBlock.getHash());
+    assertThat(cached).contains(builtBlockAccessList);
+    // peers are served the RLP, so it has to come with the list
+    assertThat(cached.get().rawRlp()).contains(builtBlockAccessList.encode());
+  }
+
+  @Test
+  public void blockAccessListIsReadFromStorageWhenBlocksAreNotCached() {
     final BlockDataGenerator gen = new BlockDataGenerator();
     final Block genesisBlock = gen.genesisBlock();
     final DefaultBlockchain blockchain =
         createMutableBlockchain(
-            new InMemoryKeyValueStorage(),
-            new InMemoryKeyValueStorage(),
-            genesisBlock,
-            "/data/test",
-            512,
-            0);
+            new InMemoryKeyValueStorage(), new InMemoryKeyValueStorage(), genesisBlock);
     final Block newBlock =
         gen.block(new BlockOptions().setBlockNumber(1L).setParentHash(genesisBlock.getHash()));
-    final BlockAccessList builtBlockAccessList =
-        new BlockAccessList(
-            List.of(
-                new BlockAccessList.AccountChanges(
-                    Address.fromHexString("0x1000000000000000000000000000000000000001"),
-                    List.of(),
-                    List.of(),
-                    List.of(new BlockAccessList.BalanceChange(1, Wei.ONE)),
-                    List.of(),
-                    List.of())));
+    final BlockAccessList builtBlockAccessList = blockAccessList();
 
     blockchain.appendBlock(newBlock, gen.receipts(newBlock), Optional.of(builtBlockAccessList));
 
-    final Optional<BlockAccessList> blockAccessList =
-        blockchain.getBlockAccessList(newBlock.getHash());
-    assertThat(blockAccessList).contains(builtBlockAccessList);
-    // peers are served the stored RLP, so it has to come with the list
-    assertThat(blockAccessList.get().rawRlp()).isPresent();
+    final Optional<BlockAccessList> stored = blockchain.getBlockAccessList(newBlock.getHash());
+    assertThat(stored).contains(builtBlockAccessList);
+    assertThat(stored.get().rawRlp()).contains(builtBlockAccessList.encode());
+  }
+
+  private static BlockAccessList blockAccessList() {
+    return new BlockAccessList(
+        List.of(
+            new BlockAccessList.AccountChanges(
+                Address.fromHexString("0x1000000000000000000000000000000000000001"),
+                List.of(),
+                List.of(),
+                List.of(new BlockAccessList.BalanceChange(1, Wei.ONE)),
+                List.of(),
+                List.of())));
   }
 
   @Test
