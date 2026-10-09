@@ -64,8 +64,9 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
   protected PathBasedWorldStateCacheManager worldStateCacheManager;
   protected PathBasedWorldState headWorldState;
   // the head world state is rolled, executed on and persisted in place, so concurrent writers
-  // would leave its data out of step with its block hash marker
-  private final ReentrantLock headWorldStateLock = new ReentrantLock();
+  // would leave its data out of step with its block hash marker. Fair, so that a fork choice
+  // waiting for it is not overtaken by backward sync importing the next block
+  private final ReentrantLock headWorldStateLock = new ReentrantLock(true);
   protected final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage;
   protected EvmConfiguration evmConfiguration;
   // Configuration that will be shared by all instances of world state at their creation
@@ -409,14 +410,15 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
 
   @Override
   public void resetArchiveStateTo(final BlockHeader blockHeader) {
-    withHeadWorldStateLock(
-        () -> {
-          headWorldState.resetWorldStateTo(blockHeader);
-          this.worldStateCacheManager.reset();
-          this.worldStateCacheManager.addCachedLayer(
-              blockHeader, headWorldState.getWorldStateRootHash(), headWorldState);
-          return null;
-        });
+    headWorldStateLock.lock();
+    try {
+      headWorldState.resetWorldStateTo(blockHeader);
+      this.worldStateCacheManager.reset();
+      this.worldStateCacheManager.addCachedLayer(
+          blockHeader, headWorldState.getWorldStateRootHash(), headWorldState);
+    } finally {
+      headWorldStateLock.unlock();
+    }
   }
 
   @Override

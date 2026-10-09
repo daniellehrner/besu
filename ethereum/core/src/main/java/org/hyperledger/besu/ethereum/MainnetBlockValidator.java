@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -179,28 +180,19 @@ public class MainnetBlockValidator implements BlockValidator {
       return retval;
     }
 
-    if (shouldUpdateHead) {
-      return context
-          .getWorldStateArchive()
-          .withHeadWorldStateLock(
-              () ->
-                  processOnParentWorldState(
-                      context,
-                      block,
-                      parentHeader,
-                      ommerValidationMode,
-                      blockAccessList,
-                      true,
-                      shouldRecordBadBlock));
-    }
-    return processOnParentWorldState(
-        context,
-        block,
-        parentHeader,
-        ommerValidationMode,
-        blockAccessList,
-        false,
-        shouldRecordBadBlock);
+    final Supplier<BlockProcessingResult> process =
+        () ->
+            processOnParentWorldState(
+                context,
+                block,
+                parentHeader,
+                ommerValidationMode,
+                blockAccessList,
+                shouldUpdateHead,
+                shouldRecordBadBlock);
+    return shouldUpdateHead
+        ? context.getWorldStateArchive().withHeadWorldStateLock(process)
+        : process.get();
   }
 
   private BlockProcessingResult processOnParentWorldState(

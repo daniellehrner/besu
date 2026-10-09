@@ -185,8 +185,13 @@ public abstract class PathBasedWorldStateCacheManager implements StorageSubscrib
     // snapshot with another block
     final BonsaiWorldStateKeyValueStorage headSnapshot =
         createSnapshotKeyValueStorage(rootWorldStateStorage);
-    final Optional<BlockHeader> maybeHeadHeader =
-        headSnapshot.getWorldStateBlockHash().flatMap(hashBlockHeaderFunction);
+    final Optional<BlockHeader> maybeHeadHeader;
+    try {
+      maybeHeadHeader = headSnapshot.getWorldStateBlockHash().flatMap(hashBlockHeaderFunction);
+    } catch (final RuntimeException e) {
+      closeSnapshot(headSnapshot);
+      throw e;
+    }
     if (maybeHeadHeader.isEmpty()) {
       closeSnapshot(headSnapshot);
       return Optional.empty();

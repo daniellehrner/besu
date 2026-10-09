@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.cache;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -146,6 +147,29 @@ class BonsaiWorldStateCacheManagerTest {
     assertThat(headCacheManager.contains(headers[2].getBlockHash())).isFalse();
     assertThat(headCacheManager.getStorageByRootHash(headers[1].getStateRoot()))
         .containsSame(headSnapshot);
+  }
+
+  @Test
+  void headSnapshotIsClosedWhenTheHeaderLookupFails() throws Exception {
+    final BonsaiWorldStateKeyValueStorage headSnapshot =
+        Mockito.mock(BonsaiWorldStateKeyValueStorage.class);
+    Mockito.when(headSnapshot.getWorldStateBlockHash())
+        .thenReturn(Optional.of(headers[1].getBlockHash()));
+    final TestCacheManager headCacheManager =
+        new TestCacheManager(
+            Mockito.mock(BonsaiWorldStateKeyValueStorage.class),
+            new ConcurrentHashMap<>(),
+            headSnapshot);
+
+    assertThatThrownBy(
+            () ->
+                headCacheManager.getHeadWorldState(
+                    blockHash -> {
+                      throw new IllegalStateException("storage closed");
+                    }))
+        .isInstanceOf(IllegalStateException.class);
+
+    Mockito.verify(headSnapshot).close();
   }
 
   private static Hash uniqueStateRoot(final long blockNumber) {
