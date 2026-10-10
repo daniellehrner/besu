@@ -222,6 +222,8 @@ public abstract class PathBasedWorldState
       if (blockHeader != null) {
         verifyWorldStateRoot(calculatedRootHash, blockHeader);
         if (isStorageFrozen && StateRootComputations.holdsAllWrites(computation)) {
+          // the head usually moves to this block next, so its trie nodes are collected before that
+          StateRootComputations.collectDeferredTrieNodes(computation);
           worldStateCacheManager.cacheStateWrites(blockHeader.getBlockHash(), computation);
         }
         // Trie log first, ahead of composed state, in case of an abnormal shutdown.

@@ -15,11 +15,17 @@
 package org.hyperledger.besu.ethereum.mainnet.staterootcommitter;
 
 import org.hyperledger.besu.datatypes.Hash;
+import org.hyperledger.besu.ethereum.mainnet.parallelization.BlockProcessingExecutors;
+import org.hyperledger.besu.ethereum.trie.MerkleTrie;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.WorldStateKeyValueStorage;
 import org.hyperledger.besu.plugin.services.worldstate.StateRootComputation;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+
+import org.apache.tuweni.bytes.Bytes;
 
 /** Factories for {@link StateRootComputation} results produced by state root committers. */
 public final class StateRootComputations {
@@ -64,6 +70,37 @@ public final class StateRootComputations {
     return new Forest(root);
   }
 
+  /**
+   * Starts collecting the nodes of the tries whose commits a computation deferred, so that applying
+   * it, which moves the head, only has to store them. Nothing waits for the collection: applying
+   * the computation collects whatever the background has not reached yet.
+   *
+   * @param computation the computation
+   * @return completes when the background has collected every deferred trie
+   */
+  public static CompletableFuture<Void> collectDeferredTrieNodes(
+      final StateRootComputation computation) {
+    if (!(computation instanceof PathBased pathBased)) {
+      return CompletableFuture.completedFuture(null);
+    }
+    final List<DeferredTrieCommit> deferred =
+        pathBased.writes().stream()
+            .filter(DeferredTrieCommit.class::isInstance)
+            .map(DeferredTrieCommit.class::cast)
+            .toList();
+    if (deferred.isEmpty()) {
+      return CompletableFuture.completedFuture(null);
+    }
+    return CompletableFuture.runAsync(
+        () -> deferred.forEach(DeferredTrieCommit::nodes),
+        BlockProcessingExecutors.stateRootExecutor());
+  }
+
+  static UpdaterWrite deferredTrieCommit(
+      final MerkleTrie<Bytes, Bytes> trie, final TrieWriteOf writeOf) {
+    return new DeferredTrieCommit(trie, writeOf);
+  }
+
   private record PathBased(Hash root, List<UpdaterWrite> writes, boolean allWrites)
       implements StateRootComputation {
 
@@ -72,6 +109,32 @@ public final class StateRootComputations {
       final BonsaiWorldStateKeyValueStorage.Updater bonsaiUpdater =
           (BonsaiWorldStateKeyValueStorage.Updater) updater;
       writes.forEach(write -> write.applyTo(bonsaiUpdater));
+    }
+  }
+
+  /** A trie commit deferred until the writes are applied, collected once by whoever comes first. */
+  private static final class DeferredTrieCommit implements UpdaterWrite {
+    private final MerkleTrie<Bytes, Bytes> trie;
+    private final TrieWriteOf writeOf;
+    private List<UpdaterWrite> nodes;
+
+    private DeferredTrieCommit(final MerkleTrie<Bytes, Bytes> trie, final TrieWriteOf writeOf) {
+      this.trie = trie;
+      this.writeOf = writeOf;
+    }
+
+    private synchronized List<UpdaterWrite> nodes() {
+      if (nodes == null) {
+        final List<UpdaterWrite> committed = new ArrayList<>();
+        trie.commit((location, hash, value) -> committed.add(writeOf.apply(location, hash, value)));
+        nodes = committed;
+      }
+      return nodes;
+    }
+
+    @Override
+    public void applyTo(final BonsaiWorldStateKeyValueStorage.Updater updater) {
+      nodes().forEach(node -> node.applyTo(updater));
     }
   }
 

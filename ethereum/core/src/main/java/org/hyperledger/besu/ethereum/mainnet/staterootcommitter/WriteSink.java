@@ -64,8 +64,8 @@ interface TrieWriteOf {
 
 /**
  * Persisting strategy: routes writes to a lock-free queue. A trie's nodes are either collected when
- * it is committed, or, when its commit is deferred, stored only once the writes are applied: then
- * the root computation does not pay for collecting writes that may never be applied.
+ * it is committed, or, when its commit is deferred, only once the root has been checked: then the
+ * root computation does not pay for collecting writes that may never be applied.
  */
 record PersistingSink(
     ConcurrentLinkedQueue<StateRootComputations.UpdaterWrite> writes, boolean deferTrieCommits)
@@ -110,10 +110,7 @@ record PersistingSink(
   public void commitTrie(final MerkleTrie<Bytes, Bytes> trie, final TrieWriteOf writeOf) {
     if (deferTrieCommits) {
       // the root hash is computed before the writes are applied, so the trie needs no storage then
-      writes.add(
-          u ->
-              trie.commit(
-                  (location, hash, value) -> writeOf.apply(location, hash, value).applyTo(u)));
+      writes.add(StateRootComputations.deferredTrieCommit(trie, writeOf));
     } else {
       trie.commit((location, hash, value) -> writes.add(writeOf.apply(location, hash, value)));
     }
