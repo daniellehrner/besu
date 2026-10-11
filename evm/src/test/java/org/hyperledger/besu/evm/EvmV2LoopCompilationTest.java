@@ -23,14 +23,13 @@ import org.hyperledger.besu.evm.fluent.EVMExecutor;
 import org.hyperledger.besu.evm.fluent.EvmSpec;
 import org.hyperledger.besu.evm.fluent.SimpleWorld;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
+import org.hyperledger.besu.evm.testutils.ByteCodeBuilder;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
 
-import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -170,7 +169,7 @@ class EvmV2LoopCompilationTest {
      * variants.
      */
     static Bytes program() {
-      final Assembler a = new Assembler();
+      final ByteCodeBuilder a = new ByteCodeBuilder();
       a.hex("6101005b"); // PUSH2 0x100, the counter, then the head of the loop
       final int loop = 3;
       a.hex("600760050150 600760050350 600360090250 600360090450 600360090650");
@@ -194,32 +193,7 @@ class EvmV2LoopCompilationTest {
       a.hex("6000").push2(loop).hex("805057");
       // counter - 1, and around again while it is not zero
       a.hex("60019003 80").push2(loop).hex("57 50 00");
-      return Bytes.wrap(a.bytes());
-    }
-  }
-
-  private static final class Assembler {
-    private final ByteArrayOutputStream out = new ByteArrayOutputStream();
-
-    Assembler hex(final String hex) {
-      final byte[] bytes = HexFormat.of().parseHex(hex.replace(" ", ""));
-      out.write(bytes, 0, bytes.length);
-      return this;
-    }
-
-    Assembler push2(final int value) {
-      out.write(0x61);
-      out.write(value >>> 8);
-      out.write(value & 0xff);
-      return this;
-    }
-
-    int size() {
-      return out.size();
-    }
-
-    byte[] bytes() {
-      return out.toByteArray();
+      return Bytes.fromHexString(a.toString());
     }
   }
 }

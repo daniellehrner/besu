@@ -19,13 +19,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.EvmSpecVersion;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
+import org.hyperledger.besu.evm.testutils.ByteCodeBuilder;
 import org.hyperledger.besu.evm.v2.ProgramRun.Fork;
 import org.hyperledger.besu.evm.v2.ProgramRun.Outcome;
 import org.hyperledger.besu.evm.v2.operation.EvmLoopInlining;
 
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -38,9 +38,9 @@ import org.junit.jupiter.params.provider.FieldSource;
 
 /**
  * Runs programs aimed at the inline cases of the untraced EVM v2 loop on v1 and on v2 without a
- * tracer, which takes the untraced loop, at every gas limit up to what they use, so that every
- * inline case is also the operation that runs out of gas and falls back. The differential tests of
- * random programs run with plenty of gas and so seldom reach a fallback.
+ * tracer, which takes the untraced loop, with the gas running out at the operations they hold, so
+ * that every inline case is also the operation that runs out of gas and falls back. The
+ * differential tests of random programs run with plenty of gas and so seldom reach a fallback.
  */
 class UntracedLoopV2Test {
 
@@ -159,7 +159,7 @@ class UntracedLoopV2Test {
 
   @ParameterizedTest(name = "{0}")
   @FieldSource("FORKS")
-  void edgeProgramsEndAsOnV1AtEveryGasLimit(final Fork fork) {
+  void edgeProgramsEndAsOnV1WhenTheGasRunsOut(final Fork fork) {
     final EVM v1 = fork.factory().apply(ProgramRun.V1);
     final EVM v2 = fork.factory().apply(ProgramRun.V2);
     for (final Map.Entry<String, String> program : EDGE_PROGRAMS.entrySet()) {
@@ -167,8 +167,12 @@ class UntracedLoopV2Test {
       final Outcome unlimited = run(v2, code, PLENTY);
       assertThat(unlimited).as(program.getKey()).isEqualTo(run(v1, code, PLENTY));
       final long used = PLENTY - unlimited.remainingGas();
-      final long step = Math.max(1, used / 100);
-      for (long gas = 0; gas <= used + 1; gas += step) {
+      // every limit where the last operations run out, so that a halt and running out meet there
+      final long everyFrom = Math.max(0, used - 128);
+      final long stride = Math.max(1, everyFrom / 100);
+      for (long gas = 0;
+          gas <= used + 1;
+          gas = gas < everyFrom ? Math.min(gas + stride, everyFrom) : gas + 1) {
         assertThat(run(v2, code, gas))
             .as("%s with %d gas", program.getKey(), gas)
             .isEqualTo(run(v1, code, gas));
@@ -223,7 +227,7 @@ class UntracedLoopV2Test {
    * a few operations of the general path in between.
    */
   private static Bytes everyInlineOperation(final boolean push0) {
-    final Assembler a = new Assembler();
+    final ByteCodeBuilder a = new ByteCodeBuilder();
     a.hex("6001600210 50 6001600211 50 6001600212 50 6001600213 50"); // LT, GT, SLT, SGT
     a.hex("6005600514 15 50"); // EQ, ISZERO
     a.hex("60ff60000b 50 600160200b 50"); // SIGNEXTEND, of a byte and past the word
@@ -243,7 +247,7 @@ class UntracedLoopV2Test {
     // JUMPI not taken
     a.hex("6000 60ff 57");
     a.hex("00");
-    return Bytes.wrap(a.bytes());
+    return Bytes.fromHexString(a.toString());
   }
 
   private static Bytes randomProgram(final Random random) {
@@ -311,30 +315,5 @@ class UntracedLoopV2Test {
 
   private static boolean atLeast(final EVM evm, final EvmSpecVersion version) {
     return evm.getEvmVersion().ordinal() >= version.ordinal();
-  }
-
-  private static final class Assembler {
-    private final ByteArrayOutputStream out = new ByteArrayOutputStream();
-
-    Assembler hex(final String hex) {
-      final byte[] bytes = HexFormat.of().parseHex(hex.replace(" ", ""));
-      out.write(bytes, 0, bytes.length);
-      return this;
-    }
-
-    Assembler push2(final int value) {
-      out.write(0x61);
-      out.write(value >>> 8);
-      out.write(value & 0xff);
-      return this;
-    }
-
-    int size() {
-      return out.size();
-    }
-
-    byte[] bytes() {
-      return out.toByteArray();
-    }
   }
 }
