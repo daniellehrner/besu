@@ -46,9 +46,9 @@ class JumpiOperationV2Test {
     final Operation.OperationResult result = JumpiOperationV2.staticOperation(frame);
 
     assertThat(result.getHaltReason()).isNull();
+    assertThat(result.getPcIncrement()).isZero();
     assertThat(result.getGasCost()).isEqualTo(10);
-    // the interpreter adds the result's increment to the program counter
-    assertThat(frame.getPC() + result.getPcIncrement()).isEqualTo(3);
+    assertThat(frame.getPC()).isEqualTo(3);
     assertThat(frame.stackTopV2()).isZero();
   }
 

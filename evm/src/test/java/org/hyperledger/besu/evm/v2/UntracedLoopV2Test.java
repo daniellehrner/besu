@@ -145,9 +145,10 @@ class UntracedLoopV2Test {
           Map.entry("unassigned", "0c"));
 
   @ParameterizedTest(name = "{0}")
-  @FieldSource("FORKS")
-  void theLoopChargesWhatTheForkCharges(final Fork fork) {
+  @FieldSource("org.hyperledger.besu.evm.v2.ProgramRun#FORKS")
+  void theLoopChargesWhatEveryForkCharges(final Fork fork) {
     final GasCalculator gas = fork.factory().apply(ProgramRun.V2).getGasCalculator();
+    assertThat(EvmLoopInlining.chargesTheLoopsCosts(gas)).isTrue();
     assertThat(gas.getBaseTierGasCost()).isEqualTo(EvmLoopInlining.BASE_TIER_GAS);
     assertThat(gas.getVeryLowTierGasCost()).isEqualTo(EvmLoopInlining.VERY_LOW_TIER_GAS);
     assertThat(gas.getLowTierGasCost()).isEqualTo(EvmLoopInlining.LOW_TIER_GAS);
@@ -187,6 +188,10 @@ class UntracedLoopV2Test {
     final long used = PLENTY - unlimited.remainingGas();
     for (long gas = 0; gas <= used; gas++) {
       assertThat(run(v2, code, gas)).as("%d gas", gas).isEqualTo(run(v1, code, gas));
+      // the operations' classes, which the traced loop runs, halt where v1 halts too
+      assertThat(runTraced(v2, code, gas))
+          .as("traced, %d gas", gas)
+          .isEqualTo(runTraced(v1, code, gas));
     }
   }
 
@@ -207,6 +212,10 @@ class UntracedLoopV2Test {
 
   private static Outcome run(final EVM evm, final Bytes code, final long gas) {
     return ProgramRun.run(evm, code, CALLEE_CODE, Bytes.EMPTY, gas, false, SLOTS);
+  }
+
+  private static Outcome runTraced(final EVM evm, final Bytes code, final long gas) {
+    return ProgramRun.runTraced(evm, code, CALLEE_CODE, Bytes.EMPTY, gas, false, SLOTS);
   }
 
   /**

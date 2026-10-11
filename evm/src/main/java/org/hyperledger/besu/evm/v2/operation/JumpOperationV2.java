@@ -19,9 +19,9 @@ import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.JUMPDEST_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.MID_TIER_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.analysedCode;
-import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.isJumpDestinationAt;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.jumpResult;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.jumped;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
 import org.hyperledger.besu.evm.Code;
@@ -79,9 +79,9 @@ public class JumpOperationV2 extends AbstractFixedCostOperationV2 {
         final int destination = (int) s[d + 3];
         if (untraced && gas >= MID_TIER_GAS + JUMPDEST_GAS) {
           // no tracer sees the JUMPDEST as an operation of its own
-          return done(MID_TIER_GAS + JUMPDEST_GAS, destination + 1 - pc, -1);
+          return jumped(MID_TIER_GAS + JUMPDEST_GAS, destination + 1 - pc, -1);
         }
-        return done(MID_TIER_GAS, destination - pc, -1);
+        return jumped(MID_TIER_GAS, destination - pc, -1);
       }
     }
     return FALLBACK;

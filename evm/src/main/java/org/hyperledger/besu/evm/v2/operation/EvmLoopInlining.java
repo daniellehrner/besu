@@ -20,6 +20,7 @@ import static org.hyperledger.besu.evm.v2.operation.AbstractOperationV2.UNDERFLO
 import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
+import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 import org.hyperledger.besu.evm.operation.Operation.OperationResult;
 
 import java.lang.invoke.MethodHandles;
@@ -33,10 +34,8 @@ import java.nio.ByteOrder;
  */
 public final class EvmLoopInlining {
 
-  // The costs the loop charges for the operations it runs inline, the same numbers the operations'
-  // results carry. Constants rather than fields of the gas calculator: as fields they are loads C2
-  // hoists to the loop's dispatch, where they run for every operation. Every fork's gas calculator
-  // charges these, which EvmLoopInliningTest checks.
+  // Constants, as fields of the gas calculator would be loads C2 hoists to the loop's dispatch. An
+  // EVM whose calculator charges other costs does not run the loop; see chargesTheLoopsCosts.
 
   /** The base tier's cost. */
   public static final long BASE_TIER_GAS = 2L;
@@ -77,12 +76,19 @@ public final class EvmLoopInlining {
   private static final OperationResult INVALID_JUMPI =
       new OperationResult(HIGH_TIER_GAS, ExceptionalHaltReason.INVALID_JUMP_DESTINATION);
 
-  /** Results by gas cost, which is at most 15 for an inline method. */
+  /** The bit of an outcome that says the program counter moved to a jump destination. */
+  private static final long JUMPED = 1L << 40;
+
+  /** The results of the inline operations by gas cost, for the steps the interpreter makes. */
   private static final OperationResult[] SUCCESS = new OperationResult[16];
+
+  /** The same for jumps, which set the program counter themselves. */
+  private static final OperationResult[] SUCCESS_JUMPED = new OperationResult[16];
 
   static {
     for (int cost = 0; cost < SUCCESS.length; cost++) {
       SUCCESS[cost] = new OperationResult(cost, null);
+      SUCCESS_JUMPED[cost] = new OperationResult(cost, null, 0);
     }
   }
 
@@ -215,17 +221,38 @@ public final class EvmLoopInlining {
     s[b + 3] = t;
   }
 
+  /**
+   * Whether a gas calculator charges the costs the untraced loop charges as constants. An EVM whose
+   * calculator charges others runs every operation through its class.
+   *
+   * @param gasCalculator the gas calculator
+   * @return whether the untraced loop charges what the calculator charges
+   */
+  public static boolean chargesTheLoopsCosts(final GasCalculator gasCalculator) {
+    return gasCalculator.getBaseTierGasCost() == BASE_TIER_GAS
+        && gasCalculator.getVeryLowTierGasCost() == VERY_LOW_TIER_GAS
+        && gasCalculator.getLowTierGasCost() == LOW_TIER_GAS
+        && gasCalculator.getMidTierGasCost() == MID_TIER_GAS
+        && gasCalculator.getHighTierGasCost() == HIGH_TIER_GAS
+        && gasCalculator.getJumpDestOperationGasCost() == JUMPDEST_GAS;
+  }
+
   /** What an inline method returns when it has run the operation: gas, pc step, stack delta. */
   static long done(final long cost, final int step, final int delta) {
-    return cost << 32 | (step & 0xffffffL) << 8 | (delta & 0xffL);
+    return cost << 41 | (step & 0xffffffffL) << 8 | (delta & 0xffL);
+  }
+
+  /** As {@link #done}, for an operation that jumped, which a tracer sees at its destination. */
+  static long jumped(final long cost, final int step, final int delta) {
+    return done(cost, step, delta) | JUMPED;
   }
 
   static long cost(final long outcome) {
-    return outcome >>> 32;
+    return outcome >>> 41;
   }
 
   static int step(final long outcome) {
-    return (int) outcome >> 8;
+    return (int) (outcome >>> 8);
   }
 
   static int delta(final long outcome) {
@@ -308,11 +335,19 @@ public final class EvmLoopInlining {
    */
   static OperationResult ran(final MessageFrame frame, final long outcome) {
     frame.setTopV2(frame.stackTopV2() + delta(outcome));
+    final int cost = (int) cost(outcome);
     final int step = step(outcome);
+    if ((outcome & JUMPED) != 0) {
+      // the program counter is at the destination even if the gas then runs out, as in v1
+      frame.setPC(frame.getPC() + step);
+      return cost < SUCCESS_JUMPED.length
+          ? SUCCESS_JUMPED[cost]
+          : new OperationResult(cost, null, 0);
+    }
     if (step != 1) {
-      // the result moves the program counter by one
+      // the interpreter adds the result's increment of one
       frame.setPC(frame.getPC() + step - 1);
     }
-    return SUCCESS[(int) cost(outcome)];
+    return cost < SUCCESS.length ? SUCCESS[cost] : new OperationResult(cost, null);
   }
 }

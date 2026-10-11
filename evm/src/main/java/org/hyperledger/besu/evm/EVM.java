@@ -23,6 +23,7 @@ import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LONG_BE;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LOW_TIER_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.MID_TIER_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.chargesTheLoopsCosts;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.isJumpDestinationV2;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.jumpDestinations;
 
@@ -170,6 +171,9 @@ public class EVM {
 
   private final Operation[] operationsV2;
 
+  // the untraced v2 loop charges its inline operations' costs as constants
+  private final boolean v2ChargesTheLoopsCosts;
+
   /**
    * Instantiates a new Evm.
    *
@@ -199,6 +203,7 @@ public class EVM {
         evmConfiguration.enableEvmV2()
             ? OperationsV2.of(operations.getOperations(), gasCalculator)
             : null;
+    v2ChargesTheLoopsCosts = chargesTheLoopsCosts(gasCalculator);
   }
 
   /**
@@ -524,7 +529,7 @@ public class EVM {
     frame.ensureStackV2();
     // analysed before either loop runs a jump, so that no jump takes the branch that analyses it
     jumpDestinations(frame.getCode());
-    if (operationTracer.tracesOperations()) {
+    if (!v2ChargesTheLoopsCosts || operationTracer.tracesOperations()) {
       runToHaltV2Traced(frame, operationTracer);
     } else {
       runToHaltV2Untraced(frame);

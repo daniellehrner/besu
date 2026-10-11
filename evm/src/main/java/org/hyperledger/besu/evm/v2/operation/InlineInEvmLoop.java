@@ -53,9 +53,10 @@ import java.lang.annotation.Target;
  *       case's own bias. Built on {@code sp} directly, the same index appears in many cases, and C2
  *       computes all of them once, ahead of the dispatch, where they take the registers the loop's
  *       state needs.
- *   <li>A method reports its outcome only through {@code return done(cost, step, delta)} or {@code
- *       return FALLBACK}; the loop's common tail applies the update. Written out in every case, the
- *       same update is again one computation that C2 moves ahead of the dispatch.
+ *   <li>A method reports its outcome only through {@code return done(cost, step, delta)}, {@code
+ *       return jumped(cost, step, delta)} for a jump, or {@code return FALLBACK}; the loop's common
+ *       tail applies the update. Written out in every case, the same update is again one
+ *       computation that C2 moves ahead of the dispatch.
  * </ul>
  *
  * <p>A method handles only the outcome in which its operation succeeds. Whatever else it meets, it

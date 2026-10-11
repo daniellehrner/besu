@@ -18,7 +18,6 @@ import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.BASE_TIER_GA
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.next;
-import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.stackWithSpace;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.storeLong;
 
@@ -39,12 +38,14 @@ public class GasOperationV2 extends AbstractFixedCostOperationV2 {
 
   @Override
   public OperationResult executeFixedCostOperation(final MessageFrame frame) {
-    // execute has checked that the gas covers the cost
     final int sp = frame.stackTopV2();
-    return result(
-        frame,
-        gasLeft(stackWithSpace(frame, 1), next(sp), frame.getRemainingGas()),
-        overflowResponse);
+    // gasLeft subtracts the base tier's cost, and this calculator may charge another
+    final long gasPlusBaseTier = frame.getRemainingGas() - gasCost + BASE_TIER_GAS;
+    if (gasLeft(stackWithSpace(frame, 1), next(sp), gasPlusBaseTier) == FALLBACK) {
+      return overflowResponse;
+    }
+    frame.setTopV2(sp + 1);
+    return successResponse;
   }
 
   /** GAS: what is left once GAS itself is paid. */

@@ -158,6 +158,7 @@ public final class EvmV2LoopGenerator {
   private static final Set<String> CALLS =
       Set.of(
           "done",
+          "jumped",
           "isJumpDestinationV2",
           "Long.bitCount",
           "Long.compareUnsigned",
@@ -368,7 +369,7 @@ public final class EvmV2LoopGenerator {
         if (type instanceof ClassTree classTree) {
           // the generated code never names done or FALLBACK: it translates them
           final Set<String> used = new TreeSet<>(named);
-          used.removeAll(Set.of("done", "FALLBACK"));
+          used.removeAll(Set.of("done", "jumped", "FALLBACK"));
           // nor the helpers, whose bodies it holds instead
           used.removeAll(copied);
           checkNamesResolveToInlining(unit, classTree, used, evmFile.toString(), errors);
@@ -799,7 +800,9 @@ public final class EvmV2LoopGenerator {
         public Void visitReturn(final ReturnTree tree, final Void unused) {
           if (!isDone(tree.getExpression()) && !isFallback(tree.getExpression())) {
             error(
-                tree, "an inline method returns done(cost, step, delta) or FALLBACK, nothing else");
+                tree,
+                "an inline method returns done(cost, step, delta), jumped(cost, step, delta) or"
+                    + " FALLBACK, nothing else");
           }
           return super.visitReturn(tree, unused);
         }
@@ -1466,7 +1469,8 @@ public final class EvmV2LoopGenerator {
 
   private static boolean isDone(final ExpressionTree expression) {
     return expression instanceof MethodInvocationTree call
-        && call.getMethodSelect().toString().equals("done")
+        && (call.getMethodSelect().toString().equals("done")
+            || call.getMethodSelect().toString().equals("jumped"))
         && call.getArguments().size() == 3;
   }
 
