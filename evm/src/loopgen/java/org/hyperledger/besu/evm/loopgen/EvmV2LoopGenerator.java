@@ -284,6 +284,8 @@ public final class EvmV2LoopGenerator {
           for (final Tree member : classTree.getMembers()) {
             if (member instanceof MethodTree method && inlineAnnotation(method) != null) {
               marked.add(new Marked(unit, source, classTree, method));
+            } else if (member instanceof ClassTree nested) {
+              rejectNested(unit, positions, nested, errors);
             }
           }
         }
@@ -415,11 +417,34 @@ public final class EvmV2LoopGenerator {
 
   private static AnnotationTree inlineAnnotation(final MethodTree method) {
     for (final AnnotationTree annotation : method.getModifiers().getAnnotations()) {
-      if (annotation.getAnnotationType().toString().equals("InlineInEvmLoop")) {
+      final String type = annotation.getAnnotationType().toString();
+      if (type.equals("InlineInEvmLoop") || type.endsWith(".InlineInEvmLoop")) {
         return annotation;
       }
     }
     return null;
+  }
+
+  /** Reports the methods of a nested class marked @InlineInEvmLoop, which nothing would copy. */
+  private static void rejectNested(
+      final CompilationUnitTree unit,
+      final SourcePositions positions,
+      final ClassTree nested,
+      final List<String> errors) {
+    for (final Tree member : nested.getMembers()) {
+      if (member instanceof MethodTree method && inlineAnnotation(method) != null) {
+        errors.add(
+            nested.getSimpleName()
+                + "."
+                + method.getName()
+                + " (line "
+                + unit.getLineMap().getLineNumber(positions.getStartPosition(unit, method))
+                + "): an inline method belongs to a top-level class, the only ones the generator"
+                + " reads");
+      } else if (member instanceof ClassTree deeper) {
+        rejectNested(unit, positions, deeper, errors);
+      }
+    }
   }
 
   /** One inline method: its checks and its translation into loop code. */
@@ -463,6 +488,7 @@ public final class EvmV2LoopGenerator {
       checkSignature();
       collectLocals();
       checkBody();
+      flow(method.getBody(), false);
       return new SwitchCase(
           owner.getSimpleName().toString(),
           method.getName().toString(),
@@ -620,91 +646,10 @@ public final class EvmV2LoopGenerator {
     private void checkBody() {
       final Set<String> stackIndices = derivedFrom(Set.of("top", "next"));
       final Set<String> codeIndices = derivedFrom(Set.of("at"));
-      new TreePathScanner<Void, Void>() {
+      new RuleScanner() {
         @Override
-        public Void visitForLoop(final ForLoopTree tree, final Void unused) {
-          error(tree, "no loops: every loop head is an OSR entry point; write the limbs out");
-          return super.visitForLoop(tree, unused);
-        }
-
-        @Override
-        public Void visitEnhancedForLoop(final EnhancedForLoopTree tree, final Void unused) {
-          error(tree, "no loops: every loop head is an OSR entry point; write the limbs out");
-          return super.visitEnhancedForLoop(tree, unused);
-        }
-
-        @Override
-        public Void visitWhileLoop(final WhileLoopTree tree, final Void unused) {
-          error(tree, "no loops: every loop head is an OSR entry point; write the limbs out");
-          return super.visitWhileLoop(tree, unused);
-        }
-
-        @Override
-        public Void visitDoWhileLoop(final DoWhileLoopTree tree, final Void unused) {
-          error(tree, "no loops: every loop head is an OSR entry point; write the limbs out");
-          return super.visitDoWhileLoop(tree, unused);
-        }
-
-        @Override
-        public Void visitNewClass(final NewClassTree tree, final Void unused) {
-          error(tree, "no allocation: it makes C2 keep the loop's locals in memory");
-          return super.visitNewClass(tree, unused);
-        }
-
-        @Override
-        public Void visitNewArray(final NewArrayTree tree, final Void unused) {
-          error(tree, "no allocation: it makes C2 keep the loop's locals in memory");
-          return super.visitNewArray(tree, unused);
-        }
-
-        @Override
-        public Void visitLambdaExpression(final LambdaExpressionTree tree, final Void unused) {
-          error(tree, "no lambdas: they allocate and call");
-          return null;
-        }
-
-        @Override
-        public Void visitMemberReference(final MemberReferenceTree tree, final Void unused) {
-          error(tree, "no method references: they allocate and call");
-          return null;
-        }
-
-        @Override
-        public Void visitTry(final TryTree tree, final Void unused) {
-          error(tree, "no try: halts belong to the operation's implementation");
-          return super.visitTry(tree, unused);
-        }
-
-        @Override
-        public Void visitThrow(final ThrowTree tree, final Void unused) {
-          error(tree, "no throw: halts belong to the operation's implementation");
-          return super.visitThrow(tree, unused);
-        }
-
-        @Override
-        public Void visitSynchronized(final SynchronizedTree tree, final Void unused) {
-          error(tree, "no synchronization");
-          return super.visitSynchronized(tree, unused);
-        }
-
-        @Override
-        public Void visitSwitch(final SwitchTree tree, final Void unused) {
-          error(tree, "no switch: a nested table jump costs bytecode and a second indirect jump");
-          return super.visitSwitch(tree, unused);
-        }
-
-        @Override
-        public Void visitSwitchExpression(final SwitchExpressionTree tree, final Void unused) {
-          error(tree, "no switch: a nested table jump costs bytecode and a second indirect jump");
-          return super.visitSwitchExpression(tree, unused);
-        }
-
-        @Override
-        public Void visitLiteral(final LiteralTree tree, final Void unused) {
-          if (tree.getKind() == Tree.Kind.STRING_LITERAL) {
-            error(tree, "no strings: they allocate");
-          }
-          return null;
+        void report(final Tree tree, final String message) {
+          error(tree, message);
         }
 
         @Override
@@ -876,6 +821,84 @@ public final class EvmV2LoopGenerator {
       }.scan(new TreePath(new TreePath(unit), method.getBody()), null);
     }
 
+    /**
+     * Follows the method's statements to check that no return FALLBACK can follow a write to the
+     * stack: the loop then runs the operation through its class, which must see the stack as the
+     * method found it.
+     *
+     * @param statement the statement
+     * @param written whether the stack may have been written before it
+     * @return whether it may have been written when the statement completes, or null if it cannot
+     *     complete
+     */
+    private Boolean flow(final StatementTree statement, final boolean written) {
+      if (statement instanceof BlockTree block) {
+        Boolean state = written;
+        for (final StatementTree inner : block.getStatements()) {
+          if (state == null) {
+            return null;
+          }
+          state = flow(inner, state);
+        }
+        return state;
+      }
+      if (statement instanceof IfTree ifTree) {
+        final boolean before = written || writesStack(ifTree.getCondition());
+        final Boolean then = flow(ifTree.getThenStatement(), before);
+        final Boolean otherwise =
+            ifTree.getElseStatement() == null
+                ? Boolean.valueOf(before)
+                : flow(ifTree.getElseStatement(), before);
+        if (then == null || otherwise == null) {
+          return then == null ? otherwise : then;
+        }
+        return then || otherwise;
+      }
+      if (statement instanceof ReturnTree returnTree) {
+        if (written && isFallback(returnTree.getExpression())) {
+          error(
+              returnTree,
+              "FALLBACK after the stack was written: the loop then runs the operation through its"
+                  + " class on the changed stack");
+        }
+        return null;
+      }
+      return written || writesStack(statement);
+    }
+
+    /** Whether a tree writes the stack, itself or through a helper copied into it. */
+    private boolean writesStack(final Tree tree) {
+      final boolean[] found = {false};
+      new TreeScanner<Void, Void>() {
+        @Override
+        public Void visitAssignment(final AssignmentTree assignment, final Void unused) {
+          found[0] |= isStack(assignment.getVariable());
+          return super.visitAssignment(assignment, unused);
+        }
+
+        @Override
+        public Void visitCompoundAssignment(
+            final CompoundAssignmentTree assignment, final Void unused) {
+          found[0] |= isStack(assignment.getVariable());
+          return super.visitCompoundAssignment(assignment, unused);
+        }
+
+        @Override
+        public Void visitMethodInvocation(final MethodInvocationTree call, final Void unused) {
+          final InlineHelper helper = helperCalled(call);
+          found[0] |= helper != null && helper.writesStack;
+          return super.visitMethodInvocation(call, unused);
+        }
+      }.scan(tree, null);
+      return found[0];
+    }
+
+    private static boolean isStack(final ExpressionTree target) {
+      return target instanceof ArrayAccessTree access
+          && access.getExpression() instanceof IdentifierTree array
+          && array.getName().contentEquals("s");
+    }
+
     // -------------------------------------------------------------------------------------------
     // Translation
 
@@ -940,7 +963,9 @@ public final class EvmV2LoopGenerator {
           } else {
             text = tail ? "" : "break;";
           }
-          statements.add(new Edit(start(tree), end(tree), text));
+          // the then or else of a brace-less if takes one statement, and the copy is several
+          final boolean inBlock = getCurrentPath().getParentPath().getLeaf() instanceof BlockTree;
+          statements.add(new Edit(start(tree), end(tree), inBlock ? text : "{" + text + "}"));
           return null;
         }
 
@@ -1048,6 +1073,101 @@ public final class EvmV2LoopGenerator {
     }
   }
 
+  /**
+   * The constructs no code copied into the loop may hold, for inline methods and helpers alike;
+   * each one would cost the loop its registers or its compilation.
+   */
+  private abstract static class RuleScanner extends TreePathScanner<Void, Void> {
+
+    abstract void report(Tree tree, String message);
+
+    @Override
+    public Void visitForLoop(final ForLoopTree tree, final Void unused) {
+      report(tree, "no loops: every loop head is an OSR entry point; write the limbs out");
+      return super.visitForLoop(tree, unused);
+    }
+
+    @Override
+    public Void visitEnhancedForLoop(final EnhancedForLoopTree tree, final Void unused) {
+      report(tree, "no loops: every loop head is an OSR entry point; write the limbs out");
+      return super.visitEnhancedForLoop(tree, unused);
+    }
+
+    @Override
+    public Void visitWhileLoop(final WhileLoopTree tree, final Void unused) {
+      report(tree, "no loops: every loop head is an OSR entry point; write the limbs out");
+      return super.visitWhileLoop(tree, unused);
+    }
+
+    @Override
+    public Void visitDoWhileLoop(final DoWhileLoopTree tree, final Void unused) {
+      report(tree, "no loops: every loop head is an OSR entry point; write the limbs out");
+      return super.visitDoWhileLoop(tree, unused);
+    }
+
+    @Override
+    public Void visitNewClass(final NewClassTree tree, final Void unused) {
+      report(tree, "no allocation: it makes C2 keep the loop's locals in memory");
+      return super.visitNewClass(tree, unused);
+    }
+
+    @Override
+    public Void visitNewArray(final NewArrayTree tree, final Void unused) {
+      report(tree, "no allocation: it makes C2 keep the loop's locals in memory");
+      return super.visitNewArray(tree, unused);
+    }
+
+    @Override
+    public Void visitLambdaExpression(final LambdaExpressionTree tree, final Void unused) {
+      report(tree, "no lambdas: they allocate and call");
+      return null;
+    }
+
+    @Override
+    public Void visitMemberReference(final MemberReferenceTree tree, final Void unused) {
+      report(tree, "no method references: they allocate and call");
+      return null;
+    }
+
+    @Override
+    public Void visitTry(final TryTree tree, final Void unused) {
+      report(tree, "no try: halts belong to the operation's implementation");
+      return super.visitTry(tree, unused);
+    }
+
+    @Override
+    public Void visitThrow(final ThrowTree tree, final Void unused) {
+      report(tree, "no throw: halts belong to the operation's implementation");
+      return super.visitThrow(tree, unused);
+    }
+
+    @Override
+    public Void visitSynchronized(final SynchronizedTree tree, final Void unused) {
+      report(tree, "no synchronization");
+      return super.visitSynchronized(tree, unused);
+    }
+
+    @Override
+    public Void visitSwitch(final SwitchTree tree, final Void unused) {
+      report(tree, "no switch: a nested table jump costs bytecode and a second indirect jump");
+      return super.visitSwitch(tree, unused);
+    }
+
+    @Override
+    public Void visitSwitchExpression(final SwitchExpressionTree tree, final Void unused) {
+      report(tree, "no switch: a nested table jump costs bytecode and a second indirect jump");
+      return super.visitSwitchExpression(tree, unused);
+    }
+
+    @Override
+    public Void visitLiteral(final LiteralTree tree, final Void unused) {
+      if (tree.getKind() == Tree.Kind.STRING_LITERAL) {
+        report(tree, "no strings: they allocate");
+      }
+      return null;
+    }
+  }
+
   /** A replacement of the source text between two positions. */
   private record Edit(long start, long end, String text) {}
 
@@ -1094,6 +1214,9 @@ public final class EvmV2LoopGenerator {
 
     /** The constants of EvmLoopInlining it names, which EVM.java then has to import. */
     final Set<String> named = new TreeSet<>();
+
+    /** Whether it writes the stack. */
+    boolean writesStack;
 
     /** The expression a helper that computes a value returns, or null for one that runs. */
     private final ExpressionTree returned;
@@ -1172,83 +1295,10 @@ public final class EvmV2LoopGenerator {
       }.scan(method.getBody(), null);
       final Set<String> intParameters = new HashSet<>();
       parameters.stream().filter(p -> types.get(p).equals("int")).forEach(intParameters::add);
-      new TreeScanner<Void, Void>() {
+      new RuleScanner() {
         @Override
-        public Void visitForLoop(final ForLoopTree tree, final Void unused) {
-          error(tree, "no loops: every loop head is an OSR entry point; write the limbs out");
-          return super.visitForLoop(tree, unused);
-        }
-
-        @Override
-        public Void visitEnhancedForLoop(final EnhancedForLoopTree tree, final Void unused) {
-          error(tree, "no loops: every loop head is an OSR entry point; write the limbs out");
-          return super.visitEnhancedForLoop(tree, unused);
-        }
-
-        @Override
-        public Void visitWhileLoop(final WhileLoopTree tree, final Void unused) {
-          error(tree, "no loops: every loop head is an OSR entry point; write the limbs out");
-          return super.visitWhileLoop(tree, unused);
-        }
-
-        @Override
-        public Void visitDoWhileLoop(final DoWhileLoopTree tree, final Void unused) {
-          error(tree, "no loops: every loop head is an OSR entry point; write the limbs out");
-          return super.visitDoWhileLoop(tree, unused);
-        }
-
-        @Override
-        public Void visitNewClass(final NewClassTree tree, final Void unused) {
-          error(tree, "no allocation: it makes C2 keep the loop's locals in memory");
-          return super.visitNewClass(tree, unused);
-        }
-
-        @Override
-        public Void visitNewArray(final NewArrayTree tree, final Void unused) {
-          error(tree, "no allocation: it makes C2 keep the loop's locals in memory");
-          return super.visitNewArray(tree, unused);
-        }
-
-        @Override
-        public Void visitLambdaExpression(final LambdaExpressionTree tree, final Void unused) {
-          error(tree, "no lambdas: they allocate and call");
-          return null;
-        }
-
-        @Override
-        public Void visitMemberReference(final MemberReferenceTree tree, final Void unused) {
-          error(tree, "no method references: they allocate and call");
-          return null;
-        }
-
-        @Override
-        public Void visitTry(final TryTree tree, final Void unused) {
-          error(tree, "no try: halts belong to the operation's implementation");
-          return super.visitTry(tree, unused);
-        }
-
-        @Override
-        public Void visitThrow(final ThrowTree tree, final Void unused) {
-          error(tree, "no throw: halts belong to the operation's implementation");
-          return super.visitThrow(tree, unused);
-        }
-
-        @Override
-        public Void visitSynchronized(final SynchronizedTree tree, final Void unused) {
-          error(tree, "no synchronization");
-          return super.visitSynchronized(tree, unused);
-        }
-
-        @Override
-        public Void visitSwitch(final SwitchTree tree, final Void unused) {
-          error(tree, "no switch: a nested table jump costs bytecode and a second indirect jump");
-          return super.visitSwitch(tree, unused);
-        }
-
-        @Override
-        public Void visitSwitchExpression(final SwitchExpressionTree tree, final Void unused) {
-          error(tree, "no switch: a nested table jump costs bytecode and a second indirect jump");
-          return super.visitSwitchExpression(tree, unused);
+        void report(final Tree tree, final String message) {
+          error(tree, message);
         }
 
         @Override
@@ -1257,14 +1307,6 @@ public final class EvmV2LoopGenerator {
             error(tree, "a helper copied into the loop runs to its end; it has no return");
           }
           return super.visitReturn(tree, unused);
-        }
-
-        @Override
-        public Void visitLiteral(final LiteralTree tree, final Void unused) {
-          if (tree.getKind() == Tree.Kind.STRING_LITERAL) {
-            error(tree, "no strings: they allocate");
-          }
-          return null;
         }
 
         @Override
@@ -1315,6 +1357,7 @@ public final class EvmV2LoopGenerator {
               && parameters.contains(target.getName().toString())) {
             error(target, "a helper does not assign its parameters");
           }
+          writesStack |= InlineMethod.isStack(tree.getVariable());
           return super.visitAssignment(tree, unused);
         }
 
@@ -1339,7 +1382,7 @@ public final class EvmV2LoopGenerator {
           }
           return super.visitArrayAccess(tree, unused);
         }
-      }.scan(method.getBody(), null);
+      }.scan(new TreePath(new TreePath(unit), method.getBody()), null);
     }
 
     /**
