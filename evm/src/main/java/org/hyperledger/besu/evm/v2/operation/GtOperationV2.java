@@ -15,6 +15,7 @@
 package org.hyperledger.besu.evm.v2.operation;
 
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.GT;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
@@ -44,16 +45,18 @@ public class GtOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /**
-   * Performs Gt operation.
+   * Execute the GT opcode on the v2 long[] stack.
    *
-   * @param frame the frame
+   * <p>GT: stack[top-2] = stack[top-1] &gt; stack[top-2] ? 1 : 0, return top-1.
+   *
+   * @param frame the message frame
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
     final int sp = frame.stackTopV2();
     return result(
         frame,
-        LtOperationV2.compare(frame.stackDataV2(), sp, top(sp), 0x11, ANY_GAS),
+        LtOperationV2.compare(frame.stackDataV2(), sp, top(sp), GT, ANY_GAS),
         UNDERFLOW_RESPONSE);
   }
 }

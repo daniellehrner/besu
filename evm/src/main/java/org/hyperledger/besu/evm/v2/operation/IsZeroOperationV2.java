@@ -49,9 +49,11 @@ public class IsZeroOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /**
-   * Performs IsZero operation.
+   * Execute the ISZERO opcode on the v2 long[] stack.
    *
-   * @param frame the frame
+   * <p>ISZERO: stack[top-1] = stack[top-1] == 0 ? 1 : 0, top unchanged.
+   *
+   * @param frame the message frame
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
@@ -59,6 +61,7 @@ public class IsZeroOperationV2 extends AbstractFixedCostOperationV2 {
     return result(frame, isZero(frame.stackDataV2(), sp, top(sp), ANY_GAS), UNDERFLOW_RESPONSE);
   }
 
+  /** ISZERO: whether the top item is zero, which the result replaces. */
   @InlineInEvmLoop(opcodes = 0x15)
   static long isZero(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {

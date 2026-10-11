@@ -14,7 +14,7 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.copyWord;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.copyLimbs;
 
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -74,7 +74,7 @@ public class DupNOperationV2 extends AbstractFixedCostOperationV2 {
     if (!frame.stackHasItemsV2(n)) return DUPN_UNDERFLOW;
     if (!frame.ensureStackCapacityV2(1)) return DUPN_OVERFLOW;
     final int top = frame.stackTopV2();
-    copyWord(frame.stackDataV2(), (top - n) << 2, top << 2);
+    copyLimbs(frame.stackDataV2(), (top - n) << 2, top << 2);
     frame.setTopV2(top + 1);
     return DUPN_SUCCESS;
   }

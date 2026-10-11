@@ -47,9 +47,12 @@ public class SignExtendOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /**
-   * Performs SignExtend operation.
+   * Execute the SIGNEXTEND opcode on the v2 long[] stack.
    *
-   * @param frame the frame
+   * <p>SIGNEXTEND: extends the sign of the byte at index stack[top-1], counted from the least
+   * significant byte, of stack[top-2] into the more significant bytes, return top-1.
+   *
+   * @param frame the message frame
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
@@ -57,6 +60,10 @@ public class SignExtendOperationV2 extends AbstractFixedCostOperationV2 {
     return result(frame, signExtend(frame.stackDataV2(), sp, top(sp), ANY_GAS), UNDERFLOW_RESPONSE);
   }
 
+  /**
+   * SIGNEXTEND: extends the sign of the byte the top item indexes, from the least significant, of
+   * the item below it, which the result replaces.
+   */
   @InlineInEvmLoop(opcodes = 0x0b)
   static long signExtend(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 2 && gas >= LOW_TIER_GAS) {

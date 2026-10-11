@@ -16,6 +16,8 @@ package org.hyperledger.besu.evm.v2.operation;
 
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LT;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.SLT;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
@@ -48,18 +50,20 @@ public class LtOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /**
-   * Performs Lt operation.
+   * Execute the LT opcode on the v2 long[] stack.
    *
-   * @param frame the frame
+   * <p>LT: stack[top-2] = stack[top-1] &lt; stack[top-2] ? 1 : 0, return top-1.
+   *
+   * @param frame the message frame
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
     final int sp = frame.stackTopV2();
     return result(
-        frame, compare(frame.stackDataV2(), sp, top(sp), 0x10, ANY_GAS), UNDERFLOW_RESPONSE);
+        frame, compare(frame.stackDataV2(), sp, top(sp), LT, ANY_GAS), UNDERFLOW_RESPONSE);
   }
 
-  /** LT, GT, SLT and SGT. */
+  /** LT, GT, SLT and SGT: compare the top item with the one below it, which the result replaces. */
   @InlineInEvmLoop(first = 0x10, last = 0x13)
   static long compare(
       final long[] s, final int sp, final int top, final int opcode, final long gas) {
@@ -70,14 +74,14 @@ public class LtOperationV2 extends AbstractFixedCostOperationV2 {
       final int i = s[a] != s[b] ? 0 : s[a + 1] != s[b + 1] ? 1 : s[a + 2] != s[b + 2] ? 2 : 3;
       long x = s[a + i];
       long y = s[b + i];
-      if (i == 0 && opcode >= 0x12) {
+      if (i == 0 && opcode >= SLT) {
         // signed: flipping the sign bits makes the unsigned comparison a signed one
         x ^= Long.MIN_VALUE;
         y ^= Long.MIN_VALUE;
       }
       final int comparison = Long.compareUnsigned(x, y);
-      // LT and SLT are the even opcodes, GT and SGT the odd ones
-      storeLong(s, b, ((opcode & 1) == 0 ? comparison < 0 : comparison > 0) ? 1L : 0L);
+      final boolean lessThan = opcode == LT || opcode == SLT;
+      storeLong(s, b, (lessThan ? comparison < 0 : comparison > 0) ? 1L : 0L);
       return done(VERY_LOW_TIER_GAS, 1, -1);
     }
     return FALLBACK;

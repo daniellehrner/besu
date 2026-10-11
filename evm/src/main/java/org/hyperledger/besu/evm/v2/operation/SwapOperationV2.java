@@ -16,10 +16,11 @@ package org.hyperledger.besu.evm.v2.operation;
 
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.SWAP1;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
-import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.swapWords;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.swapLimbs;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -77,11 +78,12 @@ public class SwapOperationV2 extends AbstractFixedCostOperationV2 {
         UNDERFLOW_RESPONSE);
   }
 
+  /** SWAP1 to SWAP16: exchanges the top item with the one n below it. */
   @InlineInEvmLoop(first = 0x90, last = 0x9f)
   static long swap(final long[] s, final int sp, final int top, final int opcode, final long gas) {
-    final int depth = opcode - 0x8f;
+    final int depth = opcode - SWAP1 + 1;
     if (sp > depth && gas >= VERY_LOW_TIER_GAS) {
-      swapWords(s, top, top - (depth << 2));
+      swapLimbs(s, top, top - (depth << 2));
       return done(VERY_LOW_TIER_GAS, 1, 0);
     }
     return FALLBACK;

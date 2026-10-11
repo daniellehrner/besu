@@ -20,6 +20,7 @@ import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.BASE_TIER_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LONG_BE;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.PUSH1;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.next;
@@ -45,6 +46,7 @@ public final class PushOperationV2 {
 
   private PushOperationV2() {}
 
+  /** PUSH0: pushes zero. */
   @InlineInEvmLoop(opcodes = 0x5f)
   static long push0(final long[] s, final int next, final boolean shanghai, final long gas) {
     if (shanghai && next < s.length && gas >= BASE_TIER_GAS) {
@@ -54,6 +56,7 @@ public final class PushOperationV2 {
     return FALLBACK;
   }
 
+  /** PUSH1: pushes the byte after the opcode, which is zero past the end of the code. */
   @InlineInEvmLoop(opcodes = 0x60)
   static long push1(
       final long[] s, final int next, final int at, final byte[] code, final long gas) {
@@ -75,7 +78,7 @@ public final class PushOperationV2 {
       final int opcode,
       final long gas) {
     if (next < s.length && at + 9 <= code.length && gas >= VERY_LOW_TIER_GAS) {
-      final int size = opcode - 0x5f;
+      final int size = opcode - PUSH1 + 1;
       // the immediate is the first size bytes of the eight
       storeLong(s, next, (long) LONG_BE.get(code, at + 1) >>> (64 - (size << 3)));
       return done(VERY_LOW_TIER_GAS, size + 1, 1);

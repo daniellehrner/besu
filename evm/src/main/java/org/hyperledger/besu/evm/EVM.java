@@ -17,11 +17,16 @@ package org.hyperledger.besu.evm;
 import static org.hyperledger.besu.evm.operation.PushOperation.PUSH_BASE;
 import static org.hyperledger.besu.evm.operation.SwapOperation.SWAP_BASE;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.BASE_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.DUP1;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.HIGH_TIER_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.JUMPDEST_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LONG_BE;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LT;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.MID_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.PUSH1;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.SLT;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.SWAP1;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.chargesTheLoopsCosts;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.isJumpDestinationV2;
@@ -558,10 +563,8 @@ public class EVM {
     }
   }
 
-  // The cases of the untraced v2 loop. It switches on an opcode's case rather than on the opcode,
-  // so that the switch's table has an entry per case instead of one per opcode up to the highest
-  // one handled inline: that table is bytecode of the loop and counts against its inlining budget.
-  // Opcodes without a case map to 0 and take the general path.
+  // The untraced loop switches on a dense case index: a table up to the highest inline opcode would
+  // be loop bytecode, which counts against C2's inlining budget.
   // BEGIN GENERATED case table for the copies of the @InlineInEvmLoop methods of the v2
   // operations below; do not edit, run ./gradlew :evm:generateEvmV2Loop
   private static final int INLINE_SIGN_EXTEND = 1;
@@ -610,21 +613,13 @@ public class EVM {
 
   /**
    * The v2 loop for execution without operation hooks, which is every block import. The program
-   * counter, the remaining gas and the stack live in locals, and the cheap operations that need no
-   * more than the stack and the code run inline, as copies of the methods of their classes marked
-   * {@code @InlineInEvmLoop}. An inline case handles only the outcome where its operation succeeds;
-   * anything else, and every other operation, goes through {@link #executeOperationV2} with the
-   * state handed back to the frame, so halting behaviour is defined in one place for both loops.
+   * counter, the gas and the stack live in locals, so that C2 keeps them in registers, and the
+   * cheap operations run inline. Every other operation, and every halt, goes through {@link
+   * #executeOperationV2}, with the state handed to the frame and read back after.
    *
-   * <p>The cases between the generated markers are copies of those methods, whose annotation
-   * documents the rules they follow; the build rejects a method that breaks one, and EVM.java that
-   * does not hold its copies. Edit a method in its operation's class and run {@code ./gradlew
-   * :evm:generateEvmV2Loop}. The loop around them keeps one rule of its own: no local is read after
-   * the general path's call before it is reloaded, as a local live across a call is kept in memory.
-   *
-   * <p>C2 also stops inlining into a method once its own bytecode and everything inlined into it
-   * reach 8000 bytes, after which even the frame's getters become calls. That budget, not the gas
-   * cost, decides which operations are inline.
+   * <p>The cases between the generated markers are copies of the operation classes' methods marked
+   * {@code @InlineInEvmLoop}, whose annotation documents the rules they follow. Edit a method in
+   * its class and run {@code ./gradlew :evm:generateEvmV2Loop}; the build rejects a hand edit here.
    */
   private void runToHaltV2Untraced(final MessageFrame frame) {
     if (frame.getState() != MessageFrame.State.CODE_EXECUTING) {
@@ -640,18 +635,13 @@ public class EVM {
     long gas = frame.getRemainingGas();
     while (true) {
       final int opcode = pc < code.length ? code[pc] & 0xff : 0;
-      // What an inline case that succeeds charges, how far it moves the program counter and how
-      // many items it adds. The cases leave the updates to the common tail below: the same update
-      // written out in every case is one computation, which C2 places before the dispatch.
+      // set by an inline case that ran, and applied once below: the same update in every case
+      // would be one computation, which C2 places before the dispatch
       long cost = -1;
       int step = 0;
       int delta = 0;
-      // The dispatch entry holds the case and a bias, which the case cancels again. Stack and code
-      // indices built on a biased pointer differ from case to case as far as C2 can tell, so each
-      // case computes its own. Built on sp and pc directly, the cases share them, and C2 computes
-      // every case's indices ahead of the dispatch, where they take the registers the loop's state
-      // needs. C2 inlines in bytecode order and stops at its size budget; EvmV2LoopCompilationTest
-      // reports a call it left out.
+      // the bias, which each case cancels, gives every case indices of its own; shared, C2 would
+      // compute them all before the dispatch, in the registers the loop's state needs
       final int entry = DISPATCH[opcode];
       final int bias = entry >> 8;
       final int base = (sp << 2) + bias;
@@ -661,8 +651,10 @@ public class EVM {
         // edit those, then run ./gradlew :evm:generateEvmV2Loop
         // BEGIN automatically copied from SignExtendOperationV2.signExtend; edit it there
         case INLINE_SIGN_EXTEND -> {
+          final int top = base + (INLINE_SIGN_EXTEND << 4) - 4;
+
           if (sp >= 2 && gas >= LOW_TIER_GAS) {
-            final int index = base + (INLINE_SIGN_EXTEND << 4) - 4;
+            final int index = top;
             final int value = index - 4;
             // From byte 31 on the sign bit is the top bit of the word, so the value stays as it is.
             if ((s[index] | s[index + 1] | s[index + 2]) == 0
@@ -695,30 +687,30 @@ public class EVM {
         // END automatically copied from SignExtendOperationV2.signExtend
         // BEGIN automatically copied from LtOperationV2.compare; edit it there
         case INLINE_COMPARE -> {
+          final int top = base + (INLINE_COMPARE << 4) - 4;
+
           if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (INLINE_COMPARE << 4) - 4;
+            final int a = top;
             final int b = a - 4;
             // the most significant limb in which the two differ, or the least significant one
             final int i =
                 s[a] != s[b] ? 0 : s[a + 1] != s[b + 1] ? 1 : s[a + 2] != s[b + 2] ? 2 : 3;
             long x = s[a + i];
             long y = s[b + i];
-            if (i == 0 && opcode >= 0x12) {
+            if (i == 0 && opcode >= SLT) {
               // signed: flipping the sign bits makes the unsigned comparison a signed one
               x ^= Long.MIN_VALUE;
               y ^= Long.MIN_VALUE;
             }
             final int comparison = Long.compareUnsigned(x, y);
-            // LT and SLT are the even opcodes, GT and SGT the odd ones
+            final boolean lessThan = opcode == LT || opcode == SLT;
             {
               // automatically copied from EvmLoopInlining.storeLong; edit it there
-              final int storeLongAt = b;
-              final long storeLongValue =
-                  ((opcode & 1) == 0 ? comparison < 0 : comparison > 0) ? 1L : 0L;
-              s[storeLongAt] = 0L;
-              s[storeLongAt + 1] = 0L;
-              s[storeLongAt + 2] = 0L;
-              s[storeLongAt + 3] = storeLongValue;
+              final long storeLongValue = (lessThan ? comparison < 0 : comparison > 0) ? 1L : 0L;
+              s[b] = 0L;
+              s[b + 1] = 0L;
+              s[b + 2] = 0L;
+              s[b + 3] = storeLongValue;
             }
             cost = VERY_LOW_TIER_GAS;
             step = 1;
@@ -728,8 +720,10 @@ public class EVM {
         // END automatically copied from LtOperationV2.compare
         // BEGIN automatically copied from EqOperationV2.eq; edit it there
         case INLINE_EQ -> {
+          final int top = base + (INLINE_EQ << 4) - 4;
+
           if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (INLINE_EQ << 4) - 4;
+            final int a = top;
             final int b = a - 4;
             final long equal =
                 ((s[a] ^ s[b])
@@ -741,12 +735,10 @@ public class EVM {
                     : 0L;
             {
               // automatically copied from EvmLoopInlining.storeLong; edit it there
-              final int storeLongAt = b;
-              final long storeLongValue = equal;
-              s[storeLongAt] = 0L;
-              s[storeLongAt + 1] = 0L;
-              s[storeLongAt + 2] = 0L;
-              s[storeLongAt + 3] = storeLongValue;
+              s[b] = 0L;
+              s[b + 1] = 0L;
+              s[b + 2] = 0L;
+              s[b + 3] = equal;
             }
             cost = VERY_LOW_TIER_GAS;
             step = 1;
@@ -756,17 +748,17 @@ public class EVM {
         // END automatically copied from EqOperationV2.eq
         // BEGIN automatically copied from IsZeroOperationV2.isZero; edit it there
         case INLINE_IS_ZERO -> {
+          final int top = base + (INLINE_IS_ZERO << 4) - 4;
+
           if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
-            final int a = base + (INLINE_IS_ZERO << 4) - 4;
+            final int a = top;
             {
               // automatically copied from EvmLoopInlining.storeLong; edit it there
-              final int storeLongAt = a;
-              final long storeLongValue =
-                  ((s[(a)] | s[(a) + 1] | s[(a) + 2] | s[(a) + 3]) == 0) ? 1L : 0L;
-              s[storeLongAt] = 0L;
-              s[storeLongAt + 1] = 0L;
-              s[storeLongAt + 2] = 0L;
-              s[storeLongAt + 3] = storeLongValue;
+              final long storeLongValue = ((s[a] | s[a + 1] | s[a + 2] | s[a + 3]) == 0) ? 1L : 0L;
+              s[a] = 0L;
+              s[a + 1] = 0L;
+              s[a + 2] = 0L;
+              s[a + 3] = storeLongValue;
             }
             cost = VERY_LOW_TIER_GAS;
             step = 1;
@@ -785,13 +777,16 @@ public class EVM {
         // END automatically copied from PopOperationV2.pop
         // BEGIN automatically copied from JumpOperationV2.jump; edit it there
         case INLINE_JUMP -> {
+          final int top = base + (INLINE_JUMP << 4) - 4;
+          final boolean untraced = true;
+
           if (sp >= 1 && gas >= MID_TIER_GAS) {
-            final int d = base + (INLINE_JUMP << 4) - 4;
-            if (((s[(d)] | s[(d) + 1] | s[(d) + 2]) == 0
+            final int d = top;
+            if (((s[d] | s[d + 1] | s[d + 2]) == 0
                 && isJumpDestinationV2(
-                    codeObject.getJumpDestBitMask(), s[(d) + 3], codeObject.getSize()))) {
+                    codeObject.getJumpDestBitMask(), s[d + 3], codeObject.getSize()))) {
               final int destination = (int) s[d + 3];
-              if (true && gas >= MID_TIER_GAS + JUMPDEST_GAS) {
+              if (untraced && gas >= MID_TIER_GAS + JUMPDEST_GAS) {
                 // no tracer sees the JUMPDEST as an operation of its own
                 cost = MID_TIER_GAS + JUMPDEST_GAS;
                 step = destination + 1 - pc;
@@ -807,8 +802,11 @@ public class EVM {
         // END automatically copied from JumpOperationV2.jump
         // BEGIN automatically copied from JumpiOperationV2.jumpi; edit it there
         case INLINE_JUMPI -> {
+          final int top = base + (INLINE_JUMPI << 4) - 4;
+          final boolean untraced = true;
+
           if (sp >= 2 && gas >= HIGH_TIER_GAS) {
-            final int d = base + (INLINE_JUMPI << 4) - 4;
+            final int d = top;
             // a zero condition does not jump, so the destination is not checked
             if (((s[(d - 4)] | s[(d - 4) + 1] | s[(d - 4) + 2] | s[(d - 4) + 3]) == 0)) {
               cost = HIGH_TIER_GAS;
@@ -816,11 +814,11 @@ public class EVM {
               delta = -2;
               break;
             }
-            if (((s[(d)] | s[(d) + 1] | s[(d) + 2]) == 0
+            if (((s[d] | s[d + 1] | s[d + 2]) == 0
                 && isJumpDestinationV2(
-                    codeObject.getJumpDestBitMask(), s[(d) + 3], codeObject.getSize()))) {
+                    codeObject.getJumpDestBitMask(), s[d + 3], codeObject.getSize()))) {
               final int destination = (int) s[d + 3];
-              if (true && gas >= HIGH_TIER_GAS + JUMPDEST_GAS) {
+              if (untraced && gas >= HIGH_TIER_GAS + JUMPDEST_GAS) {
                 // no tracer sees the JUMPDEST as an operation of its own
                 cost = HIGH_TIER_GAS + JUMPDEST_GAS;
                 step = destination + 1 - pc;
@@ -836,15 +834,16 @@ public class EVM {
         // END automatically copied from JumpiOperationV2.jumpi
         // BEGIN automatically copied from GasOperationV2.gasLeft; edit it there
         case INLINE_GAS_LEFT -> {
-          if ((base + (INLINE_GAS_LEFT << 4)) < s.length && gas >= BASE_TIER_GAS) {
+          final int next = base + (INLINE_GAS_LEFT << 4);
+
+          if (next < s.length && gas >= BASE_TIER_GAS) {
             {
               // automatically copied from EvmLoopInlining.storeLong; edit it there
-              final int storeLongAt = (base + (INLINE_GAS_LEFT << 4));
               final long storeLongValue = gas - BASE_TIER_GAS;
-              s[storeLongAt] = 0L;
-              s[storeLongAt + 1] = 0L;
-              s[storeLongAt + 2] = 0L;
-              s[storeLongAt + 3] = storeLongValue;
+              s[next] = 0L;
+              s[next + 1] = 0L;
+              s[next + 2] = 0L;
+              s[next + 3] = storeLongValue;
             }
             cost = BASE_TIER_GAS;
             step = 1;
@@ -863,15 +862,15 @@ public class EVM {
         // END automatically copied from JumpDestOperationV2.jumpDest
         // BEGIN automatically copied from PushOperationV2.push0; edit it there
         case INLINE_PUSH0 -> {
-          if (shanghai && (base + (INLINE_PUSH0 << 4)) < s.length && gas >= BASE_TIER_GAS) {
+          final int next = base + (INLINE_PUSH0 << 4);
+
+          if (shanghai && next < s.length && gas >= BASE_TIER_GAS) {
             {
               // automatically copied from EvmLoopInlining.storeLong; edit it there
-              final int storeLongAt = (base + (INLINE_PUSH0 << 4));
-              final long storeLongValue = 0L;
-              s[storeLongAt] = 0L;
-              s[storeLongAt + 1] = 0L;
-              s[storeLongAt + 2] = 0L;
-              s[storeLongAt + 3] = storeLongValue;
+              s[next] = 0L;
+              s[next + 1] = 0L;
+              s[next + 2] = 0L;
+              s[next + 3] = 0L;
             }
             cost = BASE_TIER_GAS;
             step = 1;
@@ -881,19 +880,18 @@ public class EVM {
         // END automatically copied from PushOperationV2.push0
         // BEGIN automatically copied from PushOperationV2.push1; edit it there
         case INLINE_PUSH1 -> {
-          if ((base + (INLINE_PUSH1 << 4)) < s.length && gas >= VERY_LOW_TIER_GAS) {
+          final int next = base + (INLINE_PUSH1 << 4);
+          final int at = pcBase + (INLINE_PUSH1 << 4);
+
+          if (next < s.length && gas >= VERY_LOW_TIER_GAS) {
             // past the end of the code, the immediate is zero
             {
               // automatically copied from EvmLoopInlining.storeLong; edit it there
-              final int storeLongAt = (base + (INLINE_PUSH1 << 4));
-              final long storeLongValue =
-                  (pcBase + (INLINE_PUSH1 << 4)) + 1 < code.length
-                      ? code[(pcBase + (INLINE_PUSH1 << 4)) + 1] & 0xffL
-                      : 0L;
-              s[storeLongAt] = 0L;
-              s[storeLongAt + 1] = 0L;
-              s[storeLongAt + 2] = 0L;
-              s[storeLongAt + 3] = storeLongValue;
+              final long storeLongValue = at + 1 < code.length ? code[at + 1] & 0xffL : 0L;
+              s[next] = 0L;
+              s[next + 1] = 0L;
+              s[next + 2] = 0L;
+              s[next + 3] = storeLongValue;
             }
             cost = VERY_LOW_TIER_GAS;
             step = 2;
@@ -903,21 +901,19 @@ public class EVM {
         // END automatically copied from PushOperationV2.push1
         // BEGIN automatically copied from PushOperationV2.pushSingleLimb; edit it there
         case INLINE_PUSH_SINGLE_LIMB -> {
-          if ((base + (INLINE_PUSH_SINGLE_LIMB << 4)) < s.length
-              && (pcBase + (INLINE_PUSH_SINGLE_LIMB << 4)) + 9 <= code.length
-              && gas >= VERY_LOW_TIER_GAS) {
-            final int size = opcode - 0x5f;
+          final int next = base + (INLINE_PUSH_SINGLE_LIMB << 4);
+          final int at = pcBase + (INLINE_PUSH_SINGLE_LIMB << 4);
+
+          if (next < s.length && at + 9 <= code.length && gas >= VERY_LOW_TIER_GAS) {
+            final int size = opcode - PUSH1 + 1;
             // the immediate is the first size bytes of the eight
             {
               // automatically copied from EvmLoopInlining.storeLong; edit it there
-              final int storeLongAt = (base + (INLINE_PUSH_SINGLE_LIMB << 4));
-              final long storeLongValue =
-                  (long) LONG_BE.get(code, (pcBase + (INLINE_PUSH_SINGLE_LIMB << 4)) + 1)
-                      >>> (64 - (size << 3));
-              s[storeLongAt] = 0L;
-              s[storeLongAt + 1] = 0L;
-              s[storeLongAt + 2] = 0L;
-              s[storeLongAt + 3] = storeLongValue;
+              final long storeLongValue = (long) LONG_BE.get(code, at + 1) >>> (64 - (size << 3));
+              s[next] = 0L;
+              s[next + 1] = 0L;
+              s[next + 2] = 0L;
+              s[next + 3] = storeLongValue;
             }
             cost = VERY_LOW_TIER_GAS;
             step = size + 1;
@@ -927,16 +923,17 @@ public class EVM {
         // END automatically copied from PushOperationV2.pushSingleLimb
         // BEGIN automatically copied from DupOperationV2.dup; edit it there
         case INLINE_DUP -> {
-          final int depth = opcode - 0x7f;
-          if (sp >= depth && (base + (INLINE_DUP << 4)) < s.length && gas >= VERY_LOW_TIER_GAS) {
+          final int next = base + (INLINE_DUP << 4);
+
+          final int depth = opcode - DUP1 + 1;
+          if (sp >= depth && next < s.length && gas >= VERY_LOW_TIER_GAS) {
             {
-              // automatically copied from EvmLoopInlining.copyWord; edit it there
-              final int copyWordFrom = (base + (INLINE_DUP << 4)) - (depth << 2);
-              final int copyWordTo = (base + (INLINE_DUP << 4));
-              s[copyWordTo] = s[copyWordFrom];
-              s[copyWordTo + 1] = s[copyWordFrom + 1];
-              s[copyWordTo + 2] = s[copyWordFrom + 2];
-              s[copyWordTo + 3] = s[copyWordFrom + 3];
+              // automatically copied from EvmLoopInlining.copyLimbs; edit it there
+              final int copyLimbsFrom = next - (depth << 2);
+              s[next] = s[copyLimbsFrom];
+              s[next + 1] = s[copyLimbsFrom + 1];
+              s[next + 2] = s[copyLimbsFrom + 2];
+              s[next + 3] = s[copyLimbsFrom + 3];
             }
             cost = VERY_LOW_TIER_GAS;
             step = 1;
@@ -946,24 +943,25 @@ public class EVM {
         // END automatically copied from DupOperationV2.dup
         // BEGIN automatically copied from SwapOperationV2.swap; edit it there
         case INLINE_SWAP -> {
-          final int depth = opcode - 0x8f;
+          final int top = base + (INLINE_SWAP << 4) - 4;
+
+          final int depth = opcode - SWAP1 + 1;
           if (sp > depth && gas >= VERY_LOW_TIER_GAS) {
             {
-              // automatically copied from EvmLoopInlining.swapWords; edit it there
-              final int swapWordsA = (base + (INLINE_SWAP << 4) - 4);
-              final int swapWordsB = (base + (INLINE_SWAP << 4) - 4) - (depth << 2);
-              long swapWordsT = s[swapWordsA];
-              s[swapWordsA] = s[swapWordsB];
-              s[swapWordsB] = swapWordsT;
-              swapWordsT = s[swapWordsA + 1];
-              s[swapWordsA + 1] = s[swapWordsB + 1];
-              s[swapWordsB + 1] = swapWordsT;
-              swapWordsT = s[swapWordsA + 2];
-              s[swapWordsA + 2] = s[swapWordsB + 2];
-              s[swapWordsB + 2] = swapWordsT;
-              swapWordsT = s[swapWordsA + 3];
-              s[swapWordsA + 3] = s[swapWordsB + 3];
-              s[swapWordsB + 3] = swapWordsT;
+              // automatically copied from EvmLoopInlining.swapLimbs; edit it there
+              final int swapLimbsB = top - (depth << 2);
+              long swapLimbsT = s[top];
+              s[top] = s[swapLimbsB];
+              s[swapLimbsB] = swapLimbsT;
+              swapLimbsT = s[top + 1];
+              s[top + 1] = s[swapLimbsB + 1];
+              s[swapLimbsB + 1] = swapLimbsT;
+              swapLimbsT = s[top + 2];
+              s[top + 2] = s[swapLimbsB + 2];
+              s[swapLimbsB + 2] = swapLimbsT;
+              swapLimbsT = s[top + 3];
+              s[top + 3] = s[swapLimbsB + 3];
+              s[swapLimbsB + 3] = swapLimbsT;
             }
             cost = VERY_LOW_TIER_GAS;
             step = 1;

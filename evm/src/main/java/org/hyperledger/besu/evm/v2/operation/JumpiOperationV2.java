@@ -53,9 +53,12 @@ public class JumpiOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /**
-   * Performs Jumpi operation.
+   * Execute the JUMPI opcode on the v2 long[] stack.
    *
-   * @param frame the frame
+   * <p>JUMPI: pc = stack[top-1] if stack[top-2] is not zero and stack[top-1] is a valid jump
+   * destination, return top-2.
+   *
+   * @param frame the message frame
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {

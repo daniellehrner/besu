@@ -51,6 +51,7 @@ public class PopOperationV2 extends AbstractFixedCostOperationV2 {
     return result(frame, pop(frame.stackTopV2(), ANY_GAS), UNDERFLOW_RESPONSE);
   }
 
+  /** POP: drops the top item. */
   @InlineInEvmLoop(opcodes = 0x50)
   static long pop(final int sp, final long gas) {
     if (sp >= 1 && gas >= BASE_TIER_GAS) {

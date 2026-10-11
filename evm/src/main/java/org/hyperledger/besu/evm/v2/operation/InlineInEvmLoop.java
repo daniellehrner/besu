@@ -49,10 +49,9 @@ import java.lang.annotation.Target;
  *       method names come from {@link EvmLoopInlining}, statically imported, as EVM.java imports
  *       them, so that a name means the same in the loop as in the method.
  *   <li>Stack indices are built on {@code top} or {@code next}, code indices on {@code at}, never
- *       on {@code sp} or {@code pc}. The generator turns those three into indices carrying the
- *       case's own bias. Built on {@code sp} directly, the same index appears in many cases, and C2
- *       computes all of them once, ahead of the dispatch, where they take the registers the loop's
- *       state needs.
+ *       on {@code sp} or {@code pc}. Each case declares those three with a bias of its own. Built
+ *       on {@code sp} directly, the same index appears in many cases, and C2 computes all of them
+ *       once, ahead of the dispatch, where they take the registers the loop's state needs.
  *   <li>A method reports its outcome only through {@code return done(cost, step, delta)}, {@code
  *       return jumped(cost, step, delta)} for a jump, or {@code return FALLBACK}; the loop's common
  *       tail applies the update. Written out in every case, the same update is again one

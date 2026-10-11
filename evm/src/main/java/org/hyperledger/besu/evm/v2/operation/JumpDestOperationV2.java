@@ -43,6 +43,7 @@ public final class JumpDestOperationV2 {
     return ran(frame, jumpDest(ANY_GAS));
   }
 
+  /** JUMPDEST: marks a jump destination and does nothing else. */
   @InlineInEvmLoop(opcodes = 0x5b)
   static long jumpDest(final long gas) {
     if (gas >= JUMPDEST_GAS) {

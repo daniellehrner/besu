@@ -57,9 +57,11 @@ public class EqOperationV2 extends AbstractOperationV2 {
   }
 
   /**
-   * Performs Eq operation.
+   * Execute the EQ opcode on the v2 long[] stack.
    *
-   * @param frame the frame
+   * <p>EQ: stack[top-2] = stack[top-1] == stack[top-2] ? 1 : 0, return top-1.
+   *
+   * @param frame the message frame
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
@@ -68,6 +70,7 @@ public class EqOperationV2 extends AbstractOperationV2 {
     return result(frame, eq(frame.stackDataV2(), sp, top(sp), ANY_GAS), EQ_UNDERFLOW);
   }
 
+  /** EQ: whether the top item equals the one below it, which the result replaces. */
   @InlineInEvmLoop(opcodes = 0x14)
   static long eq(final long[] s, final int sp, final int top, final long gas) {
     if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {

@@ -15,9 +15,10 @@
 package org.hyperledger.besu.evm.v2.operation;
 
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.DUP1;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
-import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.copyWord;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.copyLimbs;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.next;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.stackResult;
@@ -76,11 +77,12 @@ public class DupOperationV2 extends AbstractFixedCostOperationV2 {
         frame, dup(stackWithSpace(frame, 1), sp, next(sp), DUP_BASE + index, ANY_GAS), index);
   }
 
+  /** DUP1 to DUP16: copies the item at depth n onto the stack. */
   @InlineInEvmLoop(first = 0x80, last = 0x8f)
   static long dup(final long[] s, final int sp, final int next, final int opcode, final long gas) {
-    final int depth = opcode - 0x7f;
+    final int depth = opcode - DUP1 + 1;
     if (sp >= depth && next < s.length && gas >= VERY_LOW_TIER_GAS) {
-      copyWord(s, next - (depth << 2), next);
+      copyLimbs(s, next - (depth << 2), next);
       return done(VERY_LOW_TIER_GAS, 1, 1);
     }
     return FALLBACK;

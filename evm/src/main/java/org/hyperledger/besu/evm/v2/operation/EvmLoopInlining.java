@@ -55,6 +55,27 @@ public final class EvmLoopInlining {
   /** JUMPDEST's cost. */
   public static final long JUMPDEST_GAS = 1L;
 
+  /** LT's opcode. */
+  public static final int LT = 0x10;
+
+  /** GT's opcode. */
+  public static final int GT = 0x11;
+
+  /** SLT's opcode. */
+  public static final int SLT = 0x12;
+
+  /** SGT's opcode. */
+  public static final int SGT = 0x13;
+
+  /** PUSH1's opcode, which PUSHn follows at PUSH1 + n - 1. */
+  public static final int PUSH1 = 0x60;
+
+  /** DUP1's opcode, which DUPn follows at DUP1 + n - 1. */
+  public static final int DUP1 = 0x80;
+
+  /** SWAP1's opcode, which SWAPn follows at SWAP1 + n - 1. */
+  public static final int SWAP1 = 0x90;
+
   /** Reads a big-endian word of a byte array, as code holds the immediates of PUSH. */
   public static final VarHandle LONG_BE =
       MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
@@ -190,7 +211,7 @@ public final class EvmLoopInlining {
    * @param to the index of the first limb of the slot to copy it into
    */
   @InlineInEvmLoop
-  static void copyWord(final long[] s, final int from, final int to) {
+  static void copyLimbs(final long[] s, final int from, final int to) {
     s[to] = s[from];
     s[to + 1] = s[from + 1];
     s[to + 2] = s[from + 2];
@@ -206,7 +227,7 @@ public final class EvmLoopInlining {
    * @param b the index of the first limb of the other
    */
   @InlineInEvmLoop
-  static void swapWords(final long[] s, final int a, final int b) {
+  static void swapLimbs(final long[] s, final int a, final int b) {
     long t = s[a];
     s[a] = s[b];
     s[b] = t;

@@ -51,9 +51,11 @@ public class JumpOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /**
-   * Performs Jump operation.
+   * Execute the JUMP opcode on the v2 long[] stack.
    *
-   * @param frame the frame
+   * <p>JUMP: pc = stack[top-1] if it is a valid jump destination, return top-1.
+   *
+   * @param frame the message frame
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {

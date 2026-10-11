@@ -29,6 +29,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import javax.lang.model.element.Modifier;
 import javax.tools.JavaCompiler;
@@ -147,6 +148,13 @@ public final class EvmV2LoopGenerator {
           "MID_TIER_GAS",
           "HIGH_TIER_GAS",
           "JUMPDEST_GAS",
+          "LT",
+          "GT",
+          "SLT",
+          "SGT",
+          "PUSH1",
+          "DUP1",
+          "SWAP1",
           "LONG_BE",
           "FALLBACK");
 
@@ -167,6 +175,10 @@ public final class EvmV2LoopGenerator {
           "LONG_BE.get",
           "codeObject.getSize",
           "codeObject.getJumpDestBitMask");
+
+  /** An argument a helper's copy can use as it is: a name or a number. */
+  private static final Pattern PLAIN =
+      Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*|[0-9][0-9A-Fa-fxXL_]*");
 
   /** The loop state a helper takes under the loop's own name, which its callers pass as it is. */
   private static final Set<String> PASSED_THROUGH = Set.of("s", "codeObject");
@@ -905,23 +917,7 @@ public final class EvmV2LoopGenerator {
     private String translate() {
       final Map<ReturnTree, Boolean> tails = new HashMap<>();
       markTails(method.getBody(), true, tails);
-      final List<Edit> identifiers = new ArrayList<>();
       final TreePath body = new TreePath(new TreePath(unit), method.getBody());
-      new TreePathScanner<Void, Void>() {
-        @Override
-        public Void visitIdentifier(final IdentifierTree tree, final Void unused) {
-          final String replacement = biasedIndex(tree.getName().toString());
-          if (replacement != null) {
-            final Tree parent = getCurrentPath().getParentPath().getLeaf();
-            final boolean whole =
-                parent instanceof VariableTree variable && variable.getInitializer() == tree;
-            final boolean simple = whole || replacement.equals("true");
-            identifiers.add(
-                new Edit(start(tree), end(tree), simple ? replacement : "(" + replacement + ")"));
-          }
-          return null;
-        }
-      }.scan(body, null);
       // the expression helpers, each copied where its call stands
       final List<Edit> expressions = new ArrayList<>();
       new TreePathScanner<Void, Void>() {
@@ -931,7 +927,7 @@ public final class EvmV2LoopGenerator {
           if (helper != null && helper.isExpression()) {
             final List<String> arguments = new ArrayList<>();
             for (final ExpressionTree argument : tree.getArguments()) {
-              arguments.add(render(argument, identifiers));
+              arguments.add(render(argument, List.of()));
             }
             expressions.add(new Edit(start(tree), end(tree), helper.copy(arguments)));
             return null;
@@ -939,8 +935,7 @@ public final class EvmV2LoopGenerator {
           return super.visitMethodInvocation(tree, unused);
         }
       }.scan(body, null);
-      final List<Edit> inner = new ArrayList<>(expressions);
-      inner.addAll(outside(identifiers, expressions));
+      final List<Edit> inner = expressions;
       // the returns and the helpers that run, rendered with the edits inside them
       final List<Edit> statements = new ArrayList<>();
       new TreePathScanner<Void, Void>() {
@@ -988,7 +983,7 @@ public final class EvmV2LoopGenerator {
       }.scan(body, null);
       final List<Edit> edits = new ArrayList<>(statements);
       edits.addAll(outside(inner, statements));
-      return apply(start(method.getBody()) + 1, end(method.getBody()) - 1, edits);
+      return declarations() + apply(start(method.getBody()) + 1, end(method.getBody()) - 1, edits);
     }
 
     /** The helper a call is to, if it is one. */
@@ -1009,9 +1004,9 @@ public final class EvmV2LoopGenerator {
       return kept;
     }
 
-    private String render(final Tree tree, final List<Edit> identifiers) {
+    private String render(final Tree tree, final List<Edit> edits) {
       final List<Edit> inside = new ArrayList<>();
-      for (final Edit edit : identifiers) {
+      for (final Edit edit : edits) {
         if (start(tree) <= edit.start() && edit.end() <= end(tree)) {
           inside.add(edit);
         }
@@ -1023,15 +1018,25 @@ public final class EvmV2LoopGenerator {
       return EvmV2LoopGenerator.apply(source, from, to, edits);
     }
 
-    private String biasedIndex(final String name) {
-      return switch (name) {
-        case "top" -> "base + (" + constant + " << 4) - 4";
-        case "next" -> "base + (" + constant + " << 4)";
-        case "at" -> "pcBase + (" + constant + " << 4)";
-        // the loop is the untraced execution; the operation classes pass false
-        case "untraced" -> "true";
-        default -> null;
-      };
+    /**
+     * The case's own top, next and at, carrying its bias, and untraced, for the parameters of those
+     * names the method takes; the rest of its parameters are the loop's locals.
+     */
+    private String declarations() {
+      final StringBuilder out = new StringBuilder();
+      if (parameters.contains("top")) {
+        out.append("final int top = base + (").append(constant).append(" << 4) - 4;\n");
+      }
+      if (parameters.contains("next")) {
+        out.append("final int next = base + (").append(constant).append(" << 4);\n");
+      }
+      if (parameters.contains("at")) {
+        out.append("final int at = pcBase + (").append(constant).append(" << 4);\n");
+      }
+      if (parameters.contains("untraced")) {
+        out.append("final boolean untraced = true;\n");
+      }
+      return out.toString();
     }
 
     private long start(final Tree tree) {
@@ -1390,14 +1395,39 @@ public final class EvmV2LoopGenerator {
      * arguments. The stack needs no binding, as a case passes the loop's own.
      */
     String copy(final List<String> arguments) {
+      final Map<String, String> replacements = new HashMap<>();
+      final StringBuilder bindings = new StringBuilder();
+      for (int i = 0; i < parameters.size(); i++) {
+        final String parameter = parameters.get(i);
+        final String argument = arguments.get(i);
+        if (PASSED_THROUGH.contains(parameter)) {
+          continue;
+        }
+        if (PLAIN.matcher(argument).matches()) {
+          replacements.put(parameter, argument);
+        } else if (returned != null) {
+          replacements.put(parameter, "(" + argument + ")");
+        } else {
+          // evaluated once, as the call evaluates it
+          replacements.put(parameter, renamed(parameter));
+          bindings
+              .append("final ")
+              .append(types.get(parameter))
+              .append(' ')
+              .append(renamed(parameter))
+              .append(" = ")
+              .append(argument)
+              .append(";\n");
+        }
+      }
       if (returned != null) {
         final List<Edit> edits = new ArrayList<>();
         new TreeScanner<Void, Void>() {
           @Override
           public Void visitIdentifier(final IdentifierTree tree, final Void unused) {
-            final int index = parameters.indexOf(tree.getName().toString());
-            if (index >= 0 && !PASSED_THROUGH.contains(parameters.get(index))) {
-              edits.add(new Edit(start(tree), end(tree), "(" + arguments.get(index) + ")"));
+            final String replacement = replacements.get(tree.getName().toString());
+            if (replacement != null) {
+              edits.add(new Edit(start(tree), end(tree), replacement));
             }
             return null;
           }
@@ -1407,25 +1437,16 @@ public final class EvmV2LoopGenerator {
       final StringBuilder out =
           new StringBuilder("{\n// automatically copied from EvmLoopInlining.")
               .append(name)
-              .append("; edit it there\n");
-      for (int i = 0; i < parameters.size(); i++) {
-        final String parameter = parameters.get(i);
-        if (!PASSED_THROUGH.contains(parameter)) {
-          out.append("final ")
-              .append(types.get(parameter))
-              .append(' ')
-              .append(renamed(parameter))
-              .append(" = ")
-              .append(arguments.get(i))
-              .append(";\n");
-        }
-      }
+              .append("; edit it there\n")
+              .append(bindings);
       final List<Edit> edits = new ArrayList<>();
       new TreeScanner<Void, Void>() {
         @Override
         public Void visitIdentifier(final IdentifierTree tree, final Void unused) {
           final String id = tree.getName().toString();
-          if ((parameters.contains(id) && !PASSED_THROUGH.contains(id)) || locals.contains(id)) {
+          if (replacements.containsKey(id)) {
+            edits.add(new Edit(start(tree), end(tree), replacements.get(id)));
+          } else if (locals.contains(id)) {
             edits.add(new Edit(start(tree), end(tree), renamed(id)));
           }
           return null;
