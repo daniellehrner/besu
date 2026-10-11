@@ -14,7 +14,14 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.copyWord;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.copyWord;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.next;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.stackResult;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.stackWithSpace;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -29,8 +36,6 @@ public class DupOperationV2 extends AbstractFixedCostOperationV2 {
 
   /** The constant DUP_BASE: DUPn has opcode DUP_BASE + n. */
   public static final int DUP_BASE = 0x7F;
-
-  private static final OperationResult DUP_SUCCESS = new OperationResult(3, null);
 
   private final int index;
 
@@ -66,11 +71,18 @@ public class DupOperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame, final int index) {
-    if (!frame.stackHasItemsV2(index)) return UNDERFLOW_RESPONSE;
-    if (!frame.ensureStackCapacityV2(1)) return OVERFLOW_RESPONSE;
-    final int top = frame.stackTopV2();
-    copyWord(frame.stackDataV2(), top - index, top);
-    frame.setTopV2(top + 1);
-    return DUP_SUCCESS;
+    final int sp = frame.stackTopV2();
+    return stackResult(
+        frame, dup(stackWithSpace(frame, 1), sp, next(sp), DUP_BASE + index, ANY_GAS), index);
+  }
+
+  @InlineInEvmLoop(first = 0x80, last = 0x8f)
+  static long dup(final long[] s, final int sp, final int next, final int opcode, final long gas) {
+    final int depth = opcode - 0x7f;
+    if (sp >= depth && next < s.length && gas >= VERY_LOW_TIER_GAS) {
+      copyWord(s, next - (depth << 2), next);
+      return done(VERY_LOW_TIER_GAS, 1, 1);
+    }
+    return FALLBACK;
   }
 }

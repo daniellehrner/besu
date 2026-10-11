@@ -14,9 +14,18 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.isZeroAt;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.HIGH_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.JUMPDEST_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.analysedCode;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.isJumpDestinationAt;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.isZeroWord;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.jumpiResult;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
-import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
+import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 
@@ -27,11 +36,6 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
  * significant 64 bits.
  */
 public class JumpiOperationV2 extends AbstractFixedCostOperationV2 {
-
-  private static final OperationResult INVALID_JUMP_RESPONSE =
-      new OperationResult(10L, ExceptionalHaltReason.INVALID_JUMP_DESTINATION);
-  private static final OperationResult JUMPI_RESPONSE = new OperationResult(10L, null, 0);
-  private static final OperationResult NO_JUMP_RESPONSE = new OperationResult(10L, null);
 
   /**
    * Instantiates a new Jumpi operation.
@@ -48,24 +52,44 @@ public class JumpiOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /**
-   * Execute the JUMPI opcode on the v2 long[] stack.
+   * Performs Jumpi operation.
    *
-   * <p>JUMPI: pc = stack[top-1] if stack[top-2] is not zero and stack[top-1] is a valid jump
-   * destination, return top-2.
-   *
-   * @param frame the message frame
+   * @param frame the frame
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    if (!frame.stackHasItemsV2(2)) return UNDERFLOW_RESPONSE;
-    final long[] stack = frame.stackDataV2();
-    final int top = frame.stackTopV2();
-    frame.setTopV2(top - 2);
-    // A zero condition does not jump, so the destination is not checked.
-    if (isZeroAt(stack, top, 1)) {
-      return NO_JUMP_RESPONSE;
+    final int sp = frame.stackTopV2();
+    return jumpiResult(
+        frame,
+        jumpi(
+            frame.stackDataV2(), sp, top(sp), frame.getPC(), analysedCode(frame), false, ANY_GAS));
+  }
+
+  /** JUMPI, and when it jumps in the untraced loop also the JUMPDEST it lands on. */
+  @InlineInEvmLoop(opcodes = 0x57)
+  static long jumpi(
+      final long[] s,
+      final int sp,
+      final int top,
+      final int pc,
+      final Code codeObject,
+      final boolean untraced,
+      final long gas) {
+    if (sp >= 2 && gas >= HIGH_TIER_GAS) {
+      final int d = top;
+      // a zero condition does not jump, so the destination is not checked
+      if (isZeroWord(s, d - 4)) {
+        return done(HIGH_TIER_GAS, 1, -2);
+      }
+      if (isJumpDestinationAt(s, d, codeObject)) {
+        final int destination = (int) s[d + 3];
+        if (untraced && gas >= HIGH_TIER_GAS + JUMPDEST_GAS) {
+          // no tracer sees the JUMPDEST as an operation of its own
+          return done(HIGH_TIER_GAS + JUMPDEST_GAS, destination + 1 - pc, -2);
+        }
+        return done(HIGH_TIER_GAS, destination - pc, -2);
+      }
     }
-    return JumpOperationV2.performJump(
-        frame, stack, (top - 1) << 2, JUMPI_RESPONSE, INVALID_JUMP_RESPONSE);
+    return FALLBACK;
   }
 }

@@ -14,7 +14,13 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.swapWords;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.swapWords;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -29,8 +35,6 @@ public class SwapOperationV2 extends AbstractFixedCostOperationV2 {
 
   /** The constant SWAP_BASE: SWAPn has opcode SWAP_BASE + n. */
   public static final int SWAP_BASE = 0x8F;
-
-  private static final OperationResult SWAP_SUCCESS = new OperationResult(3, null);
 
   private final int index;
 
@@ -66,9 +70,20 @@ public class SwapOperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame, final int index) {
-    if (!frame.stackHasItemsV2(index + 1)) return UNDERFLOW_RESPONSE;
-    final int top = frame.stackTopV2();
-    swapWords(frame.stackDataV2(), top - 1, top - 1 - index);
-    return SWAP_SUCCESS;
+    final int sp = frame.stackTopV2();
+    return result(
+        frame,
+        swap(frame.stackDataV2(), sp, top(sp), SWAP_BASE + index, ANY_GAS),
+        UNDERFLOW_RESPONSE);
+  }
+
+  @InlineInEvmLoop(first = 0x90, last = 0x9f)
+  static long swap(final long[] s, final int sp, final int top, final int opcode, final long gas) {
+    final int depth = opcode - 0x8f;
+    if (sp > depth && gas >= VERY_LOW_TIER_GAS) {
+      swapWords(s, top, top - (depth << 2));
+      return done(VERY_LOW_TIER_GAS, 1, 0);
+    }
+    return FALLBACK;
   }
 }

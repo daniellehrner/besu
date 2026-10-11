@@ -14,7 +14,7 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.swapWords;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.swapWords;
 
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -72,7 +72,7 @@ public class SwapNOperationV2 extends AbstractFixedCostOperationV2 {
     final int n = Eip8024Decoder.DECODE_SINGLE[imm];
     if (!frame.stackHasItemsV2(n + 1)) return SWAPN_UNDERFLOW;
     final int top = frame.stackTopV2();
-    swapWords(frame.stackDataV2(), top - 1, top - 1 - n);
+    swapWords(frame.stackDataV2(), (top - 1) << 2, (top - 1 - n) << 2);
     return SWAPN_SUCCESS;
   }
 }

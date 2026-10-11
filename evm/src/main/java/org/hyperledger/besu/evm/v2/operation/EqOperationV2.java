@@ -14,7 +14,13 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.pushLong;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.storeLong;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
 import org.hyperledger.besu.evm.EVM;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
@@ -28,8 +34,6 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
  * significant 64 bits.
  */
 public class EqOperationV2 extends AbstractOperationV2 {
-
-  private static final OperationResult EQ_SUCCESS = new OperationResult(3, null);
 
   // v1 runs EQ through its fixed-cost operation, which checks the gas before it touches the stack
   // and charges the cost on a stack underflow, and traces show both
@@ -53,27 +57,30 @@ public class EqOperationV2 extends AbstractOperationV2 {
   }
 
   /**
-   * Execute the EQ opcode on the v2 long[] stack.
+   * Performs Eq operation.
    *
-   * <p>EQ: stack[top-2] = stack[top-1] == stack[top-2] ? 1 : 0, return top-1.
-   *
-   * @param frame the message frame
+   * @param frame the frame
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    if (frame.getRemainingGas() < 3) return EQ_OUT_OF_GAS;
-    if (!frame.stackHasItemsV2(2)) return EQ_UNDERFLOW;
-    final long[] stack = frame.stackDataV2();
-    final int top = frame.stackTopV2();
-    final int aOffset = (top - 1) << 2;
-    final int bOffset = (top - 2) << 2;
-    final boolean equal =
-        stack[aOffset] == stack[bOffset]
-            && stack[aOffset + 1] == stack[bOffset + 1]
-            && stack[aOffset + 2] == stack[bOffset + 2]
-            && stack[aOffset + 3] == stack[bOffset + 3];
-    pushLong(equal ? 1L : 0L, stack, top - 2);
-    frame.setTopV2(top - 1);
-    return EQ_SUCCESS;
+    if (frame.getRemainingGas() < VERY_LOW_TIER_GAS) return EQ_OUT_OF_GAS;
+    final int sp = frame.stackTopV2();
+    return result(frame, eq(frame.stackDataV2(), sp, top(sp), ANY_GAS), EQ_UNDERFLOW);
+  }
+
+  @InlineInEvmLoop(opcodes = 0x14)
+  static long eq(final long[] s, final int sp, final int top, final long gas) {
+    if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+      final int a = top;
+      final int b = a - 4;
+      final long equal =
+          ((s[a] ^ s[b]) | (s[a + 1] ^ s[b + 1]) | (s[a + 2] ^ s[b + 2]) | (s[a + 3] ^ s[b + 3]))
+                  == 0
+              ? 1L
+              : 0L;
+      storeLong(s, b, equal);
+      return done(VERY_LOW_TIER_GAS, 1, -1);
+    }
+    return FALLBACK;
   }
 }

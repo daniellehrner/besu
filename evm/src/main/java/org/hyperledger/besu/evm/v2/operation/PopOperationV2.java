@@ -14,15 +14,18 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.BASE_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
-import org.hyperledger.besu.evm.internal.UnderflowException;
 import org.hyperledger.besu.evm.operation.Operation.OperationResult;
 
 /** The Pop operation. */
 public class PopOperationV2 extends AbstractFixedCostOperationV2 {
-  /** The Pop operation success result. */
-  static final OperationResult popSuccess = new OperationResult(2, null);
 
   /**
    * Instantiates a new Pop operation.
@@ -45,10 +48,14 @@ public class PopOperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    if (!frame.stackHasItemsV2(1)) {
-      throw new UnderflowException();
+    return result(frame, pop(frame.stackTopV2(), ANY_GAS), UNDERFLOW_RESPONSE);
+  }
+
+  @InlineInEvmLoop(opcodes = 0x50)
+  static long pop(final int sp, final long gas) {
+    if (sp >= 1 && gas >= BASE_TIER_GAS) {
+      return done(BASE_TIER_GAS, 1, -1);
     }
-    frame.setTopV2(frame.stackTopV2() - 1);
-    return popSuccess;
+    return FALLBACK;
   }
 }

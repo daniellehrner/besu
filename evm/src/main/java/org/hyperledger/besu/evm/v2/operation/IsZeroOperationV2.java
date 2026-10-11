@@ -14,8 +14,14 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.isZeroAt;
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.pushLong;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.isZeroWord;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.storeLong;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -27,8 +33,6 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
  * significant 64 bits.
  */
 public class IsZeroOperationV2 extends AbstractFixedCostOperationV2 {
-
-  private static final OperationResult ISZERO_SUCCESS = new OperationResult(3, null);
 
   /**
    * Instantiates a new IsZero operation.
@@ -45,18 +49,23 @@ public class IsZeroOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /**
-   * Execute the ISZERO opcode on the v2 long[] stack.
+   * Performs IsZero operation.
    *
-   * <p>ISZERO: stack[top-1] = stack[top-1] == 0 ? 1 : 0, top unchanged.
-   *
-   * @param frame the message frame
+   * @param frame the frame
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    if (!frame.stackHasItemsV2(1)) return UNDERFLOW_RESPONSE;
-    final long[] stack = frame.stackDataV2();
-    final int top = frame.stackTopV2();
-    pushLong(isZeroAt(stack, top, 0) ? 1L : 0L, stack, top - 1);
-    return ISZERO_SUCCESS;
+    final int sp = frame.stackTopV2();
+    return result(frame, isZero(frame.stackDataV2(), sp, top(sp), ANY_GAS), UNDERFLOW_RESPONSE);
+  }
+
+  @InlineInEvmLoop(opcodes = 0x15)
+  static long isZero(final long[] s, final int sp, final int top, final long gas) {
+    if (sp >= 1 && gas >= VERY_LOW_TIER_GAS) {
+      final int a = top;
+      storeLong(s, a, isZeroWord(s, a) ? 1L : 0L);
+      return done(VERY_LOW_TIER_GAS, 1, 0);
+    }
+    return FALLBACK;
   }
 }

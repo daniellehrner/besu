@@ -40,9 +40,9 @@ class JumpOperationV2Test {
     final Operation.OperationResult result = JumpOperationV2.staticOperation(frame);
 
     assertThat(result.getHaltReason()).isNull();
-    assertThat(result.getPcIncrement()).isZero();
     assertThat(result.getGasCost()).isEqualTo(8);
-    assertThat(frame.getPC()).isEqualTo(3);
+    // the interpreter adds the result's increment to the program counter
+    assertThat(frame.getPC() + result.getPcIncrement()).isEqualTo(3);
     assertThat(frame.stackTopV2()).isZero();
   }
 
@@ -77,7 +77,7 @@ class JumpOperationV2Test {
     final Operation.OperationResult result = JumpOperationV2.staticOperation(frame);
 
     assertThat(result.getHaltReason()).isNull();
-    assertThat(frame.getPC()).isEqualTo(7);
+    assertThat(frame.getPC() + result.getPcIncrement()).isEqualTo(7);
   }
 
   @Test

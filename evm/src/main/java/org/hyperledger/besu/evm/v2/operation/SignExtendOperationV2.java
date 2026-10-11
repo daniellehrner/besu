@@ -14,6 +14,13 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
+
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 
@@ -24,8 +31,6 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
  * significant 64 bits.
  */
 public class SignExtendOperationV2 extends AbstractFixedCostOperationV2 {
-
-  private static final OperationResult SIGNEXTEND_SUCCESS = new OperationResult(5, null);
 
   /**
    * Instantiates a new SignExtend operation.
@@ -42,47 +47,46 @@ public class SignExtendOperationV2 extends AbstractFixedCostOperationV2 {
   }
 
   /**
-   * Execute the SIGNEXTEND opcode on the v2 long[] stack.
+   * Performs SignExtend operation.
    *
-   * <p>SIGNEXTEND: extends the sign of the byte at index stack[top-1], counted from the least
-   * significant byte, of stack[top-2] into the more significant bytes, return top-1.
-   *
-   * @param frame the message frame
+   * @param frame the frame
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    if (!frame.stackHasItemsV2(2)) return UNDERFLOW_RESPONSE;
-    final long[] stack = frame.stackDataV2();
-    final int top = frame.stackTopV2();
-    final int indexOffset = (top - 1) << 2;
-    final int valueOffset = (top - 2) << 2;
-    frame.setTopV2(top - 1);
+    final int sp = frame.stackTopV2();
+    return result(frame, signExtend(frame.stackDataV2(), sp, top(sp), ANY_GAS), UNDERFLOW_RESPONSE);
+  }
 
-    // From byte 31 on the sign bit is the top bit of the word, so the value stays as it is.
-    if ((stack[indexOffset] | stack[indexOffset + 1] | stack[indexOffset + 2]) != 0
-        || Long.compareUnsigned(stack[indexOffset + 3], 31) >= 0) {
-      return SIGNEXTEND_SUCCESS;
+  @InlineInEvmLoop(opcodes = 0x0b)
+  static long signExtend(final long[] s, final int sp, final int top, final long gas) {
+    if (sp >= 2 && gas >= LOW_TIER_GAS) {
+      final int index = top;
+      final int value = index - 4;
+      // From byte 31 on the sign bit is the top bit of the word, so the value stays as it is.
+      if ((s[index] | s[index + 1] | s[index + 2]) == 0
+          && Long.compareUnsigned(s[index + 3], 31) < 0) {
+        final int signBit = ((int) s[index + 3] << 3) + 7;
+        // 0 for the least significant limb u0, 3 for the most significant limb u3
+        final int signLimbIndex = signBit >>> 6;
+        final int signLimb = value + 3 - signLimbIndex;
+        final int bitInLimb = signBit & 63;
+        final long fill = ((s[signLimb] >>> bitInLimb) & 1L) == 0 ? 0L : -1L;
+        if (bitInLimb < 63) {
+          final long kept = -1L >>> (63 - bitInLimb);
+          s[signLimb] = (s[signLimb] & kept) | (fill & ~kept);
+        }
+        if (signLimbIndex < 3) {
+          s[value] = fill;
+        }
+        if (signLimbIndex < 2) {
+          s[value + 1] = fill;
+        }
+        if (signLimbIndex < 1) {
+          s[value + 2] = fill;
+        }
+      }
+      return done(LOW_TIER_GAS, 1, -1);
     }
-
-    final int signBit = ((int) stack[indexOffset + 3] << 3) + 7;
-    // 0 for the least significant limb u0, 3 for the most significant limb u3
-    final int signLimbIndex = signBit >>> 6;
-    final int signLimb = valueOffset + 3 - signLimbIndex;
-    final int bitInLimb = signBit & 63;
-    final long fill = ((stack[signLimb] >>> bitInLimb) & 1L) == 0 ? 0L : -1L;
-    if (bitInLimb < 63) {
-      final long kept = -1L >>> (63 - bitInLimb);
-      stack[signLimb] = (stack[signLimb] & kept) | (fill & ~kept);
-    }
-    if (signLimbIndex < 3) {
-      stack[valueOffset] = fill;
-    }
-    if (signLimbIndex < 2) {
-      stack[valueOffset + 1] = fill;
-    }
-    if (signLimbIndex < 1) {
-      stack[valueOffset + 2] = fill;
-    }
-    return SIGNEXTEND_SUCCESS;
+    return FALLBACK;
   }
 }

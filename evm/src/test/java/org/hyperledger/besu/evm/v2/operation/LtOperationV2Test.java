@@ -23,7 +23,9 @@ import org.hyperledger.besu.evm.gascalculator.FrontierGasCalculator;
 import org.hyperledger.besu.evm.operation.Operation;
 import org.hyperledger.besu.evm.v2.testutils.TestMessageFrameBuilderV2;
 
+import java.math.BigInteger;
 import java.util.List;
+import java.util.Random;
 
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.Test;
@@ -81,6 +83,37 @@ class LtOperationV2Test extends BinaryOperationV2Test {
     assertThat(frame.stackTopV2()).isEqualTo(1);
     assertThat(getV2StackItem(frame, 0))
         .isEqualTo(UInt256.fromBytesBE(Bytes32.fromHexString(expected).toArrayUnsafe()));
+  }
+
+  /** LT, GT, SLT and SGT share LtOperationV2.compare, which this checks against BigInteger. */
+  @Test
+  void comparesLikeBigInteger() {
+    final Random random = new Random(7);
+    for (int i = 0; i < 2_000; i++) {
+      final byte[] a = new byte[32];
+      final byte[] b = new byte[32];
+      random.nextBytes(a);
+      random.nextBytes(b);
+      // share 0 to 4 leading limbs, so that the comparison has to look further down
+      System.arraycopy(a, 0, b, 0, 8 * random.nextInt(5));
+      final int unsigned = new BigInteger(1, a).compareTo(new BigInteger(1, b));
+      final int signed = new BigInteger(a).compareTo(new BigInteger(b));
+      assertThat(compare(0x10, a, b)).isEqualTo(unsigned < 0);
+      assertThat(compare(0x11, a, b)).isEqualTo(unsigned > 0);
+      assertThat(compare(0x12, a, b)).isEqualTo(signed < 0);
+      assertThat(compare(0x13, a, b)).isEqualTo(signed > 0);
+    }
+  }
+
+  /** Runs the comparison with a on top of the stack and b below it. */
+  private static boolean compare(final int opcode, final byte[] a, final byte[] b) {
+    final long[] stack = new long[8];
+    StackUtil.pushBytes32(Bytes32.wrap(b), stack, 0);
+    StackUtil.pushBytes32(Bytes32.wrap(a), stack, 1);
+    assertThat(LtOperationV2.compare(stack, 2, 4, opcode, Long.MAX_VALUE))
+        .isNotEqualTo(EvmLoopInlining.FALLBACK);
+    assertThat(stack[0] | stack[1] | stack[2]).isZero();
+    return stack[3] == 1L;
   }
 
   @Test
