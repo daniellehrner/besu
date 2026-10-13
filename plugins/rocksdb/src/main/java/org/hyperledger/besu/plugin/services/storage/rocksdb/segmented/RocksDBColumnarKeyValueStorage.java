@@ -21,6 +21,7 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
 import org.hyperledger.besu.plugin.services.metrics.OperationTimer;
+import org.hyperledger.besu.plugin.services.storage.SegmentBulkLoad;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorageTransaction;
@@ -434,16 +435,19 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
 
   // the ingestion only accepts files written with the comparator and compression of the segment
   Options sstFileOptions(final SegmentIdentifier segment) {
-    final ColumnFamilyOptions columnFamilyOptions =
-        columnDescriptors.stream()
-            .filter(descriptor -> Arrays.equals(descriptor.getName(), segment.getId()))
-            .findFirst()
-            .orElseThrow(
-                () ->
-                    new RuntimeException(
-                        "Column descriptor not found for segment " + segment.getName()))
-            .getOptions();
-    return new Options(options, columnFamilyOptions);
+    return new Options(options, columnFamilyOptions(segment));
+  }
+
+  // the options the column family of the segment was opened with
+  ColumnFamilyOptions columnFamilyOptions(final SegmentIdentifier segment) {
+    return columnDescriptors.stream()
+        .filter(descriptor -> Arrays.equals(descriptor.getName(), segment.getId()))
+        .findFirst()
+        .orElseThrow(
+            () ->
+                new RuntimeException(
+                    "Column descriptor not found for segment " + segment.getName()))
+        .getOptions();
   }
 
   // adds SST files to the segment, moving them in when they may be
@@ -755,6 +759,12 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         new RocksDBWriteBatchTransaction(
             this::safeColumnHandle, getDB(), writeOptions, getMetrics()),
         this.closed::get);
+  }
+
+  @Override
+  public SegmentBulkLoad startBulkLoad(final List<SegmentIdentifier> segmentIdentifiers) {
+    throwIfClosed();
+    return new RocksDBSegmentBulkLoad(this, segmentIdentifiers);
   }
 
   @Override

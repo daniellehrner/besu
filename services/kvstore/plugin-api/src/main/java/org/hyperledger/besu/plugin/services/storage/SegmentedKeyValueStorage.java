@@ -165,6 +165,22 @@ public interface SegmentedKeyValueStorage extends Closeable {
   default void flush() throws StorageException {}
 
   /**
+   * Tells the storage that a large amount of data is about to be loaded into the segments, mostly
+   * through {@link #startSortedWriter}. Until the returned load is closed the storage may hold back
+   * the background work that reorganises the segments: during the load that work rewrites entries
+   * over and over that are about to be put where they belong anyway.
+   *
+   * <p>Reads and regular writes keep working during the load, but may be slower than usual. The
+   * default implementation does nothing.
+   *
+   * @param segmentIdentifiers the segments that are loaded
+   * @return the bulk load, which has to be closed when the data is in
+   */
+  default SegmentBulkLoad startBulkLoad(final List<SegmentIdentifier> segmentIdentifiers) {
+    return () -> {};
+  }
+
+  /**
    * Starts adding entries to a segment in increasing key order, written to a file then added to the
    * segment at once, without going through the memtable and its compactions. Storage that cannot
    * add files falls back to a batch transaction.
