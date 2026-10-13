@@ -94,6 +94,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
   private static final String SNAP2_ACCOUNT_RANGES_FLAG = "--Xsnap2-account-ranges";
   private static final String SNAP2_STORAGE_TRIES_WHILE_DOWNLOADING_FLAG =
       "--Xsnap2-storage-tries-while-downloading";
+  private static final String SNAP2_SORTED_INGEST_ENABLED_FLAG = "--Xsnap2-sorted-ingest-enabled";
 
   private static final String SNAP_FLAT_ACCOUNT_HEALED_COUNT_PER_REQUEST_FLAG =
       "--Xsnapsync-synchronizer-flat-account-healed-count-per-request";
@@ -434,6 +435,17 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
   private Boolean snap2StorageTriesWhileDownloading =
       SnapSyncConfiguration.DEFAULT_SNAP2_STORAGE_TRIES_WHILE_DOWNLOADING;
 
+  @CommandLine.Option(
+      names = {SNAP2_SORTED_INGEST_ENABLED_FLAG},
+      hidden = true,
+      paramLabel = "<Boolean>",
+      arity = "0..1",
+      fallbackValue = "true",
+      description =
+          "Write the state downloaded by the SNAP2 sync as sorted files that the storage keeps as they are, instead of through its regular write path. Needs Bonsai. (default: ${DEFAULT-VALUE})")
+  private Boolean snap2SortedIngestEnabled =
+      SnapSyncConfiguration.DEFAULT_SNAP2_SORTED_INGEST_ENABLED;
+
   /**
    * @deprecated No longer used. Accepted for backwards compatibility. The flag will be removed in a
    *     future release.
@@ -569,6 +581,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
         PositiveNumber.fromInt(config.getSnapSyncConfiguration().getSnap2AccountRanges());
     options.snap2StorageTriesWhileDownloading =
         config.getSnapSyncConfiguration().isSnap2StorageTriesWhileDownloading();
+    options.snap2SortedIngestEnabled =
+        config.getSnapSyncConfiguration().isSnap2SortedIngestEnabled();
     options.era1ImportPrepipelineEnabled = config.era1ImportPrepipelineEnabled();
     options.era1DataUri = config.era1DataUri();
     options.era1ImportPrepipelineConcurrency = config.era1ImportPrepipelineConcurrency();
@@ -616,6 +630,7 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
             .isSnapSyncTransactionIndexingEnabled(snapTransactionIndexingEnabled)
             .snap2AccountRanges(snap2AccountRanges.getValue())
             .isSnap2StorageTriesWhileDownloading(snap2StorageTriesWhileDownloading)
+            .isSnap2SortedIngestEnabled(snap2SortedIngestEnabled)
             .build());
     builder.receiptsDownloadStepTimeoutMillis(receiptsDownloadStepTimeoutMillis);
     builder.backwardHeadersDownloadStepTimeoutMillis(backwardHeadersDownloadStepTimeoutMillis);
@@ -697,6 +712,8 @@ public class SynchronizerOptions implements CLIOptions<SynchronizerConfiguration
             OptionParser.format(snap2AccountRanges.getValue()),
             SNAP2_STORAGE_TRIES_WHILE_DOWNLOADING_FLAG,
             OptionParser.format(snap2StorageTriesWhileDownloading),
+            SNAP2_SORTED_INGEST_ENABLED_FLAG,
+            OptionParser.format(snap2SortedIngestEnabled),
             ERA1_IMPORT_PREPIPELINE_ENABLED_FLAG,
             OptionParser.format(era1ImportPrepipelineEnabled),
             ERA1_DATA_URI_FLAG,

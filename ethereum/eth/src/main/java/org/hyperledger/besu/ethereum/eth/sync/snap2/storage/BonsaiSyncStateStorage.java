@@ -27,15 +27,19 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldSt
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.trienode.BonsaiTrieNodeStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.trienode.TrieNodeKey;
 import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
+import org.hyperledger.besu.plugin.services.storage.SegmentBulkLoad;
 import org.hyperledger.besu.plugin.services.storage.SortedWriter;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Sync storage writing straight into the Bonsai flat database and trie node store. */
 public final class BonsaiSyncStateStorage extends AbstractSyncStateStorage {
@@ -43,19 +47,58 @@ public final class BonsaiSyncStateStorage extends AbstractSyncStateStorage {
   // the storage nodes of one account sorted in memory before going to a file
   private static final long MAX_SORTED_STORAGE_BYTES = 32L * 1024 * 1024;
 
+  private static final Logger LOG = LoggerFactory.getLogger(BonsaiSyncStateStorage.class);
+
   private final BonsaiWorldStateKeyValueStorage bonsai;
   private final long maxSortedStorageBytes;
+  private final boolean sortedFlatState;
+  private SortedIngestStats stats = new SortedIngestStats();
+  private SortedStateIngest ingest;
+  private SegmentBulkLoad bulkLoad;
 
   public BonsaiSyncStateStorage(final BonsaiWorldStateKeyValueStorage bonsai) {
-    this(bonsai, MAX_SORTED_STORAGE_BYTES);
+    this(bonsai, false);
+  }
+
+  /**
+   * Creates the storage.
+   *
+   * @param bonsai the Bonsai storage
+   * @param sortedFlatState whether to write the downloaded accounts and slots as sorted files too,
+   *     with the compaction of the state segments held back until the sync is complete
+   */
+  public BonsaiSyncStateStorage(
+      final BonsaiWorldStateKeyValueStorage bonsai, final boolean sortedFlatState) {
+    this(bonsai, MAX_SORTED_STORAGE_BYTES, sortedFlatState);
   }
 
   @VisibleForTesting
   BonsaiSyncStateStorage(
       final BonsaiWorldStateKeyValueStorage bonsai, final long maxSortedStorageBytes) {
+    this(bonsai, maxSortedStorageBytes, false);
+  }
+
+  private BonsaiSyncStateStorage(
+      final BonsaiWorldStateKeyValueStorage bonsai,
+      final long maxSortedStorageBytes,
+      final boolean sortedFlatState) {
     super(bonsai.getComposedWorldStateStorage(), ACCOUNT_INFO_STATE, ACCOUNT_STORAGE_STORAGE);
     this.bonsai = bonsai;
     this.maxSortedStorageBytes = maxSortedStorageBytes;
+    this.sortedFlatState = sortedFlatState;
+  }
+
+  @Override
+  public Optional<SortedWrites> sortedWrites() {
+    return Optional.ofNullable(ingest);
+  }
+
+  @Override
+  public void deleteStorage(final Bytes32 accountHash) {
+    if (ingest != null) {
+      ingest.storageRemoved(accountHash);
+    }
+    super.deleteStorage(accountHash);
   }
 
   @Override
@@ -242,7 +285,16 @@ public final class BonsaiSyncStateStorage extends AbstractSyncStateStorage {
 
   @Override
   public void prepareForSync() {
+    endSortedFlatState();
     bonsai.clear();
+    if (sortedFlatState) {
+      stats = new SortedIngestStats();
+      ingest = new SortedStateIngest(flat, ACCOUNT_INFO_STATE, ACCOUNT_STORAGE_STORAGE, stats);
+      // the compactions of the state segments wait, so that the files stay where they are put
+      bulkLoad =
+          flat.startBulkLoad(
+              List.of(ACCOUNT_INFO_STATE, ACCOUNT_STORAGE_STORAGE, TRIE_BRANCH_STORAGE));
+    }
     if (!bonsai.getFlatDbStrategy().isCodeByCodeHash()) {
       throw new IllegalStateException(
           "SNAP2 sync needs Bonsai to store bytecode by code hash (--Xbonsai-code-using-code-hash-enabled)");
@@ -256,6 +308,10 @@ public final class BonsaiSyncStateStorage extends AbstractSyncStateStorage {
 
   @Override
   public void completeSync() {
+    if (ingest != null) {
+      LOG.info("SNAP2 accounts and slots written with {}", stats);
+    }
+    endSortedFlatState();
     if (bonsai.getFlatDbMode() != FlatDbMode.FULL) {
       bonsai.upgradeToFullFlatDbMode();
     }
@@ -270,5 +326,16 @@ public final class BonsaiSyncStateStorage extends AbstractSyncStateStorage {
         bonsai.getFlatDbStrategy(),
         flat,
         bonsai.getTrieNodeStrategy());
+  }
+
+  private void endSortedFlatState() {
+    if (ingest != null) {
+      ingest.close();
+      ingest = null;
+    }
+    if (bulkLoad != null) {
+      bulkLoad.close();
+      bulkLoad = null;
+    }
   }
 }

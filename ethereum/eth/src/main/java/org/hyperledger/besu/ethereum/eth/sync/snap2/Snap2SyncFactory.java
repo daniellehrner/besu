@@ -79,11 +79,21 @@ public final class Snap2SyncFactory {
         pivotBlockSelector instanceof ChainHeadSource source
             ? source
             : new PeerHeadSource(ethContext.getEthPeers());
+    final boolean sortedIngest =
+        Boolean.TRUE.equals(syncConfig.getSnapSyncConfiguration().isSnap2SortedIngestEnabled());
+    boolean triesWhileDownloading =
+        Boolean.TRUE.equals(
+            syncConfig.getSnapSyncConfiguration().isSnap2StorageTriesWhileDownloading());
+    if (sortedIngest && triesWhileDownloading) {
+      // the slots in a sorted file are only readable once the file is stored
+      LOG.warn(
+          "The SNAP2 storage tries are built at the end, as the state is written as sorted files");
+      triesWhileDownloading = false;
+    }
     final Snap2Configuration config =
         Snap2Configuration.getDefault().toBuilder()
             .accountChunks(syncConfig.getSnapSyncConfiguration().getSnap2AccountRanges())
-            .storageTriesWhileDownloading(
-                syncConfig.getSnapSyncConfiguration().isSnap2StorageTriesWhileDownloading())
+            .storageTriesWhileDownloading(triesWhileDownloading)
             .build();
     return Optional.of(
         new Snap2SyncController(
@@ -92,7 +102,7 @@ public final class Snap2SyncFactory {
             blockchain,
             ethContext.getEthPeers(),
             syncState,
-            syncStorage(worldStateStorageCoordinator, storageProvider),
+            syncStorage(worldStateStorageCoordinator, storageProvider, sortedIngest),
             heads,
             metricsSystem,
             marker,
@@ -110,8 +120,13 @@ public final class Snap2SyncFactory {
   }
 
   private static SyncStateStorage syncStorage(
-      final WorldStateStorageCoordinator coordinator, final StorageProvider storageProvider) {
+      final WorldStateStorageCoordinator coordinator,
+      final StorageProvider storageProvider,
+      final boolean sortedIngest) {
     if (coordinator.getDataStorageFormat() == DataStorageFormat.FOREST) {
+      if (sortedIngest) {
+        LOG.warn("The SNAP2 state is only written as sorted files with Bonsai");
+      }
       return new ForestSyncStateStorage(
           coordinator.getStrategy(ForestWorldStateKeyValueStorage.class), storageProvider);
     }
@@ -120,6 +135,6 @@ public final class Snap2SyncFactory {
     if (bonsai.getFlatDbMode() == FlatDbMode.ARCHIVE) {
       throw new IllegalStateException("SNAP2 sync does not support the Bonsai archive format");
     }
-    return new BonsaiSyncStateStorage(bonsai);
+    return new BonsaiSyncStateStorage(bonsai, sortedIngest);
   }
 }

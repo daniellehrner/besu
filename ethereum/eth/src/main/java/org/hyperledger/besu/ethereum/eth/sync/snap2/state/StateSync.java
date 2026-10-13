@@ -148,6 +148,13 @@ public final class StateSync {
           RangeManager.generateRanges(
                   RangeManager.MIN_RANGE, RangeManager.MAX_RANGE, config.accountChunks())
               .forEach((from, to) -> accountTasks.add(new RangeTask(from, to)));
+          storage
+              .sortedWrites()
+              .ifPresent(
+                  sorted ->
+                      sorted.start(
+                          accountTasks.stream().map(task -> task.limit).toList(),
+                          hash -> coverage.storageTask(hash) != null));
           LOG.info(
               "Starting SNAP2 world state download at block {} with {} account ranges",
               pivotHeader.getNumber(),
@@ -273,6 +280,8 @@ public final class StateSync {
       if (stopped) {
         throw new IllegalStateException("state download stopped");
       }
+      // a sorted file stored after the write would hide it
+      storage.sortedWrites().ifPresent(SyncStateStorage.SortedWrites::flush);
       return write.get();
     } finally {
       pivotLock.writeLock().unlock();
@@ -313,6 +322,7 @@ public final class StateSync {
     loop.shutdownNow();
     persister.shutdownNow();
     tries.ifPresent(StorageTries::stop);
+    storage.sortedWrites().ifPresent(SyncStateStorage.SortedWrites::close);
     completion.completeExceptionally(new CancellationException("state download stopped"));
   }
 
@@ -546,6 +556,7 @@ public final class StateSync {
     return atPivot(
         request.pivot.epoch(),
         () -> {
+          final Optional<SyncStateStorage.SortedWrites> sorted = storage.sortedWrites();
           final SyncStateStorage.Batch batch = storage.batch();
           final List<StorageTask> storageTasks = new ArrayList<>();
           final Set<Bytes32> codeHashes = new LinkedHashSet<>();
@@ -556,7 +567,9 @@ public final class StateSync {
               break;
             }
             final Bytes account = result.accounts().get(i);
-            batch.putAccount(hash, account);
+            if (sorted.isEmpty()) {
+              batch.putAccount(hash, account);
+            }
             final PmtStateTrieAccountValue value = Accounts.decode(account);
             if (!value.getStorageRoot().equals(Hash.EMPTY_TRIE_HASH)) {
               storageTasks.add(
@@ -572,6 +585,16 @@ public final class StateSync {
           final boolean done =
               last == null || !result.hasMore() || last.compareTo(request.limit) >= 0;
           final Bytes32 end = done ? request.limit : last;
+          if (sorted.isPresent()) {
+            sorted
+                .get()
+                .accounts(
+                    request.limit,
+                    result.hashes().subList(0, count),
+                    result.accounts().subList(0, count),
+                    storageTasks.stream().map(StorageTask::accountHash).toList(),
+                    done);
+          }
           batch.commit();
           storageTasks.forEach(coverage::addStorageTask);
           coverage.accounts().add(request.origin, end);
@@ -648,6 +671,7 @@ public final class StateSync {
     return atPivot(
         request.pivot.epoch(),
         () -> {
+          final Optional<SyncStateStorage.SortedWrites> sorted = storage.sortedWrites();
           final SyncStateStorage.Batch batch = storage.batch();
           final List<Covered> covered = new ArrayList<>();
           Bytes32 lastSlot = null;
@@ -657,6 +681,8 @@ public final class StateSync {
           for (int i = 0; i < result.accounts().size(); i++) {
             final StorageTask task = request.tasks.get(i);
             final StorageRangesRequest.Slots accountSlots = result.accounts().get(i);
+            final List<Bytes32> sortedSlots = new ArrayList<>();
+            final List<Bytes32> sortedValues = new ArrayList<>();
             for (int s = 0; s < accountSlots.hashes().size(); s++) {
               final Bytes32 slotHash = accountSlots.hashes().get(s);
               if (slotHash.compareTo(request.limit) > 0) {
@@ -664,9 +690,24 @@ public final class StateSync {
               }
               final Bytes32 value = Bytes32.leftPad(RLP.decodeOne(accountSlots.values().get(s)));
               if (isPending(task) && !value.isZero()) {
-                batch.putStorage(task.accountHash(), slotHash, value);
+                if (sorted.isPresent()) {
+                  sortedSlots.add(slotHash);
+                  sortedValues.add(value);
+                } else {
+                  batch.putStorage(task.accountHash(), slotHash, value);
+                }
               }
               count++;
+            }
+            if (sorted.isPresent() && !sortedSlots.isEmpty()) {
+              // the slots of a chunk follow each other, so do those of the first request
+              sorted
+                  .get()
+                  .storage(
+                      task.accountHash(),
+                      request.chunk != null ? request.chunk : task,
+                      sortedSlots,
+                      sortedValues);
             }
             // the proof covers up to the last returned slot, which may lie past the limit
             final List<Bytes32> returned = accountSlots.hashes();
@@ -693,6 +734,8 @@ public final class StateSync {
   // a complete storage can get its trie built from the written slots
   private void cover(final StorageTask task, final Bytes32 origin, final Bytes32 end) {
     if (task.cover(origin, end)) {
+      // its slots can go into the sorted files once those of the accounts before it are in
+      storage.sortedWrites().ifPresent(sorted -> sorted.storageComplete(task.accountHash()));
       coverage.removeStorageTask(task.accountHash());
       tries.ifPresent(builder -> builder.completed(task.accountHash()));
     }
@@ -931,6 +974,8 @@ public final class StateSync {
         || inFlight() > 0) {
       return false;
     }
+    // the tries are built from what was written
+    storage.sortedWrites().ifPresent(SyncStateStorage.SortedWrites::flush);
     LOG.info(
         "SNAP2 world state download complete at block {}: {}",
         pivot.header().getNumber(),

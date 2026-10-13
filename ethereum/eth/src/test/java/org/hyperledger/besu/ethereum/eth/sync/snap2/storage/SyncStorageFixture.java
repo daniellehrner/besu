@@ -45,6 +45,8 @@ public final class SyncStorageFixture {
   /** Storage format under test. */
   public enum Format {
     BONSAI,
+    // Bonsai with the downloaded state written as sorted files
+    BONSAI_SORTED,
     FOREST
   }
 
@@ -81,11 +83,12 @@ public final class SyncStorageFixture {
 
   public static Storages create(final Format format) {
     final InMemoryKeyValueStorageProvider provider = new InMemoryKeyValueStorageProvider();
-    if (format == Format.BONSAI) {
+    if (format != Format.FOREST) {
       final BonsaiWorldStateKeyValueStorage bonsai =
           (BonsaiWorldStateKeyValueStorage)
               provider.createWorldStateStorage(DataStorageConfiguration.DEFAULT_BONSAI_CONFIG);
-      return new Storages(new BonsaiSyncStateStorage(bonsai), bonsai, null);
+      return new Storages(
+          new BonsaiSyncStateStorage(bonsai, format == Format.BONSAI_SORTED), bonsai, null);
     }
     final ForestWorldStateKeyValueStorage forest =
         (ForestWorldStateKeyValueStorage)
