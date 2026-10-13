@@ -67,6 +67,15 @@ public class MemoryBoundCache<K, V> {
   }
 
   /**
+   * Removes the value associated with the key, if present.
+   *
+   * @param key the key whose value is to be removed
+   */
+  public void invalidate(final K key) {
+    cache.invalidate(key);
+  }
+
+  /**
    * Estimates the number of entries in the cache
    *
    * @return the estimated number of entries in the cache

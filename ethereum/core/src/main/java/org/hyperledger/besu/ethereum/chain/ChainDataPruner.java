@@ -23,6 +23,7 @@ import java.util.Collection;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,6 +48,7 @@ public class ChainDataPruner implements BlockAddedObserver {
 
   private final BlockchainStorage blockchainStorage;
   private final Runnable unsubscribeRunnable;
+  private final Consumer<Hash> blockAccessListPrunedListener;
   private final ChainDataPrunerStorage prunerStorage;
   private final long mergeBlock;
   private final PruningMode pruningMode;
@@ -58,6 +60,7 @@ public class ChainDataPruner implements BlockAddedObserver {
   public ChainDataPruner(
       final BlockchainStorage blockchainStorage,
       final Runnable unsubscribeRunnable,
+      final Consumer<Hash> blockAccessListPrunedListener,
       final ChainDataPrunerStorage prunerStorage,
       final long mergeBlock,
       final PruningMode pruningMode,
@@ -65,6 +68,7 @@ public class ChainDataPruner implements BlockAddedObserver {
       final ExecutorService pruningExecutor) {
     this.blockchainStorage = blockchainStorage;
     this.unsubscribeRunnable = unsubscribeRunnable;
+    this.blockAccessListPrunedListener = blockAccessListPrunedListener;
     this.prunerStorage = prunerStorage;
     this.mergeBlock = mergeBlock;
     this.pruningMode = pruningMode;
@@ -210,6 +214,7 @@ public class ChainDataPruner implements BlockAddedObserver {
         if (pruneBalAtBlock) {
           LOG.debug("Pruning BAL data at block {}", blockNum);
           updater.removeBlockAccessList(blockHash);
+          blockAccessListPrunedListener.accept(blockHash);
         }
       }
 

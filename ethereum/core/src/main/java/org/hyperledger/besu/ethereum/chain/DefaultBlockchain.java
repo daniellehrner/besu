@@ -74,6 +74,8 @@ import org.slf4j.LoggerFactory;
 public class DefaultBlockchain implements MutableBlockchain {
   private static final Logger LOG = LoggerFactory.getLogger(DefaultBlockchain.class);
   private static final long BLOCK_ACCESS_LIST_CACHE_MAX_BYTES = 256L * 1024 * 1024;
+  // cache node, hash key and Bytes wrapper; small lists would otherwise be weighed at a few bytes
+  private static final int BLOCK_ACCESS_LIST_CACHE_ENTRY_OVERHEAD = 200;
 
   private final Comparator<BlockHeader> heaviestChainBlockChoiceRule =
       Comparator.comparing(this::calculateTotalDifficulty);
@@ -97,9 +99,12 @@ public class DefaultBlockchain implements MutableBlockchain {
   private Optional<Cache<Hash, BlockBody>> blockBodiesCache;
   private Optional<Cache<Hash, List<TransactionReceipt>>> transactionReceiptsCache;
   private Optional<Cache<Hash, Difficulty>> totalDifficultyCache;
-  // Holds the RLP, bounded by size: one list can hold tens of thousands of accounts, and readers
-  // serve the RLP.
-  private Optional<MemoryBoundCache<Hash, Bytes>> blockAccessListCache;
+  // Holds the RLP of imported lists, bounded by size: one list can hold tens of thousands of
+  // accounts, and peers are served the RLP.
+  private final MemoryBoundCache<Hash, Bytes> blockAccessListCache =
+      new MemoryBoundCache<>(
+          BLOCK_ACCESS_LIST_CACHE_MAX_BYTES,
+          (blockHash, rlp) -> rlp.size() + BLOCK_ACCESS_LIST_CACHE_ENTRY_OVERHEAD);
 
   private Counter gasUsedCounter = NoOpMetricsSystem.NO_OP_COUNTER;
   private Counter numberOfTransactionsCounter = NoOpMetricsSystem.NO_OP_COUNTER;
@@ -164,6 +169,7 @@ public class DefaultBlockchain implements MutableBlockchain {
     this.senderNonceIndexing = senderNonceIndexingEnabled;
 
     initializeCaches(metricsSystem, numberOfBlockHeadersToCache, numberOfBlocksToCache);
+    registerBlockAccessListCacheMetrics(metricsSystem);
     createCounters(metricsSystem);
     createGauges(metricsSystem);
   }
@@ -186,10 +192,6 @@ public class DefaultBlockchain implements MutableBlockchain {
           Optional.of(CacheBuilder.newBuilder().recordStats().maximumSize(blocksCacheSize).build());
       totalDifficultyCache =
           Optional.of(CacheBuilder.newBuilder().recordStats().maximumSize(blocksCacheSize).build());
-      blockAccessListCache =
-          Optional.of(
-              new MemoryBoundCache<>(
-                  BLOCK_ACCESS_LIST_CACHE_MAX_BYTES, (blockHash, rlp) -> rlp.size()));
       registerCacheMetrics(metricsSystem);
     } else {
       // Only headers cache is created, rest are empty
@@ -207,7 +209,6 @@ public class DefaultBlockchain implements MutableBlockchain {
     blockBodiesCache = Optional.empty();
     transactionReceiptsCache = Optional.empty();
     totalDifficultyCache = Optional.empty();
-    blockAccessListCache = Optional.empty();
   }
 
   private void registerCacheMetrics(final MetricsSystem metricsSystem) {
@@ -217,31 +218,29 @@ public class DefaultBlockchain implements MutableBlockchain {
         BLOCKCHAIN, "transactionReceipts", transactionReceiptsCache.get());
     metricsSystem.createGuavaCacheCollector(
         BLOCKCHAIN, "totalDifficulty", totalDifficultyCache.get());
-    registerBlockAccessListCacheMetrics(metricsSystem, blockAccessListCache.get());
   }
 
-  private void registerBlockAccessListCacheMetrics(
-      final MetricsSystem metricsSystem, final MemoryBoundCache<Hash, Bytes> cache) {
+  private void registerBlockAccessListCacheMetrics(final MetricsSystem metricsSystem) {
     metricsSystem.createLongGauge(
         BLOCKCHAIN,
         "block_access_list_cache_size",
         "Current number of entries in the block access list cache",
-        cache::estimatedSize);
+        blockAccessListCache::estimatedSize);
     metricsSystem.createGauge(
         BLOCKCHAIN,
         "block_access_list_cache_hit_rate",
         "Hit rate of the block access list cache",
-        cache::hitRate);
+        blockAccessListCache::hitRate);
     metricsSystem.createLongGauge(
         BLOCKCHAIN,
         "block_access_list_cache_evictions",
         "Total number of evictions from the block access list cache",
-        cache::evictionCount);
+        blockAccessListCache::evictionCount);
     metricsSystem.createLongGauge(
         BLOCKCHAIN,
         "block_access_list_cache_eviction_weight",
         "Total weight of evictions from the block access list cache",
-        cache::evictionWeight);
+        blockAccessListCache::evictionWeight);
   }
 
   private void registerHeadersCacheMetrics(final MetricsSystem metricsSystem) {
@@ -552,10 +551,20 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   @Override
   public Optional<BlockAccessList> getBlockAccessList(final Hash blockHash) {
-    return blockAccessListCache
-        .map(cache -> cache.getIfPresent(blockHash))
+    return Optional.ofNullable(blockAccessListCache.getIfPresent(blockHash))
         .map(rlp -> BlockAccessListDecoder.decode(RLP.input(rlp)))
         .or(() -> blockchainStorage.getBlockAccessList(blockHash));
+  }
+
+  @Override
+  public Optional<Bytes> getBlockAccessListRlp(final Hash blockHash) {
+    return Optional.ofNullable(blockAccessListCache.getIfPresent(blockHash))
+        .or(() -> blockchainStorage.getBlockAccessListRlp(blockHash));
+  }
+
+  @Override
+  public void evictCachedBlockAccessList(final Hash blockHash) {
+    blockAccessListCache.invalidate(blockHash);
   }
 
   @Override
@@ -731,14 +740,10 @@ public class DefaultBlockchain implements MutableBlockchain {
       final BlockchainStorage.Updater updater,
       final Hash blockHash,
       final BlockAccessList blockAccessList) {
-    blockAccessListCache.ifPresentOrElse(
-        cache -> {
-          // encode once for both storage and the cache
-          final Bytes rlp = blockAccessList.encode();
-          updater.putSyncBlockAccessList(blockHash, new SyncBlockAccessList(rlp));
-          cache.put(blockHash, rlp);
-        },
-        () -> updater.putBlockAccessList(blockHash, blockAccessList));
+    // encode once for both storage and the cache
+    final Bytes rlp = blockAccessList.encode();
+    updater.putSyncBlockAccessList(blockHash, new SyncBlockAccessList(rlp));
+    blockAccessListCache.put(blockHash, rlp);
   }
 
   @Override

@@ -46,6 +46,13 @@ public interface MutableBlockchain extends Blockchain {
   }
 
   /**
+   * Removes a block access list from the in-memory cache, once it has been pruned from storage.
+   *
+   * @param blockHash The hash of the block whose access list was pruned.
+   */
+  void evictCachedBlockAccessList(Hash blockHash);
+
+  /**
    * Adds a block to the blockchain without indexing transactions.
    *
    * <p>Block must be connected to the existing blockchain (its parent must already be stored),

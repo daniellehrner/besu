@@ -16,6 +16,7 @@ package org.hyperledger.besu.ethereum.chain;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockDataGenerator;
 import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
@@ -25,6 +26,7 @@ import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.AbstractExecutorService;
@@ -58,6 +60,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -127,6 +130,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -230,10 +234,12 @@ public class ChainDataPrunerTest {
             new VariablesKeyValueStorage(new InMemoryKeyValueStorage()),
             new MainnetBlockHeaderFunctions(),
             false);
+    final List<Hash> prunedBlockAccessLists = new ArrayList<>();
     final ChainDataPruner chainDataPruner =
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            prunedBlockAccessLists::add,
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -308,6 +314,8 @@ public class ChainDataPrunerTest {
                           // But BAL is pruned
                           assertThat(blockchainStorage.getBlockAccessList(oldHeader.getBlockHash()))
                               .isEmpty();
+                          // and evicted from the blockchain's cache
+                          assertThat(prunedBlockAccessLists).contains(oldHeader.getBlockHash());
                         });
                 assertThat(blockchain.getBlockHeader(number - retention + 1)).isPresent();
                 blockchain
@@ -318,6 +326,8 @@ public class ChainDataPrunerTest {
                           assertThat(
                                   blockchainStorage.getBlockAccessList(recentHeader.getBlockHash()))
                               .isPresent();
+                          assertThat(prunedBlockAccessLists)
+                              .doesNotContain(recentHeader.getBlockHash());
                         });
               }
             });
@@ -336,6 +346,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -419,6 +430,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -519,6 +531,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -567,6 +580,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -601,6 +615,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -697,6 +712,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -838,6 +854,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             prunerStorage,
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -955,6 +972,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             prunerStorage,
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -1081,6 +1099,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -1133,6 +1152,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -1235,6 +1255,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -1289,6 +1310,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -1386,6 +1408,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             prunerStorage,
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -1436,6 +1459,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -1496,6 +1520,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -1588,6 +1613,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             mergeBlock,
             ChainDataPruner.PruningMode.PRE_MERGE_PRUNING,
@@ -1635,6 +1661,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -1675,6 +1702,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             new ChainDataPrunerStorage(new InMemoryKeyValueStorage()),
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,
@@ -1717,6 +1745,7 @@ public class ChainDataPrunerTest {
         new ChainDataPruner(
             blockchainStorage,
             () -> {},
+            blockHash -> {},
             prunerStorage,
             0,
             ChainDataPruner.PruningMode.CHAIN_PRUNING,

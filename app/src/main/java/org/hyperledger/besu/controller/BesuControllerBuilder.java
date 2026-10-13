@@ -127,6 +127,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import org.slf4j.Logger;
@@ -825,6 +826,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
           createChainPruner(
               blockchainStorage,
               () -> blockchain.removeObserver(chainDataPrunerObserverId.get()),
+              blockchain::evictCachedBlockAccessList,
               syncState);
       chainDataPrunerObserverId.set(blockchain.observeBlockAdded(pruner));
       chainDataPruner = Optional.of(pruner);
@@ -1502,6 +1504,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
   private ChainDataPruner createChainPruner(
       final BlockchainStorage blockchainStorage,
       final Runnable unsubscribeRunnable,
+      final Consumer<Hash> blockAccessListPrunedListener,
       final SyncState syncState) {
 
     final PruningMode mode = determineChainPrunerMode();
@@ -1509,6 +1512,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
     return new ChainDataPruner(
         blockchainStorage,
         unsubscribeRunnable,
+        blockAccessListPrunedListener,
         new ChainDataPrunerStorage(
             storageProvider.getStorageBySegmentIdentifier(
                 KeyValueSegmentIdentifier.CHAIN_PRUNER_STATE)),

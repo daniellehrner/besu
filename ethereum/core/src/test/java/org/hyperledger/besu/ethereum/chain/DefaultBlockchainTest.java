@@ -1097,13 +1097,13 @@ public class DefaultBlockchainTest {
   }
 
   @Test
-  public void blockAccessListIsCachedWithItsRlpWhenBlocksAreCached() {
+  public void blockAccessListIsCachedWithItsRlpWithoutCachingBlocks() {
     final BlockDataGenerator gen = new BlockDataGenerator();
     final Block genesisBlock = gen.genesisBlock();
     final KeyValueStorage kvStore = new InMemoryKeyValueStorage();
     final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
     final DefaultBlockchain blockchain =
-        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock, "/data/test", 512, 0);
+        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock);
     final Block newBlock =
         gen.block(new BlockOptions().setBlockNumber(1L).setParentHash(genesisBlock.getHash()));
     final BlockAccessList builtBlockAccessList = blockAccessList();
@@ -1112,33 +1112,61 @@ public class DefaultBlockchainTest {
 
     final BlockchainStorage storage = createStorage(kvStore, kvStoreVariables);
     assertThat(storage.getBlockAccessList(newBlock.getHash())).contains(builtBlockAccessList);
+    removeBlockAccessListFromStorage(storage, newBlock.getHash());
 
-    final BlockchainStorage.Updater updater = storage.updater();
-    updater.removeBlockAccessList(newBlock.getHash());
-    updater.commit();
-
+    assertThat(blockchain.getBlockAccessListRlp(newBlock.getHash()))
+        .contains(builtBlockAccessList.encode());
     final Optional<BlockAccessList> cached = blockchain.getBlockAccessList(newBlock.getHash());
     assertThat(cached).contains(builtBlockAccessList);
-    // peers are served the RLP, so it has to come with the list
     assertThat(cached.get().rawRlp()).contains(builtBlockAccessList.encode());
   }
 
   @Test
-  public void blockAccessListIsReadFromStorageWhenBlocksAreNotCached() {
+  public void blockAccessListIsReadFromStorageWhenNotCached() {
     final BlockDataGenerator gen = new BlockDataGenerator();
     final Block genesisBlock = gen.genesisBlock();
+    final KeyValueStorage kvStore = new InMemoryKeyValueStorage();
+    final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
     final DefaultBlockchain blockchain =
-        createMutableBlockchain(
-            new InMemoryKeyValueStorage(), new InMemoryKeyValueStorage(), genesisBlock);
+        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock);
+    final Hash blockHash = gen.hash();
+    final BlockAccessList storedBlockAccessList = blockAccessList();
+
+    final BlockchainStorage.Updater updater = createStorage(kvStore, kvStoreVariables).updater();
+    updater.putBlockAccessList(blockHash, storedBlockAccessList);
+    updater.commit();
+
+    assertThat(blockchain.getBlockAccessListRlp(blockHash))
+        .contains(storedBlockAccessList.encode());
+    final Optional<BlockAccessList> stored = blockchain.getBlockAccessList(blockHash);
+    assertThat(stored).contains(storedBlockAccessList);
+    assertThat(stored.get().rawRlp()).contains(storedBlockAccessList.encode());
+  }
+
+  @Test
+  public void evictedBlockAccessListIsNoLongerServedFromCache() {
+    final BlockDataGenerator gen = new BlockDataGenerator();
+    final Block genesisBlock = gen.genesisBlock();
+    final KeyValueStorage kvStore = new InMemoryKeyValueStorage();
+    final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
+    final DefaultBlockchain blockchain =
+        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock);
     final Block newBlock =
         gen.block(new BlockOptions().setBlockNumber(1L).setParentHash(genesisBlock.getHash()));
-    final BlockAccessList builtBlockAccessList = blockAccessList();
 
-    blockchain.appendBlock(newBlock, gen.receipts(newBlock), Optional.of(builtBlockAccessList));
+    blockchain.appendBlock(newBlock, gen.receipts(newBlock), Optional.of(blockAccessList()));
+    removeBlockAccessListFromStorage(createStorage(kvStore, kvStoreVariables), newBlock.getHash());
+    blockchain.evictCachedBlockAccessList(newBlock.getHash());
 
-    final Optional<BlockAccessList> stored = blockchain.getBlockAccessList(newBlock.getHash());
-    assertThat(stored).contains(builtBlockAccessList);
-    assertThat(stored.get().rawRlp()).contains(builtBlockAccessList.encode());
+    assertThat(blockchain.getBlockAccessListRlp(newBlock.getHash())).isEmpty();
+    assertThat(blockchain.getBlockAccessList(newBlock.getHash())).isEmpty();
+  }
+
+  private static void removeBlockAccessListFromStorage(
+      final BlockchainStorage storage, final Hash blockHash) {
+    final BlockchainStorage.Updater updater = storage.updater();
+    updater.removeBlockAccessList(blockHash);
+    updater.commit();
   }
 
   private static BlockAccessList blockAccessList() {
