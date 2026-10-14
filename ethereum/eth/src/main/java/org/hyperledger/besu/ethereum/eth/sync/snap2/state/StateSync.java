@@ -614,6 +614,13 @@ public final class StateSync {
     }
   }
 
+  private void queueStorageFirst(final StorageTask task) {
+    if (!task.queued) {
+      task.queued = true;
+      storageQueue.addFirst(task);
+    }
+  }
+
   // seenCodes only spares duplicate lookups of common bytecodes, it is bounded and may forget
   private void queueCode(final Bytes32 codeHash) {
     if (seenCodes.contains(codeHash) || codesInFlight.contains(codeHash)) {
@@ -759,16 +766,22 @@ public final class StateSync {
     }
     // a response serves the first storages asked, in order, the last one possibly cut short
     final int served = persisted == null ? 0 : persisted.served;
+    final List<StorageTask> unanswered = new ArrayList<>();
     for (int i = 0; i < request.tasks.size(); i++) {
       final StorageTask task = request.tasks.get(i);
       if (!isPending(task) || i < served - 1) {
         continue;
       }
       if (i >= served) {
-        queueStorage(task);
+        unanswered.add(task);
       } else if (!persisted.lastComplete) {
         splitIntoChunks(task, persisted.lastSlot, persisted.lastReturned);
       }
+    }
+    // asked for again before the storages queued after them, which keeps the order the sorted
+    // files take the slots in
+    for (int i = unanswered.size() - 1; i >= 0; i--) {
+      queueStorageFirst(unanswered.get(i));
     }
   }
 
