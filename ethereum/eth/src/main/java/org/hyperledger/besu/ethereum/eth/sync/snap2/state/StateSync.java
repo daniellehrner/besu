@@ -69,6 +69,8 @@ public final class StateSync {
   private static final int NO_EPOCH = -1;
   private static final int SEEN_CODES_LIMIT = 200_000;
   private static final int BYTES_PER_SLOT = 64;
+  // peers stop looking codes up after this many in one request
+  static final int MAX_CODES_PER_REQUEST = 1024;
 
   /** Current pivot; responses requested at another epoch are discarded. */
   public record Pivot(int epoch, BlockHeader header) {
@@ -117,6 +119,8 @@ public final class StateSync {
   private final AtomicLong accounts = new AtomicLong();
   private final AtomicLong slots = new AtomicLong();
   private final AtomicLong codes = new AtomicLong();
+  // the size of the codes received so far, which tells how many of them fit a response
+  private final AtomicLong codeBytes = new AtomicLong();
 
   public StateSync(
       final SyncStateStorage storage,
@@ -853,7 +857,8 @@ public final class StateSync {
   private boolean sendCodes() {
     final List<Bytes32> batch = new ArrayList<>();
     final Iterator<Bytes32> iterator = codeQueue.iterator();
-    while (iterator.hasNext() && batch.size() < config.codeBatchSize()) {
+    final int codesPerRequest = codesPerRequest();
+    while (iterator.hasNext() && batch.size() < codesPerRequest) {
       final Bytes32 codeHash = iterator.next();
       iterator.remove();
       if (!isStored(codeHash)) {
@@ -891,6 +896,21 @@ public final class StateSync {
     }
   }
 
+  /**
+   * As many codes as fit a response at the average size of the codes received so far, but not fewer
+   * than configured: a network of large codes keeps the configured count.
+   */
+  @VisibleForTesting
+  int codesPerRequest() {
+    final long received = codes.get();
+    if (received == 0) {
+      return config.codeBatchSize();
+    }
+    final long averageSize = Math.max(1, codeBytes.get() / received);
+    final long fitting = config.responseBytes() / averageSize;
+    return (int) Math.max(config.codeBatchSize(), Math.min(MAX_CODES_PER_REQUEST, fitting));
+  }
+
   private Set<Bytes32> persistCodes(final Map<Bytes32, Bytes> received) {
     final boolean written =
         withoutMoves(
@@ -903,6 +923,7 @@ public final class StateSync {
       return Set.of();
     }
     codes.addAndGet(received.size());
+    codeBytes.addAndGet(received.values().stream().mapToLong(Bytes::size).sum());
     return received.keySet();
   }
 

@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.eth.sync.snap2.state;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.awaitility.Awaitility.await;
 
 import org.hyperledger.besu.datatypes.Hash;
@@ -38,6 +39,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.LongStream;
 import java.util.stream.Stream;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -95,6 +97,35 @@ class StateSyncTest {
     final WorldStateTrieBuilder.Result built = build(storages);
     assertThat(built.root()).isEqualTo(world.root());
     assertThat(built.keptStorageTries()).isEqualTo(withStorage);
+  }
+
+  @Test
+  void asksForAsManyCodesAsFitAResponse() throws Exception {
+    final TestWorld world = TestWorld.random(new Random(3), 400, 3, 600);
+    network.serve(world);
+    stateSync = new StateSync(SyncStorageFixture.create(Format.BONSAI).sync(), network, config());
+
+    stateSync.start(header(1, world.root())).get(60, TimeUnit.SECONDS);
+
+    // codes of 1 to 300 bytes: a 4096 byte response holds far more than the 4 configured
+    final double averageSize =
+        world.codes().values().stream().mapToInt(Bytes::size).average().orElseThrow();
+    assertThat(stateSync.codesPerRequest()).isCloseTo((int) (4096 / averageSize), within(2));
+  }
+
+  @Test
+  void keepsTheConfiguredCodeCountWhenFewerFitAResponse() throws Exception {
+    final TestWorld world = TestWorld.random(new Random(3), 400, 3, 600);
+    network.serve(world);
+    stateSync =
+        new StateSync(
+            SyncStorageFixture.create(Format.BONSAI).sync(),
+            network,
+            config().toBuilder().codeBatchSize(200).build());
+
+    stateSync.start(header(1, world.root())).get(60, TimeUnit.SECONDS);
+
+    assertThat(stateSync.codesPerRequest()).isEqualTo(200);
   }
 
   @ParameterizedTest
