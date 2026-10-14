@@ -183,20 +183,28 @@ public final class BonsaiSyncStateStorage extends AbstractSyncStateStorage {
   }
 
   /**
-   * Sorts the storage nodes of each account and adds them to a file of the partition, which skips
-   * the compactions of the trie segment. The account nodes, and a storage too large to sort in
-   * memory, take the usual writes, the file being closed before such a storage so that it holds
-   * none of its keys.
+   * Writes the trie nodes of a partition as sorted files, which skip the compactions of the trie
+   * segment. The storage nodes of each account are sorted and added to the file of the partition. A
+   * storage too large to sort in memory gets files of its own, one sorted chunk at a time, and the
+   * file of the partition ends before it so that the two do not overlap. The account nodes of the
+   * partition go into a file of their own at the end. Nothing takes the usual writes: a memtable
+   * flushed during the build holds keys of every partition, and every file ingested after it would
+   * then stay in level 0.
    */
   private final class SortedStorageTrieWriter implements TrieWriter {
+    // the account nodes of a partition are held for as many bytes as this many storage chunks
+    private static final int ACCOUNT_NODE_CHUNKS = 8;
+
     private final TrieWriter usual;
-    private final List<StorageNode> nodes = new ArrayList<>();
+    private final List<SortedNode> nodes = new ArrayList<>();
+    private final List<SortedNode> accountNodes = new ArrayList<>();
     private Bytes32 accountHash;
     private long sortedBytes;
+    private long accountBytes;
     private boolean tooLarge;
     private SortedWriter file;
 
-    private record StorageNode(byte[] key, Bytes location, Bytes32 hash, Bytes rlp) {}
+    private record SortedNode(byte[] key, byte[] rlp) {}
 
     private SortedStorageTrieWriter(final TrieWriter usual) {
       this.usual = usual;
@@ -204,7 +212,15 @@ public final class BonsaiSyncStateStorage extends AbstractSyncStateStorage {
 
     @Override
     public void accountNode(final Bytes location, final Bytes32 hash, final Bytes rlp) {
-      usual.accountNode(location, hash, rlp);
+      if (hash.equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)) {
+        return;
+      }
+      accountNodes.add(new SortedNode(location.toArrayUnsafe(), rlp.toArrayUnsafe()));
+      accountBytes += location.size() + rlp.size();
+      if (accountBytes > ACCOUNT_NODE_CHUNKS * maxSortedStorageBytes) {
+        writeSorted(accountNodes);
+        accountBytes = 0;
+      }
     }
 
     @Override
@@ -217,18 +233,14 @@ public final class BonsaiSyncStateStorage extends AbstractSyncStateStorage {
         finishAccount();
         this.accountHash = accountHash.copy();
       }
-      if (tooLarge) {
-        usual.storageNode(accountHash, location, hash, rlp);
-        return;
-      }
       final byte[] key = TrieNodeKey.of(Hash.wrap(accountHash), location).toArrayUnsafe();
-      nodes.add(new StorageNode(key, location, hash, rlp));
+      nodes.add(new SortedNode(key, rlp.toArrayUnsafe()));
       sortedBytes += key.length + rlp.size();
       if (sortedBytes > maxSortedStorageBytes) {
+        // the storage gets files of its own: the file of the partition ends before it
         closeFile();
-        nodes.forEach(
-            node -> usual.storageNode(accountHash, node.location(), node.hash(), node.rlp()));
-        nodes.clear();
+        writeSorted(nodes);
+        sortedBytes = 0;
         tooLarge = true;
       }
     }
@@ -237,6 +249,8 @@ public final class BonsaiSyncStateStorage extends AbstractSyncStateStorage {
     public void commit() {
       finishAccount();
       closeFile();
+      writeSorted(accountNodes);
+      accountBytes = 0;
       usual.commit();
     }
 
@@ -246,15 +260,19 @@ public final class BonsaiSyncStateStorage extends AbstractSyncStateStorage {
         file.rollback();
         file = null;
       }
+      nodes.clear();
+      accountNodes.clear();
     }
 
     private void finishAccount() {
-      if (!nodes.isEmpty()) {
+      if (tooLarge) {
+        writeSorted(nodes);
+      } else if (!nodes.isEmpty()) {
         nodes.sort((a, b) -> Arrays.compareUnsigned(a.key(), b.key()));
         if (file == null) {
           file = flat.startSortedWriter(TRIE_BRANCH_STORAGE);
         }
-        nodes.forEach(node -> file.put(node.key(), node.rlp().toArrayUnsafe()));
+        nodes.forEach(node -> file.put(node.key(), node.rlp()));
       }
       nodes.clear();
       sortedBytes = 0;
@@ -266,6 +284,23 @@ public final class BonsaiSyncStateStorage extends AbstractSyncStateStorage {
         file.commit();
         file = null;
       }
+    }
+
+    // nodes in a file of their own, which RocksDB places as low as its key range allows
+    private void writeSorted(final List<SortedNode> sorted) {
+      if (sorted.isEmpty()) {
+        return;
+      }
+      sorted.sort((a, b) -> Arrays.compareUnsigned(a.key(), b.key()));
+      final SortedWriter own = flat.startSortedWriter(TRIE_BRANCH_STORAGE);
+      try {
+        sorted.forEach(node -> own.put(node.key(), node.rlp()));
+        own.commit();
+      } catch (final RuntimeException e) {
+        own.rollback();
+        throw e;
+      }
+      sorted.clear();
     }
   }
 
