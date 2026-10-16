@@ -14,8 +14,10 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.compareSigned;
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.pushLong;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.SGT;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -27,8 +29,6 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
  * significant 64 bits.
  */
 public class SGtOperationV2 extends AbstractFixedCostOperationV2 {
-
-  private static final OperationResult SGT_SUCCESS = new OperationResult(3, null);
 
   /**
    * Instantiates a new SGt operation.
@@ -53,12 +53,10 @@ public class SGtOperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    if (!frame.stackHasItemsV2(2)) return UNDERFLOW_RESPONSE;
-    final long[] stack = frame.stackDataV2();
-    final int top = frame.stackTopV2();
-    final boolean greaterThan = compareSigned(stack, (top - 1) << 2, (top - 2) << 2) > 0;
-    pushLong(greaterThan ? 1L : 0L, stack, top - 2);
-    frame.setTopV2(top - 1);
-    return SGT_SUCCESS;
+    final int sp = frame.stackTopV2();
+    return result(
+        frame,
+        LtOperationV2.compare(frame.stackDataV2(), sp, top(sp), SGT, ANY_GAS),
+        UNDERFLOW_RESPONSE);
   }
 }

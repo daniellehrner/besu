@@ -14,6 +14,9 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.isZeroWord;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.storeLong;
+
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.BytesHolder;
 import org.hyperledger.besu.datatypes.Wei;
@@ -49,11 +52,7 @@ final class StackUtil {
    * @param top the slot index to write to
    */
   static void pushZero(final long[] stack, final int top) {
-    final int offset = top << 2;
-    stack[offset] = 0;
-    stack[offset + 1] = 0;
-    stack[offset + 2] = 0;
-    stack[offset + 3] = 0;
+    storeLong(stack, top << 2, 0L);
   }
 
   /**
@@ -84,11 +83,7 @@ final class StackUtil {
    * @param top the slot index to write to
    */
   static void pushLong(final long value, final long[] stack, final int top) {
-    final int offset = top << 2;
-    stack[offset] = 0L;
-    stack[offset + 1] = 0L;
-    stack[offset + 2] = 0L;
-    stack[offset + 3] = value;
+    storeLong(stack, top << 2, value);
   }
 
   /**
@@ -224,8 +219,7 @@ final class StackUtil {
    * @return true if all four limbs are zero
    */
   static boolean isZeroAt(final long[] stack, final int top, final int depth) {
-    final int off = (top - 1 - depth) << 2;
-    return (stack[off] | stack[off + 1] | stack[off + 2] | stack[off + 3]) == 0;
+    return isZeroWord(stack, (top - 1 - depth) << 2);
   }
 
   /**
@@ -264,84 +258,6 @@ final class StackUtil {
       return Integer.MAX_VALUE;
     }
     return (int) u0;
-  }
-
-  /**
-   * Compares the words at two limb offsets as unsigned 256-bit integers.
-   *
-   * @param stack the flat limb array
-   * @param aOffset the limb offset of the first word
-   * @param bOffset the limb offset of the second word
-   * @return negative, zero or positive as the first word is less than, equal to or greater than the
-   *     second
-   */
-  static int compareUnsigned(final long[] stack, final int aOffset, final int bOffset) {
-    if (stack[aOffset] != stack[bOffset]) {
-      return Long.compareUnsigned(stack[aOffset], stack[bOffset]);
-    }
-    if (stack[aOffset + 1] != stack[bOffset + 1]) {
-      return Long.compareUnsigned(stack[aOffset + 1], stack[bOffset + 1]);
-    }
-    if (stack[aOffset + 2] != stack[bOffset + 2]) {
-      return Long.compareUnsigned(stack[aOffset + 2], stack[bOffset + 2]);
-    }
-    return Long.compareUnsigned(stack[aOffset + 3], stack[bOffset + 3]);
-  }
-
-  /**
-   * Compares the words at two limb offsets as two's complement signed 256-bit integers.
-   *
-   * @param stack the flat limb array
-   * @param aOffset the limb offset of the first word
-   * @param bOffset the limb offset of the second word
-   * @return negative, zero or positive as the first word is less than, equal to or greater than the
-   *     second
-   */
-  static int compareSigned(final long[] stack, final int aOffset, final int bOffset) {
-    if (stack[aOffset] != stack[bOffset]) {
-      return Long.compare(stack[aOffset], stack[bOffset]);
-    }
-    return compareUnsigned(stack, aOffset, bOffset);
-  }
-
-  /**
-   * Copies the 256-bit word at one stack slot to another.
-   *
-   * @param stack the flat limb array
-   * @param from the slot index to read
-   * @param to the slot index to write
-   */
-  static void copyWord(final long[] stack, final int from, final int to) {
-    final int src = from << 2;
-    final int dst = to << 2;
-    stack[dst] = stack[src];
-    stack[dst + 1] = stack[src + 1];
-    stack[dst + 2] = stack[src + 2];
-    stack[dst + 3] = stack[src + 3];
-  }
-
-  /**
-   * Exchanges the 256-bit words at two stack slots.
-   *
-   * @param stack the flat limb array
-   * @param a the first slot index
-   * @param b the second slot index
-   */
-  static void swapWords(final long[] stack, final int a, final int b) {
-    final int aOffset = a << 2;
-    final int bOffset = b << 2;
-    final long a0 = stack[aOffset];
-    final long a1 = stack[aOffset + 1];
-    final long a2 = stack[aOffset + 2];
-    final long a3 = stack[aOffset + 3];
-    stack[aOffset] = stack[bOffset];
-    stack[aOffset + 1] = stack[bOffset + 1];
-    stack[aOffset + 2] = stack[bOffset + 2];
-    stack[aOffset + 3] = stack[bOffset + 3];
-    stack[bOffset] = a0;
-    stack[bOffset + 1] = a1;
-    stack[bOffset + 2] = a2;
-    stack[bOffset + 3] = a3;
   }
 
   /**

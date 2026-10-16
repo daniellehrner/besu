@@ -14,7 +14,7 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.swapWords;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.swapLimbs;
 
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
@@ -74,7 +74,7 @@ public class ExchangeOperationV2 extends AbstractFixedCostOperationV2 {
     final int m = Eip8024Decoder.unpackM(packed);
     if (!frame.stackHasItemsV2(Math.max(n, m) + 1)) return EXCHANGE_UNDERFLOW;
     final int top = frame.stackTopV2();
-    swapWords(frame.stackDataV2(), top - 1 - n, top - 1 - m);
+    swapLimbs(frame.stackDataV2(), (top - 1 - n) << 2, (top - 1 - m) << 2);
     return EXCHANGE_SUCCESS;
   }
 }

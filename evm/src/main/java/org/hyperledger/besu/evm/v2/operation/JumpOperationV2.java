@@ -14,7 +14,17 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.JUMPDEST_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.MID_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.analysedCode;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.isJumpDestinationAt;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.jumpResult;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.jumped;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
+
+import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 
@@ -25,10 +35,6 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
  * significant 64 bits.
  */
 public class JumpOperationV2 extends AbstractFixedCostOperationV2 {
-
-  private static final OperationResult INVALID_JUMP_RESPONSE =
-      new OperationResult(8L, ExceptionalHaltReason.INVALID_JUMP_DESTINATION);
-  private static final OperationResult JUMP_RESPONSE = new OperationResult(8L, null, 0);
 
   /**
    * Instantiates a new Jump operation.
@@ -53,37 +59,33 @@ public class JumpOperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    if (!frame.stackHasItemsV2(1)) return UNDERFLOW_RESPONSE;
-    final int top = frame.stackTopV2();
-    frame.setTopV2(top - 1);
-    return performJump(
-        frame, frame.stackDataV2(), (top - 1) << 2, JUMP_RESPONSE, INVALID_JUMP_RESPONSE);
+    final int sp = frame.stackTopV2();
+    return jumpResult(
+        frame,
+        jump(frame.stackDataV2(), sp, top(sp), frame.getPC(), analysedCode(frame), false, ANY_GAS));
   }
 
-  /**
-   * Jumps to the destination word at the given limb offset if it is a JUMPDEST.
-   *
-   * @param frame the message frame
-   * @param stack the flat limb array
-   * @param destinationOffset the limb offset of the destination word
-   * @param jumpResponse the result of a valid jump
-   * @param invalidJumpResponse the result of a jump to anything but a JUMPDEST
-   * @return the operation result
-   */
-  static OperationResult performJump(
-      final MessageFrame frame,
-      final long[] stack,
-      final int destinationOffset,
-      final OperationResult jumpResponse,
-      final OperationResult invalidJumpResponse) {
-    final long destination = stack[destinationOffset + 3];
-    if ((stack[destinationOffset] | stack[destinationOffset + 1] | stack[destinationOffset + 2])
-            != 0
-        || Long.compareUnsigned(destination, Integer.MAX_VALUE) > 0
-        || frame.getCode().isJumpDestInvalid((int) destination)) {
-      return invalidJumpResponse;
+  /** JUMP, and in the untraced loop also the JUMPDEST it lands on. */
+  @InlineInEvmLoop(opcodes = 0x56)
+  static long jump(
+      final long[] s,
+      final int sp,
+      final int top,
+      final int pc,
+      final Code codeObject,
+      final boolean untraced,
+      final long gas) {
+    if (sp >= 1 && gas >= MID_TIER_GAS) {
+      final int d = top;
+      if (isJumpDestinationAt(s, d, codeObject)) {
+        final int destination = (int) s[d + 3];
+        if (untraced && gas >= MID_TIER_GAS + JUMPDEST_GAS) {
+          // no tracer sees the JUMPDEST as an operation of its own
+          return jumped(MID_TIER_GAS + JUMPDEST_GAS, destination + 1 - pc, -1);
+        }
+        return jumped(MID_TIER_GAS, destination - pc, -1);
+      }
     }
-    frame.setPC((int) destination);
-    return jumpResponse;
+    return FALLBACK;
   }
 }

@@ -19,8 +19,6 @@ import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import org.hyperledger.besu.evm.UInt256;
 
-import java.math.BigInteger;
-import java.util.Random;
 import java.util.stream.Stream;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -57,25 +55,6 @@ class StackUtilTest {
   })
   void clampsToInt(final String word, final int expected) {
     assertThat(StackUtil.clampedToInt(stackOf(word), 1, 0)).isEqualTo(expected);
-  }
-
-  @Test
-  void comparesLikeBigInteger() {
-    final Random random = new Random(7);
-    for (int i = 0; i < 2_000; i++) {
-      final byte[] a = randomWord(random);
-      final byte[] b = randomWord(random);
-      // share 0 to 4 leading limbs, so that the comparison has to look further down
-      System.arraycopy(a, 0, b, 0, 8 * random.nextInt(5));
-      final long[] stack = new long[8];
-      StackUtil.pushBytes32(Bytes32.wrap(a), stack, 0);
-      StackUtil.pushBytes32(Bytes32.wrap(b), stack, 1);
-
-      assertThat(Integer.signum(StackUtil.compareUnsigned(stack, 0, 4)))
-          .isEqualTo(new BigInteger(1, a).compareTo(new BigInteger(1, b)));
-      assertThat(Integer.signum(StackUtil.compareSigned(stack, 0, 4)))
-          .isEqualTo(new BigInteger(a).compareTo(new BigInteger(b)));
-    }
   }
 
   @Test
@@ -341,12 +320,6 @@ class StackUtilTest {
     final long[] stack = new long[4];
     StackUtil.pushBytes32(Bytes32.fromHexString(word), stack, 0);
     return stack;
-  }
-
-  private static byte[] randomWord(final Random random) {
-    final byte[] word = new byte[32];
-    random.nextBytes(word);
-    return word;
   }
 
   private static byte[] hex(final String s) {

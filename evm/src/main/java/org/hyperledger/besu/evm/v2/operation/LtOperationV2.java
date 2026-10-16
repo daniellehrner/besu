@@ -14,8 +14,15 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.compareUnsigned;
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.pushLong;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.LT;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.SLT;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.storeLong;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -27,8 +34,6 @@ import org.hyperledger.besu.evm.gascalculator.GasCalculator;
  * significant 64 bits.
  */
 public class LtOperationV2 extends AbstractFixedCostOperationV2 {
-
-  private static final OperationResult LT_SUCCESS = new OperationResult(3, null);
 
   /**
    * Instantiates a new Lt operation.
@@ -53,12 +58,32 @@ public class LtOperationV2 extends AbstractFixedCostOperationV2 {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    if (!frame.stackHasItemsV2(2)) return UNDERFLOW_RESPONSE;
-    final long[] stack = frame.stackDataV2();
-    final int top = frame.stackTopV2();
-    final boolean lessThan = compareUnsigned(stack, (top - 1) << 2, (top - 2) << 2) < 0;
-    pushLong(lessThan ? 1L : 0L, stack, top - 2);
-    frame.setTopV2(top - 1);
-    return LT_SUCCESS;
+    final int sp = frame.stackTopV2();
+    return result(
+        frame, compare(frame.stackDataV2(), sp, top(sp), LT, ANY_GAS), UNDERFLOW_RESPONSE);
+  }
+
+  /** LT, GT, SLT and SGT: compare the top item with the one below it, which the result replaces. */
+  @InlineInEvmLoop(first = 0x10, last = 0x13)
+  static long compare(
+      final long[] s, final int sp, final int top, final int opcode, final long gas) {
+    if (sp >= 2 && gas >= VERY_LOW_TIER_GAS) {
+      final int a = top;
+      final int b = a - 4;
+      // the most significant limb in which the two differ, or the least significant one
+      final int i = s[a] != s[b] ? 0 : s[a + 1] != s[b + 1] ? 1 : s[a + 2] != s[b + 2] ? 2 : 3;
+      long x = s[a + i];
+      long y = s[b + i];
+      if (i == 0 && opcode >= SLT) {
+        // signed: flipping the sign bits makes the unsigned comparison a signed one
+        x ^= Long.MIN_VALUE;
+        y ^= Long.MIN_VALUE;
+      }
+      final int comparison = Long.compareUnsigned(x, y);
+      final boolean lessThan = opcode == LT || opcode == SLT;
+      storeLong(s, b, (lessThan ? comparison < 0 : comparison > 0) ? 1L : 0L);
+      return done(VERY_LOW_TIER_GAS, 1, -1);
+    }
+    return FALLBACK;
   }
 }
