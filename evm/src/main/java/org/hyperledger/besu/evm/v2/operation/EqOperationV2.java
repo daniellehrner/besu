@@ -14,11 +14,10 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ANY_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.FALLBACK;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.VERY_LOW_TIER_GAS;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.done;
-import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.result;
+import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.ran;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.storeLong;
 import static org.hyperledger.besu.evm.v2.operation.EvmLoopInlining.top;
 
@@ -65,9 +64,16 @@ public class EqOperationV2 extends AbstractOperationV2 {
    * @return the operation result
    */
   public static OperationResult staticOperation(final MessageFrame frame) {
-    if (frame.getRemainingGas() < VERY_LOW_TIER_GAS) return EQ_OUT_OF_GAS;
     final int sp = frame.stackTopV2();
-    return result(frame, eq(frame.stackDataV2(), sp, top(sp), ANY_GAS), EQ_UNDERFLOW);
+    return eqResult(frame, eq(frame.stackDataV2(), sp, top(sp), frame.getRemainingGas()));
+  }
+
+  // a method of its own so that staticOperation stays within C2's MaxInlineSize of 35 bytes
+  private static OperationResult eqResult(final MessageFrame frame, final long outcome) {
+    if (outcome != FALLBACK) {
+      return ran(frame, outcome);
+    }
+    return frame.getRemainingGas() < VERY_LOW_TIER_GAS ? EQ_OUT_OF_GAS : EQ_UNDERFLOW;
   }
 
   /** EQ: whether the top item equals the one below it, which the result replaces. */
