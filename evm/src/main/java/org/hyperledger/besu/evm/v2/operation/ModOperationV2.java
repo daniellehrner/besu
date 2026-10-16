@@ -14,7 +14,6 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import org.hyperledger.besu.evm.UInt256;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 
@@ -50,21 +49,8 @@ public class ModOperationV2 extends AbstractFixedCostOperationV2 {
     long[] stack = frame.stackDataV2();
     int top = frame.stackTopV2();
     final int numOffset = (top - 1) << 2;
-    final UInt256 num =
-        new UInt256(
-            stack[numOffset], stack[numOffset + 1], stack[numOffset + 2], stack[numOffset + 3]);
     final int modulusOffset = (top - 2) << 2;
-    final UInt256 modulus =
-        new UInt256(
-            stack[modulusOffset],
-            stack[modulusOffset + 1],
-            stack[modulusOffset + 2],
-            stack[modulusOffset + 3]);
-    final UInt256 result = num.mod(modulus);
-    stack[modulusOffset] = result.u3();
-    stack[modulusOffset + 1] = result.u2();
-    stack[modulusOffset + 2] = result.u1();
-    stack[modulusOffset + 3] = result.u0();
+    StackArithmetic.mod(stack, numOffset, modulusOffset, modulusOffset);
     frame.setTopV2(top - 1);
     return modSuccess;
   }

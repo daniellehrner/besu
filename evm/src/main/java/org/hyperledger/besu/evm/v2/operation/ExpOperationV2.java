@@ -15,7 +15,6 @@
 package org.hyperledger.besu.evm.v2.operation;
 
 import org.hyperledger.besu.evm.EVM;
-import org.hyperledger.besu.evm.UInt256;
 import org.hyperledger.besu.evm.frame.ExceptionalHaltReason;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
@@ -65,15 +64,7 @@ public class ExpOperationV2 extends AbstractOperationV2 {
       return new OperationResult(cost, ExceptionalHaltReason.INSUFFICIENT_GAS);
     }
 
-    final UInt256 base =
-        new UInt256(
-            stack[baseOffset], stack[baseOffset + 1], stack[baseOffset + 2], stack[baseOffset + 3]);
-    final UInt256 result = power(base, stack, exponentOffset, exponentBits);
-
-    stack[exponentOffset] = result.u3();
-    stack[exponentOffset + 1] = result.u2();
-    stack[exponentOffset + 2] = result.u1();
-    stack[exponentOffset + 3] = result.u0();
+    StackArithmetic.power(stack, baseOffset, exponentOffset, exponentBits, exponentOffset);
     frame.setTopV2(top - 1);
     return new OperationResult(cost, null);
   }
@@ -89,20 +80,5 @@ public class ExpOperationV2 extends AbstractOperationV2 {
       return 128 - Long.numberOfLeadingZeros(stack[offset + 2]);
     }
     return 64 - Long.numberOfLeadingZeros(stack[offset + 3]);
-  }
-
-  // Square and multiply over the exponent bits, most significant first; the multiplications wrap,
-  // which reduces modulo 2^256.
-  private static UInt256 power(
-      final UInt256 base, final long[] stack, final int exponentOffset, final int exponentBits) {
-    UInt256 result = UInt256.ONE;
-    for (int bit = exponentBits - 1; bit >= 0; bit--) {
-      result = result.mul(result);
-      final long limb = stack[exponentOffset + 3 - (bit >>> 6)];
-      if (((limb >>> (bit & 63)) & 1L) != 0) {
-        result = result.mul(base);
-      }
-    }
-    return result;
   }
 }

@@ -14,7 +14,6 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import org.hyperledger.besu.evm.UInt256;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 
@@ -55,15 +54,10 @@ public class NotOperationV2 extends AbstractFixedCostOperationV2 {
     long[] stack = frame.stackDataV2();
     final int aOffset = (frame.stackTopV2() - 1) << 2;
 
-    final UInt256 valueA =
-        new UInt256(stack[aOffset], stack[aOffset + 1], stack[aOffset + 2], stack[aOffset + 3]);
-
-    final UInt256 r = valueA.not();
-
-    stack[aOffset] = r.u3();
-    stack[aOffset + 1] = r.u2();
-    stack[aOffset + 2] = r.u1();
-    stack[aOffset + 3] = r.u0();
+    stack[aOffset] = ~stack[aOffset];
+    stack[aOffset + 1] = ~stack[aOffset + 1];
+    stack[aOffset + 2] = ~stack[aOffset + 2];
+    stack[aOffset + 3] = ~stack[aOffset + 3];
 
     return SUCCESS;
   }

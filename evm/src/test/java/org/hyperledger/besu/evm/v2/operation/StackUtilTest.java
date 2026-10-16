@@ -231,7 +231,9 @@ class StackUtilTest {
   @ParameterizedTest
   @MethodSource("fromBytesBERangeCases")
   void fromBytesBERange(final byte[] bytes, final int[] bounds, final UInt256 expected) {
-    assertThat(StackUtil.fromBytesBE(bytes, bounds[0], bounds[1])).isEqualTo(expected);
+    final long[] s = new long[4];
+    StackUtil.putBytesBE(s, 0, bytes, bounds[0], bounds[1], 0);
+    assertThat(new UInt256(s[0], s[1], s[2], s[3])).isEqualTo(expected);
   }
 
   private static Stream<Arguments> getLongBECases() {

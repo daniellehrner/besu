@@ -14,10 +14,9 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import static org.hyperledger.besu.evm.v2.operation.StackUtil.fromBytesBE;
 import static org.hyperledger.besu.evm.v2.operation.StackUtil.getLongBE;
+import static org.hyperledger.besu.evm.v2.operation.StackUtil.putBytesBE;
 
-import org.hyperledger.besu.evm.UInt256;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.internal.OverflowException;
 import org.hyperledger.besu.evm.operation.Operation.OperationResult;
@@ -34,20 +33,6 @@ public final class PushOperationV2 {
   private static final OperationResult push0Success = new OperationResult(2, null);
 
   private PushOperationV2() {}
-
-  private static void pushUInt256ToStack(final MessageFrame frame, final UInt256 pushValue) {
-    if (!frame.ensureStackCapacityV2(1)) {
-      throw new OverflowException();
-    }
-    final long[] stack = frame.stackDataV2();
-    final int top = frame.stackTopV2();
-    final int offset = top << 2;
-    stack[offset] = pushValue.u3();
-    stack[offset + 1] = pushValue.u2();
-    stack[offset + 2] = pushValue.u1();
-    stack[offset + 3] = pushValue.u0();
-    frame.setTopV2(top + 1);
-  }
 
   private static void pushLongToStack(final MessageFrame frame, final long u0) {
     if (!frame.ensureStackCapacityV2(1)) {
@@ -146,14 +131,19 @@ public final class PushOperationV2 {
       final int start = pc + 1;
       final int end = start + pushSize;
       final int remainingSize = Math.min(end, code.length) - start;
-      UInt256 pushValue = fromBytesBE(code, start, remainingSize);
-
-      // Slow-path - when push is truncated and zeros need to be appended
-      if (end > code.length) {
-        pushValue = pushValue.shiftLeft((pushSize - remainingSize) * 8);
+      if (!frame.ensureStackCapacityV2(1)) {
+        throw new OverflowException();
       }
-
-      pushUInt256ToStack(frame, pushValue);
+      final int top = frame.stackTopV2();
+      // Slow-path - when push is truncated and zeros need to be appended
+      putBytesBE(
+          frame.stackDataV2(),
+          top << 2,
+          code,
+          start,
+          remainingSize,
+          end > code.length ? (pushSize - remainingSize) * 8 : 0);
+      frame.setTopV2(top + 1);
       frame.setPC(pc + pushSize);
       return pushSuccess;
     }

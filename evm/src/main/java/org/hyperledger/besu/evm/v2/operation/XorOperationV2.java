@@ -14,7 +14,6 @@
  */
 package org.hyperledger.besu.evm.v2.operation;
 
-import org.hyperledger.besu.evm.UInt256;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.gascalculator.GasCalculator;
 
@@ -57,17 +56,10 @@ public class XorOperationV2 extends AbstractFixedCostOperationV2 {
     final int aOffset = (top - 1) << 2;
     final int bOffset = (top - 2) << 2;
 
-    final UInt256 valueA =
-        new UInt256(stack[aOffset], stack[aOffset + 1], stack[aOffset + 2], stack[aOffset + 3]);
-    final UInt256 valueB =
-        new UInt256(stack[bOffset], stack[bOffset + 1], stack[bOffset + 2], stack[bOffset + 3]);
-
-    final UInt256 r = valueA.xor(valueB);
-
-    stack[bOffset] = r.u3();
-    stack[bOffset + 1] = r.u2();
-    stack[bOffset + 2] = r.u1();
-    stack[bOffset + 3] = r.u0();
+    stack[bOffset] ^= stack[aOffset];
+    stack[bOffset + 1] ^= stack[aOffset + 1];
+    stack[bOffset + 2] ^= stack[aOffset + 2];
+    stack[bOffset + 3] ^= stack[aOffset + 3];
 
     frame.setTopV2(top - 1);
     return SUCCESS;

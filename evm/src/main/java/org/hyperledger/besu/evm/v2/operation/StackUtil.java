@@ -17,7 +17,6 @@ package org.hyperledger.besu.evm.v2.operation;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.BytesHolder;
 import org.hyperledger.besu.datatypes.Wei;
-import org.hyperledger.besu.evm.UInt256;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
@@ -345,17 +344,25 @@ final class StackUtil {
   }
 
   /**
-   * Convert {@code length} bytes starting at {@code offset} (inclusive) to a UInt256 value. If
-   * {@code length} is less than 32, the most significant bytes of the UInt256 are set to 0. If
-   * {@code length} is greater than 32, the most significant bytes are truncated (the low-order 32
-   * bytes are kept).
+   * Writes {@code length} bytes starting at {@code offset} (inclusive), as a big-endian value
+   * shifted left by {@code shift} bits, into the stack slot at {@code out}. If {@code length} is
+   * less than 32, the most significant bytes are 0. If {@code length} is greater than 32, the most
+   * significant bytes are truncated (the low-order 32 bytes are kept).
    *
+   * @param s the stack
+   * @param out the offset of the slot's first limb
    * @param bytes raw bytes in BigEndian order.
    * @param offset start index of the bytes array to convert, inclusive
    * @param length amount of bytes to take for conversion, caller must ensure >= 0 - unguarded
-   * @return Big-endian UInt256 represented by the bytes.
+   * @param shift the left shift, 0 to 256 bits
    */
-  static UInt256 fromBytesBE(final byte[] bytes, final int offset, final int length) {
+  static void putBytesBE(
+      final long[] s,
+      final int out,
+      final byte[] bytes,
+      final int offset,
+      final int length,
+      final int shift) {
     long u0 = 0, u1 = 0, u2 = 0, u3 = 0;
     int end = offset + length;
     if (bytes.length >= 8) {
@@ -367,11 +374,14 @@ final class StackUtil {
       u1 = getLongUnsafe(bytes, i1, i0);
       u2 = getLongUnsafe(bytes, i2, i1);
       u3 = getLongUnsafe(bytes, i3, i2);
-      return new UInt256(u3, u2, u1, u0);
     } else if (bytes.length != 0) {
       u0 = getLongSlow(bytes, offset, end);
     }
-    return new UInt256(u3, u2, u1, u0);
+    if (shift == 0) {
+      StackArithmetic.put(s, out, u3, u2, u1, u0);
+    } else {
+      StackArithmetic.shl(s, out, u3, u2, u1, u0, shift);
+    }
   }
 
   /**
