@@ -23,6 +23,7 @@ import org.hyperledger.besu.datatypes.VersionedHash;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
 import org.hyperledger.besu.evm.internal.AddressStorageSlotKey;
+import org.hyperledger.besu.evm.internal.WarmAddressSet;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -45,7 +46,7 @@ public class TxValues {
 
   private final BlockHashLookup blockHashLookup;
   private final int maxStackSize;
-  private final UndoSet<Address> warmedUpAddresses;
+  private final WarmAddressSet warmedUpAddresses;
   private final UndoTable<Address, Bytes32, Boolean> warmedUpStorage;
   private final Address originator;
   private final Wei gasPrice;
@@ -64,7 +65,7 @@ public class TxValues {
   TxValues(
       final BlockHashLookup blockHashLookup,
       final int maxStackSize,
-      final UndoSet<Address> warmedUpAddresses,
+      final WarmAddressSet warmedUpAddresses,
       final UndoTable<Address, Bytes32, Boolean> warmedUpStorage,
       final Address originator,
       final Wei gasPrice,
@@ -118,7 +119,7 @@ public class TxValues {
   public static TxValues forTransaction(
       final BlockHashLookup blockHashLookup,
       final int maxStackSize,
-      final UndoSet<Address> warmedUpAddresses,
+      final WarmAddressSet warmedUpAddresses,
       final Address originator,
       final Wei gasPrice,
       final Wei blobGasPrice,
@@ -185,7 +186,7 @@ public class TxValues {
    *
    * @return the warmed-up addresses
    */
-  public UndoSet<Address> warmedUpAddresses() {
+  public WarmAddressSet warmedUpAddresses() {
     return warmedUpAddresses;
   }
 

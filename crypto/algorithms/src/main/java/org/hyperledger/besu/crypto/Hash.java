@@ -31,8 +31,9 @@ import org.apache.tuweni.bytes.Bytes32;
 public abstract class Hash {
   private Hash() {}
 
-  private static final Supplier<MessageDigest> KECCAK256_SUPPLIER =
-      Suppliers.memoize(() -> messageDigest(KECCAK256_ALG));
+  // one digest per thread: cloning a keccak digest for every call copies the whole sponge state
+  private static final ThreadLocal<MessageDigest> KECCAK256_DIGEST =
+      ThreadLocal.withInitial(() -> messageDigest(KECCAK256_ALG));
   private static final ThreadLocal<MessageDigest> SHA256_DIGEST =
       ThreadLocal.withInitial(() -> messageDigest(SHA256_ALG));
   private static final Supplier<MessageDigest> RIPEMD160_SUPPLIER =
@@ -85,7 +86,9 @@ public abstract class Hash {
    * @return A digest.
    */
   public static Bytes32 keccak256(final Bytes input) {
-    return Bytes32.wrap(digestUsingAlgorithm(input, KECCAK256_SUPPLIER));
+    final MessageDigest digest = KECCAK256_DIGEST.get();
+    input.update(digest);
+    return Bytes32.wrap(digest.digest());
   }
 
   /**
