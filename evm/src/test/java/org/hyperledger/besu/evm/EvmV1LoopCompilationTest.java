@@ -229,6 +229,19 @@ class EvmV1LoopCompilationTest {
       a.hex("60011550 601919 50 60ff60000b50 5f50 5a50 3650 60003550");
       a.hex("602a600052 60005150 630102030450");
       a.hex("7f" + "11".repeat(32) + "50");
+      a.hex("73" + "22".repeat(20) + "50"); // PUSH20, an address
+      // operands of every width and zero, as on a node, so that C2 sees every path of the
+      // operations as taken
+      final String wide = "7f" + "ff".repeat(32);
+      final String high = "7f01" + "00".repeat(31);
+      for (final String operation : new String[] {"01", "03", "10", "11", "14", "16"}) {
+        a.hex(wide + high + operation + "50");
+        a.hex("5f" + wide + operation + "50");
+        a.hex(wide + "5f" + operation + "50");
+        a.hex("6007" + high + operation + "50");
+        a.hex(high + "6007" + operation + "50");
+      }
+      a.hex(wide + "1550 5f1550 " + high + "1550");
       a.hex("808080 90 91 81 50505050"); // DUP1 x3, SWAP1, SWAP2, DUP2, POP x4
       a.hex("602060002050"); // KECCAK256, through the general path
       a.hex("60005450"); // SLOAD, through the general path
