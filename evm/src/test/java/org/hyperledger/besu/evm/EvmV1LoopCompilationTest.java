@@ -65,9 +65,10 @@ class EvmV1LoopCompilationTest {
 
   /**
    * The most the loop and everything inlined into it may take of C2's 8000, leaving room for what a
-   * newer JDK or library inlines more.
+   * newer JDK or library inlines more. Past the 8000 C2 makes calls of the last operations of the
+   * switch, but not of the loop's own steps, which it inlines first.
    */
-  private static final int BUDGET = 7000;
+  private static final int BUDGET = 7500;
 
   /** One call site in C2's report: the bci, the callee, its size and what C2 decided. */
   private static final Pattern CALL =
