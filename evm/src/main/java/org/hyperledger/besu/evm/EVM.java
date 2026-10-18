@@ -247,15 +247,37 @@ public class EVM {
     }
     evmSpecVersion.maybeWarnVersion();
 
-    byte[] code = frame.getCode().getBytes().toArrayUnsafe();
-    Operation[] operationArray = operations.getOperations();
-    // A node that builds blocks also runs this loop with the interruptible selection tracer, so the
-    // tracer call sites are not monomorphic; skip them entirely when tracing is disabled.
-    final boolean tracingEnabled = operationTracer.isEnabled();
-    while (frame.getState() == MessageFrame.State.CODE_EXECUTING) {
-      Operation currentOperation;
-      int opcode;
-      int pc = frame.getPC();
+    // A node that builds blocks also runs with the interruptible selection tracer, so the tracer
+    // call sites are not monomorphic; untraced execution runs a loop without them.
+    if (operationTracer.isEnabled()) {
+      runToHaltTraced(frame, operationTracer);
+    } else {
+      runToHaltUntraced(frame);
+    }
+  }
+
+  /**
+   * The interpreter loop for untraced execution, which is every block import. Only the most
+   * frequent operations are dispatched here, in order of mainnet frequency, and everything else
+   * goes through {@link #executeOperation}, so that C2 can inline them and the loop's own steps
+   * into it. C2 inlines in parse order into one budget of 8000 bytes of bytecode for the loop and
+   * everything inlined into it, so the previous operation's result is applied first, before C2
+   * reaches any operation (EvmV1LoopCompilationTest).
+   */
+  private void runToHaltUntraced(final MessageFrame frame) {
+    final byte[] code = frame.getCode().getBytes().toArrayUnsafe();
+    final Operation[] operationArray = operations.getOperations();
+    OperationResult result = null;
+    while (true) {
+      if (result != null) {
+        completeOperation(frame, result);
+      }
+      if (frame.getState() != State.CODE_EXECUTING) {
+        return;
+      }
+      final int pc = frame.getPC();
+      final int opcode;
+      final Operation currentOperation;
       if (pc < code.length) {
         opcode = code[pc] & 0xff;
         currentOperation = operationArray[opcode];
@@ -264,109 +286,9 @@ public class EVM {
         currentOperation = endOfScriptStop;
       }
       frame.setCurrentOperation(currentOperation);
-      if (tracingEnabled) {
-        operationTracer.tracePreExecution(frame);
-      }
-
-      OperationResult result;
       try {
         result =
             switch (opcode) {
-              case 0x00 -> StopOperation.staticOperation(frame);
-              case 0x01 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? AddOperationOptimized.staticOperation(frame)
-                      : AddOperation.staticOperation(frame);
-              case 0x02 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? MulOperationOptimized.staticOperation(frame)
-                      : MulOperation.staticOperation(frame);
-              case 0x03 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? SubOperationOptimized.staticOperation(frame)
-                      : SubOperation.staticOperation(frame);
-              case 0x04 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? DivOperationOptimized.staticOperation(frame)
-                      : DivOperation.staticOperation(frame);
-              case 0x05 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? SDivOperationOptimized.staticOperation(frame)
-                      : SDivOperation.staticOperation(frame);
-              case 0x06 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? ModOperationOptimized.staticOperation(frame)
-                      : ModOperation.staticOperation(frame);
-              case 0x07 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? SModOperationOptimized.staticOperation(frame)
-                      : SModOperation.staticOperation(frame);
-              case 0x08 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? AddModOperationOptimized.staticOperation(frame)
-                      : AddModOperation.staticOperation(frame);
-              case 0x09 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? MulModOperationOptimized.staticOperation(frame)
-                      : MulModOperation.staticOperation(frame);
-              case 0x0a -> ExpOperation.staticOperation(frame, gasCalculator);
-              case 0x0b -> SignExtendOperation.staticOperation(frame);
-              case 0x0c, 0x0d, 0x0e, 0x0f -> InvalidOperation.invalidOperationResult(opcode);
-              case 0x10 -> LtOperation.staticOperation(frame);
-              case 0x11 -> GtOperation.staticOperation(frame);
-              case 0x12 -> SLtOperation.staticOperation(frame);
-              case 0x13 -> SGtOperation.staticOperation(frame);
-              case 0x15 -> IsZeroOperation.staticOperation(frame);
-              case 0x16 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? AndOperationOptimized.staticOperation(frame)
-                      : AndOperation.staticOperation(frame);
-              case 0x17 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? OrOperationOptimized.staticOperation(frame)
-                      : OrOperation.staticOperation(frame);
-              case 0x18 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? XorOperationOptimized.staticOperation(frame)
-                      : XorOperation.staticOperation(frame);
-              case 0x19 ->
-                  evmConfiguration.enableOptimizedOpcodes()
-                      ? NotOperationOptimized.staticOperation(frame)
-                      : NotOperation.staticOperation(frame);
-              case 0x1a -> ByteOperation.staticOperation(frame);
-              case 0x1b ->
-                  enableConstantinople
-                      ? shiftOperation(
-                          frame,
-                          ShlOperation::staticOperation,
-                          ShlOperationOptimized::staticOperation)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x1c ->
-                  enableConstantinople
-                      ? shiftOperation(
-                          frame,
-                          ShrOperation::staticOperation,
-                          ShrOperationOptimized::staticOperation)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x1d ->
-                  enableConstantinople
-                      ? shiftOperation(
-                          frame,
-                          SarOperation::staticOperation,
-                          SarOperationOptimized::staticOperation)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x1e ->
-                  enableOsaka
-                      ? CountLeadingZerosOperation.staticOperation(frame)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0x50 -> PopOperation.staticOperation(frame);
-              case 0x56 -> JumpOperation.staticOperation(frame);
-              case 0x57 -> JumpiOperation.staticOperation(frame);
-              case 0x5b -> JumpDestOperation.JUMPDEST_SUCCESS;
-              case 0x5f ->
-                  enableShanghai
-                      ? Push0Operation.staticOperation(frame)
-                      : InvalidOperation.invalidOperationResult(opcode);
               case 0x60, // PUSH1-32
                   0x61,
                   0x62,
@@ -434,45 +356,271 @@ public class EVM {
                   0x9e,
                   0x9f ->
                   SwapOperation.staticOperation(frame, opcode - SWAP_BASE);
-              case 0xe6 -> // DUPN (EIP-8024)
-                  enableAmsterdam
-                      ? DupNOperation.staticOperation(frame, code, pc)
+              case 0x5b -> JumpDestOperation.JUMPDEST_SUCCESS;
+              case 0x50 -> PopOperation.staticOperation(frame);
+              case 0x57 -> JumpiOperation.staticOperation(frame);
+              case 0x56 -> JumpOperation.staticOperation(frame);
+              case 0x15 -> IsZeroOperation.staticOperation(frame);
+              case 0x5f ->
+                  enableShanghai
+                      ? Push0Operation.staticOperation(frame)
                       : InvalidOperation.invalidOperationResult(opcode);
-              case 0xe7 -> // SWAPN (EIP-8024)
-                  enableAmsterdam
-                      ? SwapNOperation.staticOperation(frame, code, pc)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              case 0xe8 -> // EXCHANGE (EIP-8024)
-                  enableAmsterdam
-                      ? ExchangeOperation.staticOperation(frame, code, pc)
-                      : InvalidOperation.invalidOperationResult(opcode);
-              default -> { // unoptimized operations
-                frame.setCurrentOperation(currentOperation);
-                yield currentOperation.execute(frame, this);
-              }
+              default -> executeOperation(frame, code, pc, opcode, currentOperation);
             };
       } catch (final OverflowException oe) {
         result = OVERFLOW_RESPONSE;
       } catch (final UnderflowException ue) {
         result = UNDERFLOW_RESPONSE;
       }
-      final ExceptionalHaltReason haltReason = result.getHaltReason();
-      if (haltReason != null) {
-        LOG.trace("MessageFrame evaluation halted because of {}", haltReason);
-        frame.setExceptionalHaltReason(Optional.of(haltReason));
-        frame.setState(State.EXCEPTIONAL_HALT);
-      } else if (frame.decrementRemainingGas(result.getGasCost()) < 0) {
-        frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
-        frame.setState(State.EXCEPTIONAL_HALT);
+    }
+  }
+
+  /**
+   * The interpreter loop for traced execution, which calls the tracer around every operation and
+   * therefore keeps all state in the frame, where the tracer reads it.
+   */
+  private void runToHaltTraced(final MessageFrame frame, final OperationTracer operationTracer) {
+    final byte[] code = frame.getCode().getBytes().toArrayUnsafe();
+    final Operation[] operationArray = operations.getOperations();
+    while (frame.getState() == State.CODE_EXECUTING) {
+      final int pc = frame.getPC();
+      final int opcode;
+      final Operation currentOperation;
+      if (pc < code.length) {
+        opcode = code[pc] & 0xff;
+        currentOperation = operationArray[opcode];
+      } else {
+        opcode = 0;
+        currentOperation = endOfScriptStop;
       }
-      if (frame.getState() == State.CODE_EXECUTING) {
-        final int currentPC = frame.getPC();
-        final int opSize = result.getPcIncrement();
-        frame.setPC(currentPC + opSize);
+      frame.setCurrentOperation(currentOperation);
+      operationTracer.tracePreExecution(frame);
+      OperationResult result;
+      try {
+        result = executeOperation(frame, code, pc, opcode, currentOperation);
+      } catch (final OverflowException oe) {
+        result = OVERFLOW_RESPONSE;
+      } catch (final UnderflowException ue) {
+        result = UNDERFLOW_RESPONSE;
       }
-      if (tracingEnabled) {
-        operationTracer.tracePostExecution(frame, result);
+      completeOperation(frame, result);
+      operationTracer.tracePostExecution(frame, result);
+    }
+  }
+
+  /**
+   * Executes one operation against the state held in the frame.
+   *
+   * @param frame the frame
+   * @param code the code being executed
+   * @param pc the program counter
+   * @param opcode the operation code, 0 past the end of the code
+   * @param currentOperation the operation registered for the code, or the implicit STOP past its
+   *     end
+   * @return the result of the operation
+   */
+  private OperationResult executeOperation(
+      final MessageFrame frame,
+      final byte[] code,
+      final int pc,
+      final int opcode,
+      final Operation currentOperation) {
+    return switch (opcode) {
+      case 0x00 -> StopOperation.staticOperation(frame);
+      case 0x01 ->
+          evmConfiguration.enableOptimizedOpcodes()
+              ? AddOperationOptimized.staticOperation(frame)
+              : AddOperation.staticOperation(frame);
+      case 0x02 ->
+          evmConfiguration.enableOptimizedOpcodes()
+              ? MulOperationOptimized.staticOperation(frame)
+              : MulOperation.staticOperation(frame);
+      case 0x03 ->
+          evmConfiguration.enableOptimizedOpcodes()
+              ? SubOperationOptimized.staticOperation(frame)
+              : SubOperation.staticOperation(frame);
+      case 0x04 ->
+          evmConfiguration.enableOptimizedOpcodes()
+              ? DivOperationOptimized.staticOperation(frame)
+              : DivOperation.staticOperation(frame);
+      case 0x05 ->
+          evmConfiguration.enableOptimizedOpcodes()
+              ? SDivOperationOptimized.staticOperation(frame)
+              : SDivOperation.staticOperation(frame);
+      case 0x06 ->
+          evmConfiguration.enableOptimizedOpcodes()
+              ? ModOperationOptimized.staticOperation(frame)
+              : ModOperation.staticOperation(frame);
+      case 0x07 ->
+          evmConfiguration.enableOptimizedOpcodes()
+              ? SModOperationOptimized.staticOperation(frame)
+              : SModOperation.staticOperation(frame);
+      case 0x08 ->
+          evmConfiguration.enableOptimizedOpcodes()
+              ? AddModOperationOptimized.staticOperation(frame)
+              : AddModOperation.staticOperation(frame);
+      case 0x09 ->
+          evmConfiguration.enableOptimizedOpcodes()
+              ? MulModOperationOptimized.staticOperation(frame)
+              : MulModOperation.staticOperation(frame);
+      case 0x0a -> ExpOperation.staticOperation(frame, gasCalculator);
+      case 0x0b -> SignExtendOperation.staticOperation(frame);
+      case 0x0c, 0x0d, 0x0e, 0x0f -> InvalidOperation.invalidOperationResult(opcode);
+      case 0x10 -> LtOperation.staticOperation(frame);
+      case 0x11 -> GtOperation.staticOperation(frame);
+      case 0x12 -> SLtOperation.staticOperation(frame);
+      case 0x13 -> SGtOperation.staticOperation(frame);
+      case 0x15 -> IsZeroOperation.staticOperation(frame);
+      case 0x16 ->
+          evmConfiguration.enableOptimizedOpcodes()
+              ? AndOperationOptimized.staticOperation(frame)
+              : AndOperation.staticOperation(frame);
+      case 0x17 ->
+          evmConfiguration.enableOptimizedOpcodes()
+              ? OrOperationOptimized.staticOperation(frame)
+              : OrOperation.staticOperation(frame);
+      case 0x18 ->
+          evmConfiguration.enableOptimizedOpcodes()
+              ? XorOperationOptimized.staticOperation(frame)
+              : XorOperation.staticOperation(frame);
+      case 0x19 ->
+          evmConfiguration.enableOptimizedOpcodes()
+              ? NotOperationOptimized.staticOperation(frame)
+              : NotOperation.staticOperation(frame);
+      case 0x1a -> ByteOperation.staticOperation(frame);
+      case 0x1b ->
+          enableConstantinople
+              ? shiftOperation(
+                  frame, ShlOperation::staticOperation, ShlOperationOptimized::staticOperation)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x1c ->
+          enableConstantinople
+              ? shiftOperation(
+                  frame, ShrOperation::staticOperation, ShrOperationOptimized::staticOperation)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x1d ->
+          enableConstantinople
+              ? shiftOperation(
+                  frame, SarOperation::staticOperation, SarOperationOptimized::staticOperation)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x1e ->
+          enableOsaka
+              ? CountLeadingZerosOperation.staticOperation(frame)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x50 -> PopOperation.staticOperation(frame);
+      case 0x56 -> JumpOperation.staticOperation(frame);
+      case 0x57 -> JumpiOperation.staticOperation(frame);
+      case 0x5b -> JumpDestOperation.JUMPDEST_SUCCESS;
+      case 0x5f ->
+          enableShanghai
+              ? Push0Operation.staticOperation(frame)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0x60, // PUSH1-32
+          0x61,
+          0x62,
+          0x63,
+          0x64,
+          0x65,
+          0x66,
+          0x67,
+          0x68,
+          0x69,
+          0x6a,
+          0x6b,
+          0x6c,
+          0x6d,
+          0x6e,
+          0x6f,
+          0x70,
+          0x71,
+          0x72,
+          0x73,
+          0x74,
+          0x75,
+          0x76,
+          0x77,
+          0x78,
+          0x79,
+          0x7a,
+          0x7b,
+          0x7c,
+          0x7d,
+          0x7e,
+          0x7f ->
+          PushOperation.staticOperation(frame, code, pc, opcode - PUSH_BASE);
+      case 0x80, // DUP1-16
+          0x81,
+          0x82,
+          0x83,
+          0x84,
+          0x85,
+          0x86,
+          0x87,
+          0x88,
+          0x89,
+          0x8a,
+          0x8b,
+          0x8c,
+          0x8d,
+          0x8e,
+          0x8f ->
+          DupOperation.staticOperation(frame, opcode - DupOperation.DUP_BASE);
+      case 0x90, // SWAP1-16
+          0x91,
+          0x92,
+          0x93,
+          0x94,
+          0x95,
+          0x96,
+          0x97,
+          0x98,
+          0x99,
+          0x9a,
+          0x9b,
+          0x9c,
+          0x9d,
+          0x9e,
+          0x9f ->
+          SwapOperation.staticOperation(frame, opcode - SWAP_BASE);
+      case 0xe6 -> // DUPN (EIP-8024)
+          enableAmsterdam
+              ? DupNOperation.staticOperation(frame, code, pc)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0xe7 -> // SWAPN (EIP-8024)
+          enableAmsterdam
+              ? SwapNOperation.staticOperation(frame, code, pc)
+              : InvalidOperation.invalidOperationResult(opcode);
+      case 0xe8 -> // EXCHANGE (EIP-8024)
+          enableAmsterdam
+              ? ExchangeOperation.staticOperation(frame, code, pc)
+              : InvalidOperation.invalidOperationResult(opcode);
+      default -> { // unoptimized operations
+        frame.setCurrentOperation(currentOperation);
+        yield currentOperation.execute(frame, this);
       }
+    };
+  }
+
+  /**
+   * Charges an operation's gas and moves past it, or halts the frame if the operation failed.
+   *
+   * @param frame the frame
+   * @param result the result of the operation
+   */
+  private static void completeOperation(final MessageFrame frame, final OperationResult result) {
+    final ExceptionalHaltReason haltReason = result.getHaltReason();
+    if (haltReason != null) {
+      LOG.trace("MessageFrame evaluation halted because of {}", haltReason);
+      frame.setExceptionalHaltReason(Optional.of(haltReason));
+      frame.setState(State.EXCEPTIONAL_HALT);
+    } else if (frame.decrementRemainingGas(result.getGasCost()) < 0) {
+      frame.setExceptionalHaltReason(Optional.of(ExceptionalHaltReason.INSUFFICIENT_GAS));
+      frame.setState(State.EXCEPTIONAL_HALT);
+    }
+    if (frame.getState() == State.CODE_EXECUTING) {
+      final int currentPC = frame.getPC();
+      final int opSize = result.getPcIncrement();
+      frame.setPC(currentPC + opSize);
     }
   }
 
