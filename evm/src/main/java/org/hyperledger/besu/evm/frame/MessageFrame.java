@@ -203,7 +203,7 @@ public class MessageFrame {
   public static final int DEFAULT_MAX_STACK_SIZE = 1024;
 
   // Most frames stay far below the maximum, and a frame allocates its stack on every call.
-  private static final int INITIAL_STACK_CAPACITY_V2 = 32;
+  private static final int INITIAL_STACK_CAPACITY_V2 = 1024;
 
   private static final VarHandle LONG_BE =
       MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
