@@ -27,7 +27,6 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.StorageConsumingMap;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.tuweni.units.bigints.UInt256;
@@ -52,8 +51,8 @@ public class BonsaiReferenceTestUpdateAccumulator extends BonsaiWorldStateUpdate
   }
 
   @Override
-  protected StorageSlotKey storageSlotKey(final UInt256 slotKey) {
-    return new StorageSlotKey(preImageProxy.hashAndSavePreImage(slotKey), Optional.of(slotKey));
+  protected Hash hashAndSaveSlotPreImage(final UInt256 slotKey) {
+    return preImageProxy.hashAndSavePreImage(slotKey);
   }
 
   public BonsaiReferenceTestUpdateAccumulator createDetachedAccumulator() {

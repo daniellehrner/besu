@@ -59,8 +59,7 @@ public class UpdateTrackingAccount<A extends Account> implements MutableAccount 
   private Wei balance;
 
   @Nullable private Bytes updatedCode; // Null if the underlying code has not been updated.
-  // loaded on first use, as most trackers never read the code
-  @Nullable private Bytes oldCode;
+  private final Bytes oldCode;
   @Nullable private Hash updatedCodeHash;
   private final Hash oldCodeHash;
 
@@ -108,6 +107,7 @@ public class UpdateTrackingAccount<A extends Account> implements MutableAccount 
     this.nonce = account.getNonce();
     this.balance = account.getBalance();
 
+    this.oldCode = account.getCode();
     this.oldCodeHash = account.getCodeHash();
 
     this.updatedStorage = new TreeMap<>();
@@ -207,7 +207,7 @@ public class UpdateTrackingAccount<A extends Account> implements MutableAccount 
   @Override
   public Bytes getCode() {
     // Note that we set code for new account, so it's only null if account isn't.
-    return updatedCode == null ? oldCode() : updatedCode;
+    return updatedCode == null ? oldCode : updatedCode;
   }
 
   @Override
@@ -228,17 +228,7 @@ public class UpdateTrackingAccount<A extends Account> implements MutableAccount 
   @Override
   public boolean hasCode() {
     // Note that we set code for new account, so it's only null if account isn't.
-    return updatedCode == null ? !oldCode().isEmpty() : !updatedCode.isEmpty();
-  }
-
-  private Bytes oldCode() {
-    Bytes code = oldCode;
-    if (code == null) {
-      // trackers of new accounts start with empty code, so only a wrapped account gets here
-      code = account.getCode();
-      oldCode = code;
-    }
-    return code;
+    return updatedCode == null ? !oldCode.isEmpty() : !updatedCode.isEmpty();
   }
 
   @Override
