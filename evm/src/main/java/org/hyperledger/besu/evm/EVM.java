@@ -510,7 +510,9 @@ public class EVM {
   // Note: like runToHalt, this is performance-critical code. Benchmark before refactoring.
   private void runToHaltV2(final MessageFrame frame, final OperationTracer operationTracer) {
     evmSpecVersion.maybeWarnVersion();
-    if (operationTracer.tracesOperations()) {
+    final boolean tracing = operationTracer.tracesOperations();
+    frame.setTracesOperationsV2(tracing);
+    if (tracing) {
       runToHaltV2Traced(frame, operationTracer);
     } else {
       runToHaltV2Untraced(frame);
