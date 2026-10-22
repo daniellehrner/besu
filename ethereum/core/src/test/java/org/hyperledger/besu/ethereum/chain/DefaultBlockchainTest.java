@@ -50,6 +50,7 @@ import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPInput;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
+import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
 import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
 import org.hyperledger.besu.metrics.MetricsSystemFactory;
@@ -1119,6 +1120,8 @@ public class DefaultBlockchainTest {
     removeBlockDataFromStorage(storage, blockHash);
 
     assertThat(blockchain.getBlockBody(blockHash)).isEqualTo(storedBody);
+    assertThat(blockchain.getBlockBodyRlp(blockHash))
+        .contains(RLP.encode(newBlock.getBody()::writeWrappedBodyTo));
     assertThat(blockchain.getTxReceipts(blockHash)).isEqualTo(storedReceipts);
     assertThat(blockchain.getBlockAccessListRlp(blockHash)).contains(blockAccessList.encode());
     final Optional<BlockAccessList> cachedBlockAccessList =
@@ -1146,12 +1149,14 @@ public class DefaultBlockchainTest {
     updater.commit();
 
     assertThat(blockchain.getBlockBody(blockHash)).isPresent();
+    assertThat(blockchain.getBlockBodyRlp(blockHash)).isPresent();
     assertThat(blockchain.getTxReceipts(blockHash)).isPresent();
     assertThat(blockchain.getBlockAccessList(blockHash)).isPresent();
     assertThat(blockchain.getBlockAccessListRlp(blockHash)).isPresent();
     removeBlockDataFromStorage(storage, blockHash);
 
     assertThat(blockchain.getBlockBody(blockHash)).isEmpty();
+    assertThat(blockchain.getBlockBodyRlp(blockHash)).isEmpty();
     assertThat(blockchain.getTxReceipts(blockHash)).isEmpty();
     assertThat(blockchain.getBlockAccessList(blockHash)).isEmpty();
     assertThat(blockchain.getBlockAccessListRlp(blockHash)).isEmpty();
@@ -1179,9 +1184,11 @@ public class DefaultBlockchainTest {
     removeBlockDataFromStorage(storage, secondHash);
 
     assertThat(blockchain.getBlockBody(oldestHash)).isEmpty();
+    assertThat(blockchain.getBlockBodyRlp(oldestHash)).isEmpty();
     assertThat(blockchain.getTxReceipts(oldestHash)).isEmpty();
     assertThat(blockchain.getBlockAccessListRlp(oldestHash)).isEmpty();
     assertThat(blockchain.getBlockBody(secondHash)).isPresent();
+    assertThat(blockchain.getBlockBodyRlp(secondHash)).isPresent();
     assertThat(blockchain.getTxReceipts(secondHash)).isPresent();
     assertThat(blockchain.getBlockAccessListRlp(secondHash)).isPresent();
   }
