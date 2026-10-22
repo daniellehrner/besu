@@ -30,6 +30,7 @@ import org.hyperledger.besu.evm.internal.MemoryEntry;
 import org.hyperledger.besu.evm.internal.OperandStack;
 import org.hyperledger.besu.evm.internal.StorageEntry;
 import org.hyperledger.besu.evm.internal.UnderflowException;
+import org.hyperledger.besu.evm.internal.WarmStorageKeyV2;
 import org.hyperledger.besu.evm.operation.Operation;
 import org.hyperledger.besu.evm.v2.operation.StackUtil;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
@@ -1273,6 +1274,17 @@ public class MessageFrame {
   }
 
   /**
+   * "Warms up" the storage slot as per EIP-2929, on a frame EVM v2 runs.
+   *
+   * @param address the address whose storage is being warmed up
+   * @param slot the slot being warmed up
+   * @return true if the storage slot was already warmed up
+   */
+  public boolean warmUpStorageV2(final Address address, final Bytes32 slot) {
+    return !txValues.warmedUpStorageV2().add(new WarmStorageKeyV2(address, slot));
+  }
+
+  /**
    * Return the world state.
    *
    * @return the world state
@@ -1545,6 +1557,15 @@ public class MessageFrame {
    */
   public Table<Address, Bytes32, Boolean> getWarmedUpStorage() {
     return txValues.warmedUpStorage();
+  }
+
+  /**
+   * Gets warmedUp Storage of a frame EVM v2 runs.
+   *
+   * @return the warmed up storage
+   */
+  public Set<WarmStorageKeyV2> getWarmedUpStorageV2() {
+    return txValues.warmedUpStorageV2();
   }
 
   /**
@@ -2027,7 +2048,8 @@ public class MessageFrame {
                 blockValues,
                 miningBeneficiary,
                 versionedHashes,
-                initialStateGasReservoir);
+                initialStateGasReservoir,
+                enableEvmV2);
         updater = worldUpdater;
         newStatic = isStatic;
       } else {
@@ -2061,8 +2083,14 @@ public class MessageFrame {
       for (Address a : eip2930AccessListWarmAddresses) {
         messageFrame.warmUpAddress(a);
       }
-      for (var e : eip2930AccessListWarmStorage.entries()) {
-        messageFrame.warmUpStorage(e.getKey(), e.getValue());
+      if (enableEvmV2) {
+        for (var e : eip2930AccessListWarmStorage.entries()) {
+          messageFrame.warmUpStorageV2(e.getKey(), e.getValue());
+        }
+      } else {
+        for (var e : eip2930AccessListWarmStorage.entries()) {
+          messageFrame.warmUpStorage(e.getKey(), e.getValue());
+        }
       }
       return messageFrame;
     }

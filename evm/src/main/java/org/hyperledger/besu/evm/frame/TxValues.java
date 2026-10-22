@@ -23,6 +23,7 @@ import org.hyperledger.besu.datatypes.VersionedHash;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
 import org.hyperledger.besu.evm.internal.AddressStorageSlotKey;
+import org.hyperledger.besu.evm.internal.WarmStorageKeyV2;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -46,7 +47,9 @@ public class TxValues {
   private final BlockHashLookup blockHashLookup;
   private final int maxStackSize;
   private final UndoSet<Address> warmedUpAddresses;
+  // null on a transaction EVM v2 runs, which tracks its warm slots in warmedUpStorageV2
   private final UndoTable<Address, Bytes32, Boolean> warmedUpStorage;
+  private final UndoSet<WarmStorageKeyV2> warmedUpStorageV2;
   private final Address originator;
   private final Wei gasPrice;
   private final Wei blobGasPrice;
@@ -66,6 +69,7 @@ public class TxValues {
       final int maxStackSize,
       final UndoSet<Address> warmedUpAddresses,
       final UndoTable<Address, Bytes32, Boolean> warmedUpStorage,
+      final UndoSet<WarmStorageKeyV2> warmedUpStorageV2,
       final Address originator,
       final Wei gasPrice,
       final Wei blobGasPrice,
@@ -83,6 +87,7 @@ public class TxValues {
     this.maxStackSize = maxStackSize;
     this.warmedUpAddresses = warmedUpAddresses;
     this.warmedUpStorage = warmedUpStorage;
+    this.warmedUpStorageV2 = warmedUpStorageV2;
     this.originator = originator;
     this.gasPrice = gasPrice;
     this.blobGasPrice = blobGasPrice;
@@ -113,6 +118,7 @@ public class TxValues {
    * @param miningBeneficiary the mining beneficiary
    * @param versionedHashes optional versioned hashes
    * @param initialStateGasReservoir state-gas reservoir balance at frame entry
+   * @param enableEvmV2 true if EVM v2 runs the transaction
    * @return a new TxValues instance
    */
   public static TxValues forTransaction(
@@ -125,12 +131,14 @@ public class TxValues {
       final BlockValues blockValues,
       final Address miningBeneficiary,
       final Optional<List<VersionedHash>> versionedHashes,
-      final long initialStateGasReservoir) {
+      final long initialStateGasReservoir,
+      final boolean enableEvmV2) {
     return new TxValues(
         blockHashLookup,
         maxStackSize,
         warmedUpAddresses,
-        UndoTable.of(TreeBasedTable.create()),
+        enableEvmV2 ? null : UndoTable.of(TreeBasedTable.create()),
+        enableEvmV2 ? UndoSet.of(new HashSet<>()) : null,
         originator,
         gasPrice,
         blobGasPrice,
@@ -153,7 +161,11 @@ public class TxValues {
    */
   public void undoChanges(final long mark) {
     warmedUpAddresses.undo(mark);
-    warmedUpStorage.undo(mark);
+    if (warmedUpStorageV2 == null) {
+      warmedUpStorage.undo(mark);
+    } else {
+      warmedUpStorageV2.undo(mark);
+    }
     transientStorage.undo(mark);
     creates.undo(mark);
     selfDestructs.undo(mark);
@@ -196,6 +208,15 @@ public class TxValues {
    */
   public UndoTable<Address, Bytes32, Boolean> warmedUpStorage() {
     return warmedUpStorage;
+  }
+
+  /**
+   * Returns the warmed-up storage slots of a transaction EVM v2 runs.
+   *
+   * @return the warmed-up storage slots, or null if EVM v1 runs the transaction
+   */
+  public UndoSet<WarmStorageKeyV2> warmedUpStorageV2() {
+    return warmedUpStorageV2;
   }
 
   /**
