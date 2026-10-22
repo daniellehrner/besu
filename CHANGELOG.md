@@ -40,6 +40,7 @@
 - Snap sync checks the flat database ranges of its heal stage in parallel, which shortens that stage on mainnet from about 3 h 40 min to 34 min. [#11495](https://github.com/besu-eth/besu/pull/11495)
 - Update the discovery library to 26.10.1 for faster discv5 secp256k1 verification and ECDH, with Netty, BouncyCastle, Guava, Log4j and Reactor raised to the versions it requires. [#11671](https://github.com/besu-eth/besu/pull/11671)
 - EVM v2 (`--Xevm-v2`) tracks the warm storage slots of a transaction in a hash set, which makes warming up a slot 5-7 times faster; on EVM v2, `MessageFrame.getWarmedUpStorage` returns null and `getWarmedUpStorageV2` returns the slots. [#11691](https://github.com/besu-eth/besu/pull/11691)
+- `engine_newPayload` replies before it stores a valid block and its trie log. [#11682](https://github.com/besu-eth/besu/pull/11682)
 
 ## 26.10.0
 
