@@ -83,6 +83,8 @@ import java.util.stream.IntStream;
 
 import com.google.common.collect.Lists;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 public class DefaultBlockchainTest {
 
@@ -1039,7 +1041,7 @@ public class DefaultBlockchainTest {
   }
 
   @Test
-  public void testCacheEmptyWhenNumberOfBlocksToCacheIsZero() {
+  public void testHeadersCacheEmptyWhenNumberOfBlockHeadersToCacheIsZero() {
     final BlockDataGenerator gen = new BlockDataGenerator();
     final KeyValueStorage kvStore = new InMemoryKeyValueStorage();
     final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
@@ -1050,31 +1052,33 @@ public class DefaultBlockchainTest {
     assertThat(blockchain.getBlockHeadersCache()).isEmpty();
   }
 
-  @Test
-  public void testCacheUsedWhenNumberOfBlocksToCacheNotZero() {
+  @ParameterizedTest
+  @CsvSource({"0, 134217728", "128, 1"})
+  public void recentBlockDataIsNotCachedWhenCacheIsDisabledOrTooSmall(
+      final int recentBlocksToCache, final long recentBlocksCacheMaxCapacity) {
     final BlockDataGenerator gen = new BlockDataGenerator();
+    final Block genesisBlock = gen.genesisBlock();
     final KeyValueStorage kvStore = new InMemoryKeyValueStorage();
     final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
-    final Block genesisBlock = gen.genesisBlock();
     final DefaultBlockchain blockchain =
-        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock, "/data/test", 512, 0);
+        createMutableBlockchain(
+            kvStore,
+            kvStoreVariables,
+            genesisBlock,
+            "/data/test",
+            recentBlocksToCache,
+            recentBlocksCacheMaxCapacity,
+            0);
+    final Block newBlock =
+        gen.block(new BlockOptions().setBlockNumber(1L).setParentHash(genesisBlock.getHash()));
+    final Hash blockHash = newBlock.getHash();
 
-    final BlockDataGenerator.BlockOptions options =
-        new BlockDataGenerator.BlockOptions()
-            .setBlockNumber(1L)
-            .setParentHash(genesisBlock.getHash());
-    final Block newBlock = gen.block(options);
-    final List<TransactionReceipt> receipts = gen.receipts(newBlock);
+    blockchain.appendBlock(newBlock, gen.receipts(newBlock), Optional.of(gen.blockAccessList()));
+    removeBlockDataFromStorage(createStorage(kvStore, kvStoreVariables), blockHash);
 
-    assertThat(blockchain.getBlockHeadersCache()).isNotEmpty();
-
-    assertThat(blockchain.getBlockHeadersCache().get().size()).isEqualTo(0);
-
-    blockchain.appendBlock(newBlock, receipts);
-
-    assertThat(blockchain.getBlockHeadersCache().get().size()).isEqualTo(1);
-    assertThat(blockchain.getBlockHeadersCache().get().getIfPresent(newBlock.getHash()))
-        .isEqualTo(newBlock.getHeader());
+    assertThat(blockchain.getBlockBody(blockHash)).isEmpty();
+    assertThat(blockchain.getTxReceipts(blockHash)).isEmpty();
+    assertThat(blockchain.getBlockAccessListRlp(blockHash)).isEmpty();
   }
 
   @Test
@@ -1084,7 +1088,14 @@ public class DefaultBlockchainTest {
     final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
     final Block genesisBlock = gen.genesisBlock();
     final DefaultBlockchain blockchain =
-        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock, "/data/test", 512, 0);
+        createMutableBlockchain(
+            kvStore,
+            kvStoreVariables,
+            genesisBlock,
+            "/data/test",
+            DefaultBlockchain.DEFAULT_RECENT_BLOCKS_TO_CACHE,
+            DefaultBlockchain.DEFAULT_RECENT_BLOCKS_CACHE_MAX_CAPACITY,
+            512);
     final Block newBlock =
         gen.block(new BlockOptions().setBlockNumber(1L).setParentHash(genesisBlock.getHash()));
 
@@ -1171,7 +1182,7 @@ public class DefaultBlockchainTest {
     final DefaultBlockchain blockchain =
         createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock);
     final List<Block> blocks =
-        gen.blockSequence(genesisBlock, DefaultBlockchain.RECENT_BLOCKS_TO_CACHE + 1);
+        gen.blockSequence(genesisBlock, DefaultBlockchain.DEFAULT_RECENT_BLOCKS_TO_CACHE + 1);
 
     blocks.forEach(
         block ->
@@ -1209,7 +1220,14 @@ public class DefaultBlockchainTest {
     final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
     final Block genesisBlock = gen.genesisBlock();
     final DefaultBlockchain blockchain =
-        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock, "/data/test", 0, 10000);
+        createMutableBlockchain(
+            kvStore,
+            kvStoreVariables,
+            genesisBlock,
+            "/data/test",
+            DefaultBlockchain.DEFAULT_RECENT_BLOCKS_TO_CACHE,
+            DefaultBlockchain.DEFAULT_RECENT_BLOCKS_CACHE_MAX_CAPACITY,
+            10000);
 
     final BlockDataGenerator.BlockOptions options =
         new BlockDataGenerator.BlockOptions()
@@ -1626,7 +1644,8 @@ public class DefaultBlockchainTest {
       final KeyValueStorage kvStorageVariables,
       final Block genesisBlock,
       final String dataDirectory,
-      final int numberOfBlocksToCache,
+      final int recentBlocksToCache,
+      final long recentBlocksCacheMaxCapacity,
       final int numberOfBlockHeadersToCache) {
     return (DefaultBlockchain)
         DefaultBlockchain.createMutable(
@@ -1635,8 +1654,10 @@ public class DefaultBlockchainTest {
             new NoOpMetricsSystem(),
             0,
             dataDirectory,
-            numberOfBlocksToCache,
-            numberOfBlockHeadersToCache);
+            recentBlocksToCache,
+            recentBlocksCacheMaxCapacity,
+            numberOfBlockHeadersToCache,
+            false);
   }
 
   @Test
