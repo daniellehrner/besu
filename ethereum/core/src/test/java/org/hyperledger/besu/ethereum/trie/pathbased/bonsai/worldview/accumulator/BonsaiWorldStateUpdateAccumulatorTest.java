@@ -16,7 +16,13 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulato
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.WorldStateConfig.createStatefulConfigWithTrie;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.datatypes.AccountValue;
@@ -35,6 +41,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.BonsaiTrieLog
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.NoOpTrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogLayer;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.NoOpBonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.cache.NoOpBonsaiWorldStateCacheManager;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
@@ -50,6 +57,8 @@ class BonsaiWorldStateUpdateAccumulatorTest {
 
   private static final Address ACCOUNT =
       Address.fromHexString("0x1000000000000000000000000000000000000001");
+  private static final Address ABSENT =
+      Address.fromHexString("0x1000000000000000000000000000000000000002");
   private static final StorageSlotKey SLOT = new StorageSlotKey(UInt256.valueOf(7));
   private static final UInt256 V0 = UInt256.valueOf(100);
   private static final UInt256 V1 = UInt256.valueOf(200);
@@ -122,6 +131,67 @@ class BonsaiWorldStateUpdateAccumulatorTest {
     }
   }
 
+  @Test
+  void reads_doNotPreloadTriePaths() {
+    final BonsaiCachedMerkleTrieLoader loader = spy(new NoOpBonsaiCachedMerkleTrieLoader());
+    try (BonsaiWorldState worldState = newEmptyWorldState(loader)) {
+      final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
+      clearInvocations(loader);
+
+      assertThat(accumulator.get(ACCOUNT).getBalance()).isEqualTo(Wei.ONE);
+      assertThat(accumulator.getStorageValue(ACCOUNT, SLOT.getSlotKey().orElseThrow()))
+          .isEqualTo(V0);
+      assertThat(accumulator.get(ABSENT)).isNull();
+      accumulator.commit();
+
+      verify(loader, never()).preLoadAccount(any(), any(), any());
+      verify(loader, never()).preLoadStorageSlot(any(), any(), any());
+    }
+  }
+
+  @Test
+  void slotWrites_preloadTheSlotAndItsAccountOnce() {
+    final BonsaiCachedMerkleTrieLoader loader = spy(new NoOpBonsaiCachedMerkleTrieLoader());
+    try (BonsaiWorldState worldState = newEmptyWorldState(loader)) {
+      final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
+      clearInvocations(loader);
+
+      accumulator.getAccount(ACCOUNT).setStorageValue(SLOT.getSlotKey().orElseThrow(), V1);
+      accumulator.commit();
+      accumulator.getAccount(ACCOUNT).setStorageValue(SLOT.getSlotKey().orElseThrow(), V2);
+      accumulator.commit();
+
+      verify(loader).preLoadStorageSlot(any(), eq(ACCOUNT), eq(SLOT));
+      verify(loader).preLoadAccount(any(), any(), eq(ACCOUNT));
+    }
+  }
+
+  @Test
+  void balanceChange_preloadsTheAccountOnly() {
+    final BonsaiCachedMerkleTrieLoader loader = spy(new NoOpBonsaiCachedMerkleTrieLoader());
+    try (BonsaiWorldState worldState = newEmptyWorldState(loader)) {
+      final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
+      clearInvocations(loader);
+
+      accumulator.getAccount(ACCOUNT).setBalance(Wei.of(2));
+      accumulator.commit();
+
+      verify(loader).preLoadAccount(any(), any(), eq(ACCOUNT));
+      verify(loader, never()).preLoadStorageSlot(any(), any(), any());
+    }
+  }
+
+  private static BonsaiWorldStateUpdateAccumulator persistAccountWithSlot(
+      final BonsaiWorldState worldState) {
+    final BonsaiWorldStateUpdateAccumulator accumulator =
+        (BonsaiWorldStateUpdateAccumulator) worldState.updater();
+    accumulator.createAccount(ACCOUNT, 0L, Wei.ONE);
+    accumulator.getAccount(ACCOUNT).setStorageValue(SLOT.getSlotKey().orElseThrow(), V0);
+    accumulator.commit();
+    worldState.persist(null);
+    return accumulator;
+  }
+
   private static PartialBlockAccessView partialView(
       final long txIndex, final UInt256 prior, final UInt256 updated) {
     final PartialBlockAccessView.PartialBlockAccessViewBuilder builder =
@@ -131,6 +201,10 @@ class BonsaiWorldStateUpdateAccumulatorTest {
   }
 
   private static BonsaiWorldState newEmptyWorldState() {
+    return newEmptyWorldState(new NoOpBonsaiCachedMerkleTrieLoader());
+  }
+
+  private static BonsaiWorldState newEmptyWorldState(final BonsaiCachedMerkleTrieLoader loader) {
     final BonsaiWorldStateKeyValueStorage storage =
         new BonsaiWorldStateKeyValueStorage(
             new InMemoryKeyValueStorageProvider(),
@@ -138,7 +212,7 @@ class BonsaiWorldStateUpdateAccumulatorTest {
             DataStorageConfiguration.DEFAULT_BONSAI_CONFIG);
     return new BonsaiWorldState(
         storage,
-        new NoOpBonsaiCachedMerkleTrieLoader(),
+        loader,
         new NoOpBonsaiWorldStateCacheManager(
             storage, EvmConfiguration.DEFAULT, new BonsaiCodeCache()),
         new NoOpTrieLogManager(),
