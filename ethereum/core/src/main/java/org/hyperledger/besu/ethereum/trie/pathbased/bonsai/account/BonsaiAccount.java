@@ -373,6 +373,24 @@ public class BonsaiAccount implements MutableAccount, TrieAccountValue {
   }
 
   /**
+   * Whether two versions of an account have the same value in the account trie: both are absent, or
+   * they have the same nonce, balance, storage root and code hash.
+   *
+   * @param a an account, or null if it does not exist
+   * @param b another account, or null if it does not exist
+   * @return true if the account trie stores the same value for both
+   */
+  public static boolean trieValueEquals(final BonsaiAccount a, final BonsaiAccount b) {
+    if (a == null || b == null) {
+      return a == b;
+    }
+    return a.getNonce() == b.getNonce()
+        && a.getBalance().equals(b.getBalance())
+        && a.getStorageRoot().equals(b.getStorageRoot())
+        && a.getCodeHash().equals(b.getCodeHash());
+  }
+
+  /**
    * Throws an exception if the two accounts represent different stored states
    *
    * @param source The bonsai account to compare

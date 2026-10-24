@@ -120,11 +120,12 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
 
       final MerkleTrie<Bytes, Bytes> accountTrie = bonsai.createAccountStateTrie();
 
-      // Step 1: launch storage trie updates concurrently for every touched account.
+      // Step 1: launch storage trie updates concurrently for every account whose storage changed.
       for (final Map.Entry<Address, StorageConsumingMap<StorageSlotKey, BonsaiValue<UInt256>>>
           storageAccountUpdate : worldStateUpdater.getStorageToUpdate().entrySet()) {
         final Address address = storageAccountUpdate.getKey();
-        if (worldStateUpdater.getAccountsToUpdate().containsKey(address)) {
+        if (worldStateUpdater.getAccountsToUpdate().containsKey(address)
+            && hasStorageChange(address, storageAccountUpdate.getValue())) {
           storageFutures.put(
               address,
               CompletableFuture.supplyAsync(
@@ -138,6 +139,10 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
           worldStateUpdater.getAccountsToUpdate().entrySet()) {
         final Address address = accountUpdate.getKey();
         final BonsaiValue<BonsaiAccount> accountValue = accountUpdate.getValue();
+        if (isUnchanged(address, accountValue)) {
+          // an unchanged account keeps its leaf and flat entry, rewriting them only costs time
+          continue;
+        }
         final Hash addressHash = addressHasher.apply(bonsai, address);
         try {
           if (accountValue.getUpdated() == null) {
@@ -228,6 +233,26 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
                 u -> u.putTrieNode(TrieNodeKey.of(updatedAddressHash, location), nodeHash, value));
       }
       return accountDeleted ? Hash.EMPTY_TRIE_HASH : Hash.wrap(storageTrie.getRootHash());
+    }
+
+    private boolean hasStorageChange(
+        final Address address, final Map<StorageSlotKey, BonsaiValue<UInt256>> slots) {
+      if (worldStateUpdater.getStorageToClear().contains(address)) {
+        return true;
+      }
+      for (final BonsaiValue<UInt256> slot : slots.values()) {
+        if (slot.isChanged()) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /** Whether the block left the account's trie value and storage as it found them. */
+    private boolean isUnchanged(final Address address, final BonsaiValue<BonsaiAccount> value) {
+      return !storageFutures.containsKey(address)
+          && !worldStateUpdater.getStorageToClear().contains(address)
+          && BonsaiAccount.trieValueEquals(value.getPrior(), value.getUpdated());
     }
 
     private void clearStorage() {
