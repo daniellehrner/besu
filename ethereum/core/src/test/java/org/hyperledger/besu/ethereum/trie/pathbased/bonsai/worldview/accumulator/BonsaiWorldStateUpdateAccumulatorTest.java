@@ -145,6 +145,7 @@ class BonsaiWorldStateUpdateAccumulatorTest {
       accumulator.commit();
 
       verify(loader, never()).preLoadAccount(any(), any(), any());
+      verify(loader, never()).preLoadStorageSlot(any(), any(), any(Hash.class), any());
       verify(loader, never()).preLoadStorageSlot(any(), any(), any());
     }
   }
@@ -161,7 +162,8 @@ class BonsaiWorldStateUpdateAccumulatorTest {
       accumulator.getAccount(ACCOUNT).setStorageValue(SLOT.getSlotKey().orElseThrow(), V2);
       accumulator.commit();
 
-      verify(loader).preLoadStorageSlot(any(), eq(ACCOUNT), eq(SLOT));
+      final Hash storageRoot = ((BonsaiAccount) worldState.get(ACCOUNT)).getStorageRoot();
+      verify(loader).preLoadStorageSlot(any(), eq(ACCOUNT), eq(storageRoot), eq(SLOT));
       verify(loader).preLoadAccount(any(), any(), eq(ACCOUNT));
     }
   }
@@ -177,7 +179,7 @@ class BonsaiWorldStateUpdateAccumulatorTest {
       accumulator.commit();
 
       verify(loader).preLoadAccount(any(), any(), eq(ACCOUNT));
-      verify(loader, never()).preLoadStorageSlot(any(), any(), any());
+      verify(loader, never()).preLoadStorageSlot(any(), any(), any(Hash.class), any());
     }
   }
 

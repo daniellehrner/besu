@@ -99,9 +99,16 @@ public class BonsaiWorldState extends PathBasedWorldState {
             (addr, value) ->
                 this.bonsaiCachedMerkleTrieLoader.preLoadAccount(
                     getWorldStateStorage(), worldStateRootHash, addr),
-            (addr, value) ->
+            (addr, value) -> {
+              final Hash storageRoot = priorStorageRoot(addr);
+              if (storageRoot != null) {
                 this.bonsaiCachedMerkleTrieLoader.preLoadStorageSlot(
-                    getWorldStateStorage(), addr, value),
+                    getWorldStateStorage(), addr, storageRoot, value);
+              } else {
+                this.bonsaiCachedMerkleTrieLoader.preLoadStorageSlot(
+                    getWorldStateStorage(), addr, value);
+              }
+            },
             evmConfiguration,
             codeCache);
     this.setAccumulator(acc);
@@ -129,6 +136,19 @@ public class BonsaiWorldState extends PathBasedWorldState {
     // Keep frontier-derived caches aligned with accumulator resets.
     acc.setCommittedTransactionListener(frontierRootHashTracker);
     this.codeCache = codeCache;
+  }
+
+  /**
+   * The account's storage root before the block, as the accumulator loaded it, or null if the
+   * accumulator has not loaded the account.
+   */
+  private Hash priorStorageRoot(final Address address) {
+    final var accountValue = accumulator.getAccountsToUpdate().get(address);
+    if (accountValue == null) {
+      return null;
+    }
+    final BonsaiAccount prior = accountValue.getPrior();
+    return prior == null ? Hash.EMPTY_TRIE_HASH : prior.getStorageRoot();
   }
 
   @Override

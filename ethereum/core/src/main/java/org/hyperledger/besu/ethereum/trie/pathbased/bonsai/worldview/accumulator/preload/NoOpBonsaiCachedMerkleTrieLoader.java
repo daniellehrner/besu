@@ -51,6 +51,15 @@ public class NoOpBonsaiCachedMerkleTrieLoader extends BonsaiCachedMerkleTrieLoad
   }
 
   @Override
+  public void preLoadStorageSlot(
+      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
+      final Address account,
+      final Hash storageRoot,
+      final StorageSlotKey slotKey) {
+    // noop
+  }
+
+  @Override
   public void cacheAccountNodes(
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
       final Hash worldStateRootHash,
@@ -62,6 +71,15 @@ public class NoOpBonsaiCachedMerkleTrieLoader extends BonsaiCachedMerkleTrieLoad
   public void cacheStorageNodes(
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
       final Address account,
+      final StorageSlotKey slotKey) {
+    // noop
+  }
+
+  @Override
+  public void cacheStorageNodes(
+      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
+      final Address account,
+      final Hash storageRoot,
       final StorageSlotKey slotKey) {
     // noop
   }
