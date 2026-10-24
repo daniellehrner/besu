@@ -93,6 +93,14 @@ public class BonsaiValue<T> implements TrieLog.LogTuple<T> {
     return this;
   }
 
+  /**
+   * Whether the value differs from its prior. A value loaded lazily and only read is unchanged
+   * without loading it.
+   */
+  public boolean isChanged() {
+    return prior != updated && !isUnchanged();
+  }
+
   public void setCleared() {
     this.lastStepCleared = true;
     this.clearedAtLeastOnce = true;

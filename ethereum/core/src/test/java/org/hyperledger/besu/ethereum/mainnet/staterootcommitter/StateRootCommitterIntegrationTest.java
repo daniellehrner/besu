@@ -17,6 +17,11 @@ package org.hyperledger.besu.ethereum.mainnet.staterootcommitter;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.WorldStateConfig.createStatefulConfigWithTrie;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import org.hyperledger.besu.config.GenesisConfig;
 import org.hyperledger.besu.datatypes.Address;
@@ -71,6 +76,7 @@ import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
 import org.hyperledger.besu.plugin.services.worldstate.StateRootCommitter;
+import org.hyperledger.besu.plugin.services.worldstate.StateRootComputation;
 import org.hyperledger.besu.plugin.services.worldstate.TrieBranchType;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 
@@ -109,6 +115,8 @@ class StateRootCommitterIntegrationTest {
       Address.fromHexString("0x00000000000000000000000000000000c0de");
   private static final Address EOA =
       Address.fromHexString("0x00000000000000000000000000000000000000e0");
+  private static final Address ABSENT =
+      Address.fromHexString("0x00000000000000000000000000000000000000ab");
   private static final Bytes CONTRACT_CODE =
       Bytes.fromHexString("0x608060405234801561001057600080fd5b50");
   private static final StorageSlotKey SLOT = new StorageSlotKey(UInt256.valueOf(7));
@@ -354,6 +362,43 @@ class StateRootCommitterIntegrationTest {
         assertThat(worldState.get(CONTRACT).getCode()).isEqualTo(CONTRACT_CODE);
         assertThat(worldState.get(CONTRACT).getStorageValue(SLOT.getSlotKey().orElseThrow()))
             .isEqualTo(SLOT_VALUE);
+      }
+    }
+
+    @Test
+    void persist_leavesAccountsTheBlockOnlyReadUntouched() {
+      final BlockHeader parent = harness.persistParent();
+      final BlockChange firstBlock = BlockChange.complex();
+      final BlockHeader firstHeader = harness.childHeader(parent, firstBlock);
+      try (BonsaiWorldState worldState = harness.newWritableWorldState()) {
+        firstBlock.apply(worldState.updater());
+        worldState.updater().commit();
+        worldState.persist(firstHeader, new DefaultStateRootCommitter());
+      }
+
+      final BlockChange secondBlock = BlockChange.balanceAndNonce(EOA, Wei.of(7), 13L);
+      final BlockHeader secondHeader = harness.childHeader(firstHeader, secondBlock);
+      try (BonsaiWorldState worldState = harness.newWritableWorldState()) {
+        final WorldUpdater blockUpdater = worldState.updater();
+        final WorldUpdater transaction = blockUpdater.updater();
+        secondBlock.apply(transaction);
+        assertThat(transaction.get(CONTRACT).getStorageValue(SLOT.getSlotKey().orElseThrow()))
+            .isEqualTo(SLOT_VALUE);
+        assertThat(transaction.get(ABSENT)).isNull();
+        transaction.commit();
+        blockUpdater.commit();
+
+        final StateRootComputation computation =
+            new DefaultStateRootCommitter().compute(worldState, secondHeader, blockUpdater);
+        final BonsaiWorldStateKeyValueStorage.Updater writes =
+            mock(BonsaiWorldStateKeyValueStorage.Updater.class);
+        computation.applyTo(writes);
+
+        assertThat(computation.root()).isEqualTo(secondHeader.getStateRoot());
+        verify(writes).putAccountInfoState(eq(EOA.addressHash()), any());
+        verify(writes, never()).putAccountInfoState(eq(CONTRACT.addressHash()), any());
+        verify(writes, never()).removeAccountInfoState(ABSENT.addressHash());
+        verify(writes, never()).putStorageValueBySlotHash(any(), any(), any());
       }
     }
 
