@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload;
 
 import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiValue;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentMap;
@@ -22,7 +23,12 @@ import java.util.concurrent.ConcurrentMap;
 import com.google.common.collect.ForwardingMap;
 import jakarta.validation.constraints.NotNull;
 
-public class StorageConsumingMap<K, T> extends ForwardingMap<K, T> {
+/**
+ * The storage slots of an account in a block. The consumer preloads the trie path of a slot when
+ * the block changes it, ahead of the state root. Slots the block only reads are skipped, the state
+ * root leaves them as they are.
+ */
+public class StorageConsumingMap<K, T extends BonsaiValue<?>> extends ForwardingMap<K, T> {
 
   private final Address address;
 
@@ -38,7 +44,22 @@ public class StorageConsumingMap<K, T> extends ForwardingMap<K, T> {
 
   @Override
   public T put(@NotNull final K slotKey, @NotNull final T value) {
-    consumer.process(address, slotKey);
+    final T previous = storages.put(slotKey, value);
+    if (value.isChanged() && (previous == null || !previous.isChanged())) {
+      consumer.process(address, slotKey);
+    }
+    return previous;
+  }
+
+  /**
+   * Puts a slot loaded for a read. A read is not preloaded, and the value is not compared with its
+   * prior, which could load the prior from storage.
+   *
+   * @param slotKey the slot
+   * @param value the loaded value
+   * @return the previous value of the slot, or null
+   */
+  public T putLoaded(final K slotKey, final T value) {
     return storages.put(slotKey, value);
   }
 

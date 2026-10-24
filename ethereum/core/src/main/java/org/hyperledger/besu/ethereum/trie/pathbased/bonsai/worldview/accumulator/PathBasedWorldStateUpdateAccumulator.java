@@ -206,9 +206,10 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
           if (pendingValue == null) {
             pendingStorageUpdates.put(slotKey, new BonsaiValue<>(prior, updated));
           } else {
-            pendingValue.setUpdated(updated);
+            updateSlot(address, slotKey, pendingValue, updated);
           }
         }
+        accountsToUpdate.preloadIfChanged(address, true);
       }
 
       if (shouldCheckForEmptyAccount && accountValue.isEmpty()) {
@@ -298,6 +299,10 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
                       targetSlots.put(slotKey, newSlotValue);
                     }
                   });
+              if (!priorOnly) {
+                accountsToUpdate.preloadIfChanged(
+                    address, slots.values().stream().anyMatch(BonsaiValue::isChanged));
+              }
             });
 
     storageKeyHashLookup.putAll(source.storageKeyHashLookup);
@@ -494,7 +499,8 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
         if (updatedSlot.getPrior() == null || updatedSlot.getPrior().isZero()) {
           iter.remove();
         } else {
-          updatedSlot.setUpdated(null).setCleared();
+          updateSlot(deletedAddress, updateEntry.getKey(), updatedSlot, null);
+          updatedSlot.setCleared();
         }
       }
 
@@ -517,6 +523,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
         storageToUpdate.remove(deletedAddress);
       }
       accountValue.setUpdated(null);
+      accountsToUpdate.preloadIfChanged(deletedAddress, false);
     }
 
     // The block updater is committed after every transaction, usually with a handful of accounts:
@@ -614,10 +621,13 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
                     slotKey,
                     new BonsaiValue<>(updatedAccount.getOriginalStorageValue(keyUInt), value));
               } else {
-                pendingValue.setUpdated(value);
+                updateSlot(updatedAddress, slotKey, pendingValue, value);
               }
             });
 
+    accountsToUpdate.preloadIfChanged(
+        updatedAddress,
+        tracked.getStorageWasCleared() || !updatedAccount.getUpdatedStorage().isEmpty());
     updatedAccount.getUpdatedStorage().clear();
 
     if (pendingStorageUpdates.isEmpty()) {
@@ -626,6 +636,19 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
 
     if (tracked.getStorageWasCleared()) {
       tracked.setStorageWasCleared(false); // storage already cleared for this transaction
+    }
+  }
+
+  /** Sets a slot's updated value, and preloads the slot's trie path once the block changes it. */
+  private void updateSlot(
+      final Address address,
+      final StorageSlotKey slotKey,
+      final BonsaiValue<UInt256> slot,
+      final UInt256 value) {
+    final boolean wasChanged = slot.isChanged();
+    slot.setUpdated(value);
+    if (!wasChanged && slot.isChanged()) {
+      storagePreloader.process(address, slotKey);
     }
   }
 
@@ -694,7 +717,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
               address,
               key ->
                   new StorageConsumingMap<>(address, new ConcurrentHashMap<>(), storagePreloader))
-          .put(storageSlotKey, storageValue);
+          .putLoaded(storageSlotKey, storageValue);
 
       return Optional.ofNullable(storageValue.getUpdated());
     } catch (MerkleTrieException e) {
@@ -858,6 +881,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
         accountValue.setUpdated(createAccount(wrappedWorldView(), address, replacementValue, true));
       }
     }
+    accountsToUpdate.preloadIfChanged(address, false);
   }
 
   private BonsaiValue<ACCOUNT> loadAccountFromParent(
@@ -966,7 +990,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
                 address,
                 k ->
                     new StorageConsumingMap<>(address, new ConcurrentHashMap<>(), storagePreloader))
-            .put(storageSlotKey, slotValue);
+            .putLoaded(storageSlotKey, slotValue);
       }
     }
     if (slotValue == null) {
@@ -1006,9 +1030,10 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
           storageToUpdate.remove(address);
         }
       } else {
-        slotValue.setUpdated(replacementValue);
+        updateSlot(address, storageSlotKey, slotValue, replacementValue);
       }
     }
+    accountsToUpdate.preloadIfChanged(address, true);
   }
 
   private boolean isSlotEquals(final UInt256 expectedValue, final UInt256 existingSlotValue) {
