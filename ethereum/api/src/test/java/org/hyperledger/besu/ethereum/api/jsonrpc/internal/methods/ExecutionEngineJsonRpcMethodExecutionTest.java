@@ -32,6 +32,7 @@ import org.hyperledger.besu.plugin.services.rpc.RpcResponseType;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -160,6 +161,65 @@ public class ExecutionEngineJsonRpcMethodExecutionTest {
 
     assertThat(call(method.get()).getType()).isEqualTo(RpcResponseType.SUCCESS);
     assertThat(events).containsExactly("call", "queued work", "call");
+  }
+
+  @Test
+  public void workQueuedByAnOrderedCallRunsBeforeACallReceivedWhileItRan() throws Exception {
+    final List<String> events = Collections.synchronizedList(new ArrayList<>());
+    final CountDownLatch firstCallStarted = new CountDownLatch(1);
+    final CountDownLatch secondCallReceived = new CountDownLatch(1);
+    final AtomicReference<OrderedStubEngineMethod> first = new AtomicReference<>();
+    first.set(
+        new OrderedStubEngineMethod(
+            protocolSchedule,
+            protocolContext,
+            engineCallListener,
+            mergeCoordinator,
+            ethPeers,
+            transactionPool,
+            req -> {
+              firstCallStarted.countDown();
+              try {
+                secondCallReceived.await(10, TimeUnit.SECONDS);
+              } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+              }
+              first.get().queue(() -> events.add("queued work"));
+              events.add("first call");
+              return new JsonRpcSuccessResponse(req.getRequest().getId());
+            }));
+    // a different method shares the ordered thread and its queued work, as forkchoiceUpdated does
+    // with newPayload
+    final OrderedStubEngineMethod second =
+        new OrderedStubEngineMethod(
+            protocolSchedule,
+            protocolContext,
+            engineCallListener,
+            mergeCoordinator,
+            ethPeers,
+            transactionPool,
+            req -> {
+              events.add("second call");
+              return new JsonRpcSuccessResponse(req.getRequest().getId());
+            });
+
+    final ExecutorService callers = Executors.newFixedThreadPool(2);
+    try {
+      final Future<JsonRpcResponse> firstResponse = callers.submit(() -> call(first.get()));
+      assertThat(firstCallStarted.await(10, TimeUnit.SECONDS)).isTrue();
+      final Future<JsonRpcResponse> secondResponse = callers.submit(() -> call(second));
+      // the second call is queued on the ordered thread by then
+      Thread.sleep(200);
+      secondCallReceived.countDown();
+
+      assertThat(firstResponse.get(10, TimeUnit.SECONDS).getType())
+          .isEqualTo(RpcResponseType.SUCCESS);
+      assertThat(secondResponse.get(10, TimeUnit.SECONDS).getType())
+          .isEqualTo(RpcResponseType.SUCCESS);
+    } finally {
+      callers.shutdownNow();
+    }
+    assertThat(events).containsExactly("first call", "queued work", "second call");
   }
 
   private static JsonRpcResponse call(final JsonRpcMethod method) {

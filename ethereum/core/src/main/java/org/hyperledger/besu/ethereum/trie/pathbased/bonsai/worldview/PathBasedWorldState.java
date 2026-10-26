@@ -174,10 +174,11 @@ public abstract class PathBasedWorldState
   /**
    * Leaves the trie log of the block persisted next to {@link #takeTrieLogWrite()}, for the caller
    * to write once it has found the block valid. Only a frozen world state defers it: any other
-   * writes its trie log ahead of the state it persists.
+   * writes its trie log ahead of the state it persists. It is not deferred either if the trie log
+   * manager cannot defer it.
    */
   public void deferTrieLog() {
-    deferTrieLog = isStorageFrozen;
+    deferTrieLog = isStorageFrozen && trieLogManager.canDeferTrieLog();
   }
 
   /**

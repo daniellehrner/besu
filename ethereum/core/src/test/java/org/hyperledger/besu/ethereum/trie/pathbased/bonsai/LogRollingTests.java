@@ -16,7 +16,12 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.WorldStateConfig.createStatefulConfigWithTrie;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isA;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
@@ -34,15 +39,20 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldS
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.BonsaiTrieLogFactory;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogLayer;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.TrieLogManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiWorldStateUpdateAccumulator;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
+import org.hyperledger.besu.plugin.ServiceManager;
+import org.hyperledger.besu.plugin.services.TrieLogService;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorageTransaction;
+import org.hyperledger.besu.plugin.services.trielogs.TrieLogFactory;
 
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -380,6 +390,35 @@ class LogRollingTests {
     assertThat(secondStorage.getTrieLog(headerOne.getHash()).map(Bytes::wrap))
         .isEqualTo(
             trieLogStorage.get(headerOne.getHash().getBytes().toArrayUnsafe()).map(Bytes::wrap));
+  }
+
+  @Test
+  void trieLogOfAPluginFactoryIsWrittenWhilePersisting() {
+    final TrieLogFactory pluginTrieLogFactory = spy(new BonsaiTrieLogFactory());
+    final TrieLogService trieLogService = mock(TrieLogService.class);
+    when(trieLogService.getTrieLogFactory()).thenReturn(Optional.of(pluginTrieLogFactory));
+    final ServiceManager pluginContext = mock(ServiceManager.class);
+    when(pluginContext.getService(TrieLogService.class)).thenReturn(Optional.of(trieLogService));
+
+    final BonsaiWorldStateKeyValueStorage storage = secondArchive.getWorldStateKeyValueStorage();
+    final BonsaiWorldState frozenWorldState =
+        new BonsaiWorldState(
+            storage,
+            secondArchive.getCachedMerkleTrieLoader(),
+            secondArchive.getWorldStateCacheManager(),
+            new TrieLogManager(blockchain, storage, 512, pluginContext),
+            EvmConfiguration.DEFAULT,
+            createStatefulConfigWithTrie(),
+            new BonsaiCodeCache());
+    frozenWorldState.freezeStorage();
+    frozenWorldState.deferTrieLog();
+    applyBlockOne(frozenWorldState.updater());
+    frozenWorldState.persist(headerOne);
+
+    // a plugin's factory may read more of the block's state than its changes
+    verify(pluginTrieLogFactory)
+        .create(isA(PathBasedWorldStateUpdateAccumulator.class), eq(headerOne));
+    assertThat(storage.getTrieLog(headerOne.getHash())).isPresent();
   }
 
   private static void applyBlockOne(final WorldUpdater updater) {
