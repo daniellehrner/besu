@@ -626,11 +626,7 @@ public class MessageFrame {
    * @return The bytes in the specified range
    */
   public MutableBytes readMutableMemoryV2(final long offset, final long length) {
-    final MutableBytes memBytes = memory.getMutableBytes(offset, length);
-    if (recordsUpdatesForTracerV2) {
-      setUpdatedMemory(offset, memBytes);
-    }
-    return memBytes;
+    return readMutableMemory(offset, length, recordsUpdatesForTracerV2);
   }
 
   /**
@@ -641,10 +637,7 @@ public class MessageFrame {
    * @param value The value to set in memory
    */
   public void writeMemoryV2(final long offset, final byte value) {
-    memory.setByte(offset, value);
-    if (recordsUpdatesForTracerV2) {
-      setUpdatedMemory(offset, Bytes.of(value));
-    }
+    writeMemory(offset, value, recordsUpdatesForTracerV2);
   }
 
   /**
@@ -656,10 +649,7 @@ public class MessageFrame {
    * @param value The value to write
    */
   public void writeMemoryV2(final long offset, final long length, final Bytes value) {
-    memory.setBytes(offset, length, value);
-    if (recordsUpdatesForTracerV2) {
-      setUpdatedMemory(offset, 0, length, value);
-    }
+    writeMemory(offset, length, value, recordsUpdatesForTracerV2);
   }
 
   /**
@@ -671,10 +661,7 @@ public class MessageFrame {
    * @param value The value to write
    */
   public void writeMemoryRightAlignedV2(final long offset, final long length, final Bytes value) {
-    memory.setBytesRightAligned(offset, length, value);
-    if (recordsUpdatesForTracerV2) {
-      setUpdatedMemoryRightAligned(offset, length, value);
-    }
+    writeMemoryRightAligned(offset, length, value, recordsUpdatesForTracerV2);
   }
 
   /**
@@ -688,10 +675,7 @@ public class MessageFrame {
    */
   public void writeMemoryV2(
       final long offset, final long sourceOffset, final long length, final Bytes value) {
-    memory.setBytes(offset, sourceOffset, length, value);
-    if (recordsUpdatesForTracerV2 && length > 0) {
-      setUpdatedMemory(offset, sourceOffset, length, value);
-    }
+    writeMemory(offset, sourceOffset, length, value, recordsUpdatesForTracerV2);
   }
 
   /**
@@ -703,12 +687,7 @@ public class MessageFrame {
    * @param length the number of bytes to copy
    */
   public void copyMemoryV2(final long dst, final long src, final long length) {
-    if (length > 0) {
-      memory.copy(dst, src, length);
-      if (recordsUpdatesForTracerV2) {
-        setUpdatedMemory(dst, memory.getBytes(dst, length));
-      }
-    }
+    copyMemory(dst, src, length, recordsUpdatesForTracerV2);
   }
 
   /**
