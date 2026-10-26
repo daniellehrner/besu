@@ -45,6 +45,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.NoOpBonsaiCachedMerkleTrieLoader;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.cache.NoOpBonsaiWorldStateCacheManager;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
+import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 
@@ -145,8 +146,40 @@ class BonsaiWorldStateUpdateAccumulatorTest {
       accumulator.commit();
 
       verify(loader, never()).preLoadAccount(any(), any(), any());
-      verify(loader, never()).preLoadStorageSlot(any(), any(), any(Hash.class), any());
-      verify(loader, never()).preLoadStorageSlot(any(), any(), any());
+      verify(loader, never()).preLoadStorageSlot(any(), any(), any(), any());
+    }
+  }
+
+  @Test
+  void slotWrittenBackInTheSameTransaction_preloadsNothing() {
+    final BonsaiCachedMerkleTrieLoader loader = spy(new NoOpBonsaiCachedMerkleTrieLoader());
+    try (BonsaiWorldState worldState = newEmptyWorldState(loader)) {
+      final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
+      clearInvocations(loader);
+
+      final MutableAccount account = accumulator.getAccount(ACCOUNT);
+      account.setStorageValue(SLOT.getSlotKey().orElseThrow(), V1);
+      account.setStorageValue(SLOT.getSlotKey().orElseThrow(), V0);
+      accumulator.commit();
+
+      verify(loader, never()).preLoadAccount(any(), any(), any());
+      verify(loader, never()).preLoadStorageSlot(any(), any(), any(), any());
+    }
+  }
+
+  @Test
+  void slotWriteAfterClearingStorage_preloadsFromTheEmptyRoot() {
+    final BonsaiCachedMerkleTrieLoader loader = spy(new NoOpBonsaiCachedMerkleTrieLoader());
+    try (BonsaiWorldState worldState = newEmptyWorldState(loader)) {
+      final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
+      clearInvocations(loader);
+
+      final MutableAccount account = accumulator.getAccount(ACCOUNT);
+      account.clearStorage();
+      account.setStorageValue(SLOT.getSlotKey().orElseThrow(), V1);
+      accumulator.commit();
+
+      verify(loader).preLoadStorageSlot(any(), eq(ACCOUNT), eq(Hash.EMPTY_TRIE_HASH), eq(SLOT));
     }
   }
 
@@ -179,7 +212,7 @@ class BonsaiWorldStateUpdateAccumulatorTest {
       accumulator.commit();
 
       verify(loader).preLoadAccount(any(), any(), eq(ACCOUNT));
-      verify(loader, never()).preLoadStorageSlot(any(), any(), any(Hash.class), any());
+      verify(loader, never()).preLoadStorageSlot(any(), any(), any(), any());
     }
   }
 

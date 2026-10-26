@@ -20,6 +20,8 @@ import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 
+import org.jspecify.annotations.Nullable;
+
 public class NoOpBonsaiCachedMerkleTrieLoader extends BonsaiCachedMerkleTrieLoader {
 
   /**
@@ -46,15 +48,7 @@ public class NoOpBonsaiCachedMerkleTrieLoader extends BonsaiCachedMerkleTrieLoad
   public void preLoadStorageSlot(
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
       final Address account,
-      final StorageSlotKey slotKey) {
-    // noop
-  }
-
-  @Override
-  public void preLoadStorageSlot(
-      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
-      final Address account,
-      final Hash storageRoot,
+      final @Nullable Hash storageRoot,
       final StorageSlotKey slotKey) {
     // noop
   }
@@ -71,15 +65,7 @@ public class NoOpBonsaiCachedMerkleTrieLoader extends BonsaiCachedMerkleTrieLoad
   public void cacheStorageNodes(
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
       final Address account,
-      final StorageSlotKey slotKey) {
-    // noop
-  }
-
-  @Override
-  public void cacheStorageNodes(
-      final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
-      final Address account,
-      final Hash storageRoot,
+      final @Nullable Hash storageRoot,
       final StorageSlotKey slotKey) {
     // noop
   }

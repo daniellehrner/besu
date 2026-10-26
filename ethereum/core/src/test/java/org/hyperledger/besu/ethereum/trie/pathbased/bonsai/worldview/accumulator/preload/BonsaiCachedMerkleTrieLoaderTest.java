@@ -155,6 +155,7 @@ class BonsaiCachedMerkleTrieLoaderTest {
           merkleTrieLoader.cacheStorageNodes(
               inMemoryWorldState,
               accounts.get(0),
+              null,
               new StorageSlotKey(Hash.wrap(keyHash), Optional.empty()));
           originalSlots.add(node.getEncodedBytes());
           return TrieIterator.State.CONTINUE;

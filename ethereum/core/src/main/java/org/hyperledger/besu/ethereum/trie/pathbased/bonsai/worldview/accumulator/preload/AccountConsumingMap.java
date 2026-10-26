@@ -72,6 +72,14 @@ public class AccountConsumingMap<T extends BonsaiValue<? extends BonsaiAccount>>
     }
   }
 
+  /** An account put back after its removal is preloaded again if it changed. */
+  @Override
+  public T remove(final Object address) {
+    final T previous = super.remove(address);
+    preloaded.remove(address);
+    return previous;
+  }
+
   @Override
   public void clear() {
     super.clear();

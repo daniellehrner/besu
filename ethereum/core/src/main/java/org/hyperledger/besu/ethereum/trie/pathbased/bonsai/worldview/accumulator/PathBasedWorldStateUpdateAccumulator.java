@@ -194,6 +194,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
                 k ->
                     new StorageConsumingMap<>(
                         address, new ConcurrentHashMap<>(), storagePreloader));
+        boolean storageChanged = false;
         for (final PartialBlockAccessView.SlotChange slotChange :
             accountChanges.getStorageChanges()) {
           final StorageSlotKey slotKey = slotChange.slot();
@@ -204,12 +205,14 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
 
           final BonsaiValue<UInt256> pendingValue = pendingStorageUpdates.get(slotKey);
           if (pendingValue == null) {
-            pendingStorageUpdates.put(slotKey, new BonsaiValue<>(prior, updated));
+            final BonsaiValue<UInt256> slot = new BonsaiValue<>(prior, updated);
+            pendingStorageUpdates.put(slotKey, slot);
+            storageChanged |= slot.isChanged();
           } else {
-            updateSlot(address, slotKey, pendingValue, updated);
+            storageChanged |= updateSlot(address, slotKey, pendingValue, updated);
           }
         }
-        accountsToUpdate.preloadIfChanged(address, true);
+        accountsToUpdate.preloadIfChanged(address, storageChanged);
       }
 
       if (shouldCheckForEmptyAccount && accountValue.isEmpty()) {
@@ -606,28 +609,25 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
     }
 
     // parallel stream here may cause database corruption
-    updatedAccount
-        .getUpdatedStorage()
-        .entrySet()
-        .forEach(
-            storageUpdate -> {
-              final UInt256 keyUInt = storageUpdate.getKey();
-              final StorageSlotKey slotKey =
-                  new StorageSlotKey(hashAndSaveSlotPreImage(keyUInt), Optional.of(keyUInt));
-              final UInt256 value = storageUpdate.getValue();
-              final BonsaiValue<UInt256> pendingValue = pendingStorageUpdates.get(slotKey);
-              if (pendingValue == null) {
-                pendingStorageUpdates.put(
-                    slotKey,
-                    new BonsaiValue<>(updatedAccount.getOriginalStorageValue(keyUInt), value));
-              } else {
-                updateSlot(updatedAddress, slotKey, pendingValue, value);
-              }
-            });
+    boolean storageChanged = tracked.getStorageWasCleared();
+    for (final Map.Entry<UInt256, UInt256> storageUpdate :
+        updatedAccount.getUpdatedStorage().entrySet()) {
+      final UInt256 keyUInt = storageUpdate.getKey();
+      final StorageSlotKey slotKey =
+          new StorageSlotKey(hashAndSaveSlotPreImage(keyUInt), Optional.of(keyUInt));
+      final UInt256 value = storageUpdate.getValue();
+      final BonsaiValue<UInt256> pendingValue = pendingStorageUpdates.get(slotKey);
+      if (pendingValue == null) {
+        final BonsaiValue<UInt256> slot =
+            new BonsaiValue<>(updatedAccount.getOriginalStorageValue(keyUInt), value);
+        pendingStorageUpdates.put(slotKey, slot);
+        storageChanged |= slot.isChanged();
+      } else {
+        storageChanged |= updateSlot(updatedAddress, slotKey, pendingValue, value);
+      }
+    }
 
-    accountsToUpdate.preloadIfChanged(
-        updatedAddress,
-        tracked.getStorageWasCleared() || !updatedAccount.getUpdatedStorage().isEmpty());
+    accountsToUpdate.preloadIfChanged(updatedAddress, storageChanged);
     updatedAccount.getUpdatedStorage().clear();
 
     if (pendingStorageUpdates.isEmpty()) {
@@ -639,17 +639,22 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
     }
   }
 
-  /** Sets a slot's updated value, and preloads the slot's trie path once the block changes it. */
-  private void updateSlot(
+  /**
+   * Sets a slot's updated value, and preloads the slot's trie path once the block changes it.
+   * Returns whether the block changed the slot.
+   */
+  private boolean updateSlot(
       final Address address,
       final StorageSlotKey slotKey,
       final BonsaiValue<UInt256> slot,
       final UInt256 value) {
     final boolean wasChanged = slot.isChanged();
     slot.setUpdated(value);
-    if (!wasChanged && slot.isChanged()) {
+    final boolean changed = slot.isChanged();
+    if (changed && !wasChanged) {
       storagePreloader.process(address, slotKey);
     }
+    return changed;
   }
 
   @Override
