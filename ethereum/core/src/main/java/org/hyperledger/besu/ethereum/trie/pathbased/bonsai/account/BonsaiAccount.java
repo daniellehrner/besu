@@ -377,7 +377,8 @@ public class BonsaiAccount implements MutableAccount, TrieAccountValue {
 
   /**
    * Whether two versions of an account have the same value in the account trie: both are absent, or
-   * they have the same nonce, balance, storage root and code hash.
+   * they have the same nonce, balance, storage root strategy and code hash. The strategy writes the
+   * storage root field, so equal strategies hold the same root in the same format.
    *
    * @param a an account, or null if it does not exist
    * @param b another account, or null if it does not exist
@@ -389,7 +390,7 @@ public class BonsaiAccount implements MutableAccount, TrieAccountValue {
     }
     return a.getNonce() == b.getNonce()
         && a.getBalance().equals(b.getBalance())
-        && a.getStorageRoot().equals(b.getStorageRoot())
+        && a.storageRootStrategy.equals(b.storageRootStrategy)
         && a.getCodeHash().equals(b.getCodeHash());
   }
 

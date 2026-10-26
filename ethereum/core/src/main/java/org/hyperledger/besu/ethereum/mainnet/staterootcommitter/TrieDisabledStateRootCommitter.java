@@ -24,6 +24,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.StorageConsumingMap;
+import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.plugin.data.BlockHeader;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
@@ -80,10 +81,18 @@ public enum TrieDisabledStateRootCommitter implements StateRootCommitter {
     /** Strategy that persists deferred writes, or drops them when storage is frozen. */
     private final WriteSink sink;
 
+    /**
+     * A partial flat database misses accounts, so the accounts a block reads are written to it,
+     * changed or not.
+     */
+    private final boolean fillPartialFlatDb;
+
     FlatComputation(
         final BonsaiWorldState bonsai, final BonsaiWorldStateUpdateAccumulator worldStateUpdater) {
       this.worldStateUpdater = worldStateUpdater;
       this.sink = bonsai.isStorageFrozen() ? new FrozenSink() : new PersistingSink(writes);
+      this.fillPartialFlatDb =
+          !sink.isFrozen() && bonsai.getWorldStateStorage().getFlatDbMode() == FlatDbMode.PARTIAL;
     }
 
     void executeInto(final List<StateRootComputations.UpdaterWrite> writeSink) {
@@ -98,8 +107,15 @@ public enum TrieDisabledStateRootCommitter implements StateRootCommitter {
     private void collectAccountWrites() {
       for (final Map.Entry<Address, BonsaiValue<BonsaiAccount>> accountUpdate :
           worldStateUpdater.getAccountsToUpdate().entrySet()) {
+        final Address address = accountUpdate.getKey();
         final BonsaiValue<BonsaiAccount> accountValue = accountUpdate.getValue();
-        final Hash addressHash = accountUpdate.getKey().addressHash();
+        if (!fillPartialFlatDb
+            && !worldStateUpdater.getStorageToClear().contains(address)
+            && BonsaiAccount.trieValueEquals(accountValue.getPrior(), accountValue.getUpdated())) {
+          // an unchanged account keeps its flat entry, rewriting it only costs time
+          continue;
+        }
+        final Hash addressHash = address.addressHash();
         if (accountValue.getUpdated() == null) {
           sink.removeAccountInfoState(addressHash);
         } else {

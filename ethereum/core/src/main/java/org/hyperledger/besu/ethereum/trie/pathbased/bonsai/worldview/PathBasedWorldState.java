@@ -84,6 +84,12 @@ public abstract class PathBasedWorldState
   protected Hash worldStateRootHash;
   protected Hash worldStateBlockHash;
 
+  /**
+   * The root of a frozen world state with its accumulator applied. The tries stay rooted at
+   * worldStateRootHash, because a frozen world state never stores the nodes of this root.
+   */
+  private Hash frozenRootHash;
+
   // configuration parameters for the world state.
   protected WorldStateConfig worldStateConfig;
 
@@ -176,6 +182,7 @@ public abstract class PathBasedWorldState
   public void resetWorldStateTo(final BlockHeader blockHeader) {
     worldStateBlockHash = blockHeader.getBlockHash();
     worldStateRootHash = blockHeader.getStateRoot();
+    frozenRootHash = null;
   }
 
   @Override
@@ -243,6 +250,7 @@ public abstract class PathBasedWorldState
       throw e;
     } finally {
       accumulator.reset();
+      frozenRootHash = null;
     }
   }
 
@@ -397,10 +405,10 @@ public abstract class PathBasedWorldState
   @Override
   public Hash rootHash() {
     if (isStorageFrozen && accumulator.isAccumulatorStateChanged()) {
-      worldStateRootHash = resolveDefaultCommitter().compute(this, null, accumulator.copy()).root();
+      frozenRootHash = resolveDefaultCommitter().compute(this, null, accumulator.copy()).root();
       accumulator.resetAccumulatorStateChanged();
     }
-    return worldStateRootHash;
+    return frozenRootHash != null ? frozenRootHash : worldStateRootHash;
   }
 
   /**

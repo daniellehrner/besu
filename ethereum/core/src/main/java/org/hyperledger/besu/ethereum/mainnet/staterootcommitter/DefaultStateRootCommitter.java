@@ -30,6 +30,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.StorageConsumingMap;
+import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.plugin.data.BlockHeader;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
@@ -102,6 +103,12 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
     /** Strategy that persists deferred writes, or drops them when storage is frozen. */
     private final WriteSink sink;
 
+    /**
+     * A partial flat database misses accounts, and every read of a missing one walks the trie, so
+     * the accounts a block reads are written to it.
+     */
+    private final boolean fillPartialFlatDb;
+
     DefaultComputation(
         final BonsaiWorldState bonsai,
         final BonsaiWorldStateUpdateAccumulator worldStateUpdater,
@@ -110,6 +117,8 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
       this.worldStateUpdater = worldStateUpdater;
       this.addressHasher = addressHasher;
       this.sink = bonsai.isStorageFrozen() ? new FrozenSink() : new PersistingSink(writes);
+      this.fillPartialFlatDb =
+          !sink.isFrozen() && bonsai.getWorldStateStorage().getFlatDbMode() == FlatDbMode.PARTIAL;
     }
 
     Hash executeInto(final List<StateRootComputations.UpdaterWrite> writeSink) {
@@ -124,13 +133,23 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
       for (final Map.Entry<Address, StorageConsumingMap<StorageSlotKey, BonsaiValue<UInt256>>>
           storageAccountUpdate : worldStateUpdater.getStorageToUpdate().entrySet()) {
         final Address address = storageAccountUpdate.getKey();
-        if (worldStateUpdater.getAccountsToUpdate().containsKey(address)
-            && hasStorageChange(address, storageAccountUpdate.getValue())) {
+        final BonsaiValue<BonsaiAccount> accountValue =
+            worldStateUpdater.getAccountsToUpdate().get(address);
+        if (accountValue == null) {
+          continue;
+        }
+        if (hasStorageChange(address, storageAccountUpdate.getValue())) {
           storageFutures.put(
               address,
               CompletableFuture.supplyAsync(
                   () -> updateStorageTrie(address, storageAccountUpdate.getValue()),
                   BlockProcessingExecutors.storageTrieExecutor()));
+        } else if (accountValue.getUpdated() != null) {
+          // an earlier computation on this accumulator can have left the root of slots written
+          // back since
+          accountValue
+              .getUpdated()
+              .setStorageRoot(startingStorageRoot(address, accountValue.getPrior()));
         }
       }
 
@@ -141,6 +160,11 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
         final BonsaiValue<BonsaiAccount> accountValue = accountUpdate.getValue();
         if (isUnchanged(address, accountValue)) {
           // an unchanged account keeps its leaf and flat entry, rewriting them only costs time
+          // unless the flat database is partial
+          if (fillPartialFlatDb && accountValue.getUpdated() != null) {
+            sink.putAccountInfoState(
+                addressHasher.apply(bonsai, address), accountValue.getUpdated().serializeAccount());
+          }
           continue;
         }
         final Hash addressHash = addressHasher.apply(bonsai, address);
@@ -199,12 +223,9 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
       final BonsaiAccount accountOriginal =
           worldStateUpdater.getAccountsToUpdate().get(updatedAddress).getPrior();
       final boolean storageCleared = worldStateUpdater.getStorageToClear().contains(updatedAddress);
-      final Hash storageRoot =
-          (accountOriginal == null || storageCleared)
-              ? Hash.EMPTY_TRIE_HASH
-              : accountOriginal.getStorageRoot();
       final MerkleTrie<Bytes, Bytes> storageTrie =
-          bonsai.createStorageTrie(updatedAddressHash, storageRoot);
+          bonsai.createStorageTrie(
+              updatedAddressHash, startingStorageRoot(updatedAddress, accountOriginal));
 
       for (final Map.Entry<StorageSlotKey, BonsaiValue<UInt256>> storageUpdate :
           storageUpdates.entrySet()) {
@@ -233,6 +254,13 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
                 u -> u.putTrieNode(TrieNodeKey.of(updatedAddressHash, location), nodeHash, value));
       }
       return accountDeleted ? Hash.EMPTY_TRIE_HASH : Hash.wrap(storageTrie.getRootHash());
+    }
+
+    /** The root of the account's storage trie before the block's slot changes. */
+    private Hash startingStorageRoot(final Address address, final BonsaiAccount prior) {
+      return prior == null || worldStateUpdater.getStorageToClear().contains(address)
+          ? Hash.EMPTY_TRIE_HASH
+          : prior.getStorageRoot();
     }
 
     private boolean hasStorageChange(
