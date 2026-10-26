@@ -1107,7 +1107,7 @@ public class DefaultBlockchainTest {
   }
 
   @Test
-  public void recentBlockDataIsServedFromCacheWithoutCachingBlocks() {
+  public void recentBlockDataIsServedFromCacheAfterStorageRemoval() {
     final BlockDataGenerator gen = new BlockDataGenerator();
     final Block genesisBlock = gen.genesisBlock();
     final KeyValueStorage kvStore = new InMemoryKeyValueStorage();

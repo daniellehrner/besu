@@ -23,6 +23,8 @@ import java.util.Arrays;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class RecentBlocksRlpCacheTest {
 
@@ -73,9 +75,10 @@ class RecentBlocksRlpCacheTest {
     assertThat(cache.weight()).isEqualTo(100 + ENTRY_OVERHEAD);
   }
 
-  @Test
-  void cachesNothingWithoutBlocks() {
-    final RecentBlocksRlpCache cache = new RecentBlocksRlpCache(0, Long.MAX_VALUE);
+  @ParameterizedTest
+  @ValueSource(ints = {0, -1})
+  void cachesNothingWithoutBlocks(final int maxBlocks) {
+    final RecentBlocksRlpCache cache = new RecentBlocksRlpCache(maxBlocks, Long.MAX_VALUE);
 
     cache.put(hash(0), rlp(0, 10));
 

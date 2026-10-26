@@ -2917,6 +2917,21 @@ public class BesuCommandTest extends CommandTestAbstract {
     assertThat(longArgumentCaptor.getValue()).isEqualTo(128L * 1024 * 1024);
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "--cache-last-blocks",
+        "--cache-last-blocks-max-capacity",
+        "--cache-last-block-headers"
+      })
+  public void cacheOptionsRejectNegativeValues(final String option) {
+    parseCommand(option, "-1");
+
+    verifyNoInteractions(mockRunnerBuilder);
+    assertThat(commandOutput.toString(UTF_8)).isEmpty();
+    assertThat(commandErrorOutput.toString(UTF_8)).contains(option + " must be >= 0");
+  }
+
   @Test
   public void cacheLastBlocksOptionSizesBlockHeadersCacheWhenHigher() {
     parseCommand("--cache-last-blocks", "512");

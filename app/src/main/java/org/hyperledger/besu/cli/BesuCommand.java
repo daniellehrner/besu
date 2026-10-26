@@ -1605,6 +1605,7 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
     validateAndResolveCheckpointRelatedConfig();
     validateTransactionPoolOptions();
     validateDataStorageOptions();
+    validateCacheOptions();
     validateGraphQlOptions();
     validatePluginOptions();
     validateUnstableNetworkingOptions();
@@ -1628,6 +1629,20 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
 
   private void validateDataStorageOptions() {
     dataStorageOptions.validate(commandLine);
+  }
+
+  private void validateCacheOptions() {
+    if (numberOfBlocksToCache < 0) {
+      throw new ParameterException(
+          this.commandLine, "--cache-last-blocks must be >= 0 (0 disables the caches)");
+    }
+    if (lastBlocksCacheMaxCapacity < 0) {
+      throw new ParameterException(
+          this.commandLine, "--cache-last-blocks-max-capacity must be >= 0");
+    }
+    if (numberOfBlockHeadersToCache < 0) {
+      throw new ParameterException(this.commandLine, "--cache-last-block-headers must be >= 0");
+    }
   }
 
   private void validateMiningParams() {
