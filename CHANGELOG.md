@@ -7,9 +7,6 @@
 - `engine_getPayload` no longer waits for the in-progress block build when only the empty block has been built, as [execution-apis#958](https://github.com/ethereum/execution-apis/pull/958) requires. The default of `--Xpos-block-finalization-timeout-ms` changes from 800 to 0 and the option now accepts 0; set it to a positive value to restore the previous wait. [#11774](https://github.com/besu-eth/besu/pull/11774)
 - `eth_simulateV1` now rejects unknown account overrides [#11695](https://github.com/besu-eth/besu/pull/11695)
 
-### Upcoming Breaking Changes
-- `--cache-last-blocks` is deprecated and will be removed in a future release; it now only sizes the block header cache, use `--cache-last-block-headers` instead. [#11455](https://github.com/besu-eth/besu/pull/11455)
-
 ### Bug fixes
 - Block propagation now retries a block that peers do not serve with a delay that grows from 250 ms to 30 s and stops after 10 retries, releasing the block number for a later announcement. Previously it rescheduled the retrieval immediately and without a limit for as long as the number stayed in the propagation range. Block propagation stops once a finalized forkchoice is received, so this only affects networks that do not send one (Clique/PoA) and tests, not mainnet. [#11674](https://github.com/besu-eth/besu/pull/11674)
 - `eth_call`, `eth_estimateGas`, `eth_createAccessList` and `debug_traceCall` now reject an invalid state override with the error declared for it instead of `Internal error` (`-32603`). An account override that sets both `state` and `stateDiff` returns `Invalid call params` (`-32602`) and is no longer logged at `ERROR`, and `movePrecompileToAddress` on an address that is not a precompile returns `-32000`, as `eth_simulateV1` does. [#11590](https://github.com/besu-eth/besu/issues/11590)
@@ -20,7 +17,7 @@
 - `trace_rawTransaction` now applies the `--rpc-max-trace-steps` cap, as `trace_call` and `trace_callMany` already do. It traced every step of the submitted transaction regardless of the setting. [#11438](https://github.com/besu-eth/besu/pull/11438)
 - Strict transaction replay protection (`--strict-tx-replay-protection-enabled`) no longer rejects transactions from priority senders received from peers; it applies only to transactions submitted via JSON-RPC, as documented. [#11466](https://github.com/besu-eth/besu/pull/11466)
 - With `--cache-last-blocks` set, RPC methods return the total difficulty of recently imported blocks instead of their own difficulty, which is 0 after the merge. [#11790](https://github.com/besu-eth/besu/pull/11790)
-- Bodies, receipts and block access lists of recently imported blocks are now cached as RLP, by default for the last 128 blocks and at most 128 MiB per type, set with `--cache-recent-blocks` and `--cache-recent-blocks-max-capacity`. [#11455](https://github.com/besu-eth/besu/pull/11455)
+- Bodies, receipts and block access lists of recently imported blocks are now cached as RLP, by default for the last 128 blocks and at most 128 MiB per type, set with `--cache-last-blocks` and `--cache-last-blocks-max-capacity`. [#11455](https://github.com/besu-eth/besu/pull/11455)
 - The derived RocksDB max open files no longer counts the heap the JVM has not committed yet as free memory. [#11455](https://github.com/besu-eth/besu/pull/11455)
 
 ### Additions and Improvements

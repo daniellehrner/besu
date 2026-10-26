@@ -516,7 +516,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
    * @param numberOfRecentBlocksToCache the number of recent blocks to cache, 0 to disable
    * @return the besu controller builder
    */
-  public BesuControllerBuilder cacheRecentBlocks(final Integer numberOfRecentBlocksToCache) {
+  public BesuControllerBuilder cacheLastBlocks(final Integer numberOfRecentBlocksToCache) {
     this.numberOfRecentBlocksToCache = numberOfRecentBlocksToCache;
     return this;
   }
@@ -528,8 +528,7 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
    * @param recentBlocksCacheMaxCapacity the max capacity in bytes of each cache
    * @return the besu controller builder
    */
-  public BesuControllerBuilder cacheRecentBlocksMaxCapacity(
-      final Long recentBlocksCacheMaxCapacity) {
+  public BesuControllerBuilder cacheLastBlocksMaxCapacity(final Long recentBlocksCacheMaxCapacity) {
     this.recentBlocksCacheMaxCapacity = recentBlocksCacheMaxCapacity;
     return this;
   }
