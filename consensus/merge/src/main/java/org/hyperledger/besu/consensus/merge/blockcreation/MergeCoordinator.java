@@ -877,8 +877,6 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
           INTERNAL_ERROR, "Failed to set new head", Optional.empty());
     }
 
-    mempoolPrewarmer.ifPresent(prewarmer -> prewarmer.start(newHead));
-
     // set and persist the new finalized block if it is present
     newFinalized.ifPresent(
         blockHeader -> {
@@ -893,6 +891,8 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
               blockchain.setSafeBlock(safeBlockHash);
               mergeContext.setSafeBlock(newSafeBlock);
             });
+
+    mempoolPrewarmer.ifPresent(prewarmer -> prewarmer.start(newHead));
 
     return ForkchoiceResult.withResult(newFinalized, Optional.of(newHead));
   }
@@ -979,6 +979,8 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
   @Override
   public CompletableFuture<Void> appendNewPayloadToSync(
       final Block newPayload, final Optional<BlockAccessList> blockAccessList) {
+    // the head the prewarmer warms for is behind the blocks backward sync imports
+    mempoolPrewarmer.ifPresent(prewarmer -> prewarmer.stop(Optional.empty()));
     return backwardSyncContext.syncBackwardsUntil(newPayload, blockAccessList);
   }
 
