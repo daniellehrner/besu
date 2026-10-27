@@ -21,7 +21,6 @@ import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIden
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
-import org.hyperledger.besu.ethereum.trie.TrieBytes;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.code.CodeStorageStrategy;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
 import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
@@ -105,7 +104,7 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
       final Bytes storageValue) {
     transaction.put(
         ACCOUNT_STORAGE_STORAGE,
-        TrieBytes.concat(accountHash.getBytes(), slotHash.getBytes()).toArrayUnsafe(),
+        Bytes.concatenate(accountHash.getBytes(), slotHash.getBytes()).toArrayUnsafe(),
         storageValue.toArrayUnsafe());
   }
 
@@ -117,7 +116,7 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
       final Hash slotHash) {
     transaction.remove(
         ACCOUNT_STORAGE_STORAGE,
-        TrieBytes.concat(accountHash.getBytes(), slotHash.getBytes()).toArrayUnsafe());
+        Bytes.concatenate(accountHash.getBytes(), slotHash.getBytes()).toArrayUnsafe());
   }
 
   @Override
@@ -144,7 +143,7 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
     return storage
         .streamFromKey(
             ACCOUNT_STORAGE_STORAGE,
-            TrieBytes.concat(accountHash.getBytes(), startKeyHash).toArrayUnsafe())
+            Bytes.concatenate(accountHash.getBytes(), startKeyHash).toArrayUnsafe())
         .takeWhile(
             pair -> Bytes.wrap(pair.getKey()).slice(0, Bytes32.SIZE).equals(accountHash.getBytes()))
         .map(
@@ -165,8 +164,8 @@ public abstract class BonsaiFlatDbStrategy extends FlatDbStrategy {
     return storage
         .streamFromKey(
             ACCOUNT_STORAGE_STORAGE,
-            TrieBytes.concat(accountHash.getBytes(), startKeyHash).toArrayUnsafe(),
-            TrieBytes.concat(accountHash.getBytes(), endKeyHash).toArrayUnsafe())
+            Bytes.concatenate(accountHash.getBytes(), startKeyHash).toArrayUnsafe(),
+            Bytes.concatenate(accountHash.getBytes(), endKeyHash).toArrayUnsafe())
         .map(
             pair ->
                 new Pair<>(

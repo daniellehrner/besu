@@ -22,7 +22,6 @@ import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.Bonsai
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.trie.NodeLoader;
-import org.hyperledger.besu.ethereum.trie.TrieBytes;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.code.CodeStorageStrategy;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.flat.BonsaiFullFlatDbStrategy;
 import org.hyperledger.besu.plugin.services.MetricsSystem;
@@ -433,7 +432,7 @@ public class BonsaiArchiveFlatDbStrategy extends BonsaiFullFlatDbStrategy {
   }
 
   public static byte[] calculateNaturalSlotKey(final Hash accountHash, final Hash slotHash) {
-    return TrieBytes.concat(accountHash.getBytes(), slotHash.getBytes()).toArrayUnsafe();
+    return Bytes.concatenate(accountHash.getBytes(), slotHash.getBytes()).toArrayUnsafe();
   }
 
   public static byte[] calculateArchiveKeyWithMinSuffix(

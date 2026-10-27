@@ -24,7 +24,6 @@ import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.ethereum.storage.StorageProvider;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier;
 import org.hyperledger.besu.ethereum.trie.MerkleTrie;
-import org.hyperledger.besu.ethereum.trie.TrieBytes;
 import org.hyperledger.besu.ethereum.trie.common.PatriciaTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.cache.FlatDbCacheManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.cache.VersionedFlatDbCacheManager;
@@ -376,7 +375,7 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
       final Hash accountHash,
       final StorageSlotKey storageSlotKey) {
     final Bytes key =
-        TrieBytes.concat(accountHash.getBytes(), storageSlotKey.getSlotHash().getBytes());
+        Bytes.concatenate(accountHash.getBytes(), storageSlotKey.getSlotHash().getBytes());
     return cacheManager.getFromCacheOrStorage(
         ACCOUNT_STORAGE_STORAGE,
         key,
@@ -769,7 +768,7 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
         final Hash accountHash, final Hash slotHash, final Bytes storageValue) {
       stagePut(
           ACCOUNT_STORAGE_STORAGE,
-          TrieBytes.concat(accountHash.getBytes(), slotHash.getBytes()),
+          Bytes.concatenate(accountHash.getBytes(), slotHash.getBytes()),
           storageValue);
       return super.putStorageValueBySlotHash(accountHash, slotHash, storageValue);
     }
@@ -778,7 +777,7 @@ public class BonsaiWorldStateKeyValueStorage implements WorldStateKeyValueStorag
     public synchronized void removeStorageValueBySlotHash(
         final Hash accountHash, final Hash slotHash) {
       stageRemoval(
-          ACCOUNT_STORAGE_STORAGE, TrieBytes.concat(accountHash.getBytes(), slotHash.getBytes()));
+          ACCOUNT_STORAGE_STORAGE, Bytes.concatenate(accountHash.getBytes(), slotHash.getBytes()));
       super.removeStorageValueBySlotHash(accountHash, slotHash);
     }
 

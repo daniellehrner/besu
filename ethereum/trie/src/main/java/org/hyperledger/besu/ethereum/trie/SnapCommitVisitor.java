@@ -76,11 +76,11 @@ public class SnapCommitVisitor<V> extends CommitVisitor<V> implements LocationNo
 
     final Node<V> child = extensionNode.getChild();
     if (child.isDirty()) {
-      child.accept(TrieBytes.concat(location, extensionNode.getPath()), this);
+      child.accept(Bytes.concatenate(location, extensionNode.getPath()), this);
     }
     if (child.isHealNeeded()
         || !isInRange(
-            TrieBytes.concat(location, extensionNode.getPath()), startKeyPath, endKeyPath)) {
+            Bytes.concatenate(location, extensionNode.getPath()), startKeyPath, endKeyPath)) {
       extensionNode.markHealNeeded(); // not save an incomplete node
     }
 
@@ -114,12 +114,13 @@ public class SnapCommitVisitor<V> extends CommitVisitor<V> implements LocationNo
     }
 
     for (int i = 0; i < branchNode.maxChild(); ++i) {
+      Bytes index = Bytes.of(i);
       final Node<V> child = branchNode.child((byte) i);
       if (child.isDirty()) {
-        child.accept(TrieBytes.append(location, (byte) i), this);
+        child.accept(Bytes.concatenate(location, index), this);
       }
       if (child.isHealNeeded()
-          || !isInRange(TrieBytes.append(location, (byte) i), startKeyPath, endKeyPath)) {
+          || !isInRange(Bytes.concatenate(location, index), startKeyPath, endKeyPath)) {
         branchNode.markHealNeeded(); // not save an incomplete node
       }
     }

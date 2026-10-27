@@ -25,7 +25,6 @@ import org.hyperledger.besu.ethereum.trie.NodeUpdater;
 import org.hyperledger.besu.ethereum.trie.NullNode;
 import org.hyperledger.besu.ethereum.trie.PathNodeVisitor;
 import org.hyperledger.besu.ethereum.trie.StoredNode;
-import org.hyperledger.besu.ethereum.trie.TrieBytes;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -357,7 +356,7 @@ public class ParallelStoredMerklePatriciaTrie<K extends Bytes, V>
       for (final Map.Entry<Byte, List<UpdateEntry<V>>> entry : largeGroups.entrySet()) {
         final byte nibble = entry.getKey();
         final List<UpdateEntry<V>> childUpdates = entry.getValue();
-        final Bytes childLocation = TrieBytes.append(location, nibble);
+        final Bytes childLocation = Bytes.concatenate(location, Bytes.of(nibble));
 
         ForkJoinTask<Void> task =
             ForkJoinTask.adapt(
@@ -379,7 +378,7 @@ public class ParallelStoredMerklePatriciaTrie<K extends Bytes, V>
     for (final Map.Entry<Byte, List<UpdateEntry<V>>> entry : smallGroups.entrySet()) {
       final byte nibble = entry.getKey();
       final List<UpdateEntry<V>> childUpdates = entry.getValue();
-      final Bytes childLocation = TrieBytes.append(location, nibble);
+      final Bytes childLocation = Bytes.concatenate(location, Bytes.of(nibble));
 
       final Node<V> currentChild = branchWrapper.getPendingChildren().get(nibble);
       final Node<V> updatedChild =
@@ -423,7 +422,7 @@ public class ParallelStoredMerklePatriciaTrie<K extends Bytes, V>
 
     // No divergence: all updates continue past extension
     if (divergenceIndex == extensionPath.size()) {
-      final Bytes newLocation = TrieBytes.concat(location, extensionPath);
+      final Bytes newLocation = Bytes.concatenate(location, extensionPath);
       final Node<V> newChild =
           processNode(
               extensionNode.getChild(),
