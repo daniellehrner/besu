@@ -29,7 +29,6 @@ import org.hyperledger.besu.ethereum.trie.RangeManager;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldStateKeyValueStorage;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiWorldStateUpdateAccumulator;
-import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -51,7 +50,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 class BonsaiWorldStateTest {
   @Mock BonsaiWorldState bonsaiWorldState;
   @Mock BonsaiWorldStateUpdateAccumulator bonsaiWorldStateUpdateAccumulator;
-  @Mock BonsaiWorldStateKeyValueStorage worldStateStorage;
   @Mock BonsaiWorldStateKeyValueStorage.Updater bonsaiUpdater;
   @Mock MerkleTrie<Bytes, Bytes> accountTrie;
 
@@ -67,8 +65,6 @@ class BonsaiWorldStateTest {
     when(accumulator.getStorageToUpdate()).thenReturn(Map.of());
     when(accumulator.getStorageToClear()).thenReturn(Set.of());
     when(bonsaiWorldState.isStorageFrozen()).thenReturn(false);
-    when(bonsaiWorldState.getWorldStateStorage()).thenReturn(worldStateStorage);
-    when(worldStateStorage.getFlatDbMode()).thenReturn(FlatDbMode.FULL);
     when(bonsaiWorldState.createAccountStateTrie()).thenReturn(accountTrie);
     when(accountTrie.getRootHash()).thenReturn(Bytes32.ZERO);
     doAnswer(invocation -> null).when(accountTrie).commit(any());
