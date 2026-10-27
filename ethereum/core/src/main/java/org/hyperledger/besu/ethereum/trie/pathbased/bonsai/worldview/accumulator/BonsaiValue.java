@@ -94,8 +94,8 @@ public class BonsaiValue<T> implements TrieLog.LogTuple<T> {
   }
 
   /**
-   * Whether the value differs from its prior. A value loaded lazily and only read is unchanged
-   * without loading it.
+   * Whether the value differs from its prior. A value loaded only for a read has one supplier for
+   * prior and updated, so it is unchanged without loading it.
    */
   public boolean isChanged() {
     return prior != updated && !isUnchanged();
