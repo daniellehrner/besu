@@ -46,30 +46,37 @@ public class AccountConsumingMap<T extends BonsaiValue<? extends BonsaiAccount>>
   @Override
   public T put(@NotNull final Address address, @NotNull final T value) {
     final T previous = accounts.put(address, value);
-    preloadIfChanged(address, value, false);
+    if (isChanged(value)) {
+      preload(address);
+    }
     return previous;
   }
 
   /**
-   * Preloads an account the block changed in place, through its fields or, when storageChanged is
-   * set, its storage.
+   * Preloads an account whose fields the block changed in place.
    *
    * @param address the account
-   * @param storageChanged whether the block changed the account's storage
    */
-  public void preloadIfChanged(final Address address, final boolean storageChanged) {
+  public void preloadIfChanged(final Address address) {
     final T value = accounts.get(address);
-    if (value != null) {
-      preloadIfChanged(address, value, storageChanged);
+    if (value != null && isChanged(value)) {
+      preload(address);
     }
   }
 
-  private void preloadIfChanged(
-      final Address address, final T value, final boolean storageChanged) {
-    if ((storageChanged || !BonsaiAccount.trieValueEquals(value.getPrior(), value.getUpdated()))
-        && preloaded.add(address)) {
-      consumer.process(address, value);
+  /**
+   * Preloads an account once per block, such as one whose storage the block changes.
+   *
+   * @param address the account
+   */
+  public void preload(final Address address) {
+    if (preloaded.add(address)) {
+      consumer.process(address, accounts.get(address));
     }
+  }
+
+  private boolean isChanged(final T value) {
+    return !BonsaiAccount.trieValueEquals(value.getPrior(), value.getUpdated());
   }
 
   /** An account put back after its removal is preloaded again if it changed. */

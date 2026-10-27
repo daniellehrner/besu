@@ -52,6 +52,22 @@ public class StorageConsumingMap<K, T extends BonsaiValue<?>> extends Forwarding
   }
 
   /**
+   * Sets the updated value of a slot of this map, and preloads the slot once the block changes it.
+   *
+   * @param slotKey the slot
+   * @param slot the value of the slot in this map
+   * @param value the slot's new value
+   * @param <V> the type of the slot's value
+   */
+  public <V> void update(final K slotKey, final BonsaiValue<V> slot, final V value) {
+    final boolean wasChanged = slot.isChanged();
+    slot.setUpdated(value);
+    if (!wasChanged && slot.isChanged()) {
+      consumer.process(address, slotKey);
+    }
+  }
+
+  /**
    * Puts a slot loaded for a read. A read is not preloaded, and the value is not compared with its
    * prior, which could load the prior from storage.
    *

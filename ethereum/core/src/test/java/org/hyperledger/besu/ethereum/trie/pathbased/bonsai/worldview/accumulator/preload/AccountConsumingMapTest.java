@@ -60,6 +60,31 @@ class AccountConsumingMapTest {
     assertThat(preloaded).containsExactly(ACCOUNT, ACCOUNT);
   }
 
+  @Test
+  void preloadIfChanged_preloadsAnAccountChangedInPlaceOnce() {
+    final BonsaiValue<BonsaiAccount> value = new BonsaiValue<>(account(1L), account(1L));
+    accounts.put(ACCOUNT, value);
+    accounts.preloadIfChanged(ACCOUNT);
+    assertThat(preloaded).isEmpty();
+
+    value.getUpdated().setNonce(2L);
+    accounts.preloadIfChanged(ACCOUNT);
+    accounts.preloadIfChanged(ACCOUNT);
+
+    assertThat(preloaded).containsExactly(ACCOUNT);
+  }
+
+  @Test
+  void preload_preloadsAnUnchangedAccountOnce() {
+    accounts.put(ACCOUNT, new BonsaiValue<>(account(1L), account(1L)));
+
+    accounts.preload(ACCOUNT);
+    accounts.preload(ACCOUNT);
+    accounts.put(ACCOUNT, new BonsaiValue<>(account(1L), account(2L)));
+
+    assertThat(preloaded).containsExactly(ACCOUNT);
+  }
+
   private static BonsaiAccount account(final long nonce) {
     return new BonsaiAccount(
         null,

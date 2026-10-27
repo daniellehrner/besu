@@ -53,6 +53,28 @@ class StorageConsumingMapTest {
   }
 
   @Test
+  void update_preloadsASlotOnceWhenItBecomesChanged() {
+    final BonsaiValue<UInt256> slot = readSlot(UInt256.ONE);
+    slots.putLoaded(SLOT, slot);
+
+    slots.update(SLOT, slot, UInt256.valueOf(2));
+    slots.update(SLOT, slot, UInt256.valueOf(3));
+
+    assertThat(preloaded).containsExactly(SLOT);
+    assertThat(slot.getUpdated()).isEqualTo(UInt256.valueOf(3));
+  }
+
+  @Test
+  void update_toThePriorValue_preloadsNothing() {
+    final BonsaiValue<UInt256> slot = readSlot(UInt256.ONE);
+    slots.putLoaded(SLOT, slot);
+
+    slots.update(SLOT, slot, UInt256.ONE);
+
+    assertThat(preloaded).isEmpty();
+  }
+
+  @Test
   void putLoaded_neitherPreloadsNorLoadsThePrior() {
     final AtomicInteger loads = new AtomicInteger();
     final Supplier<UInt256> loader =
@@ -70,5 +92,11 @@ class StorageConsumingMapTest {
     assertThat(preloaded).isEmpty();
     assertThat(loads).hasValue(0);
     assertThat(slots.get(SLOT)).isSameAs(value);
+  }
+
+  /** A slot as a read loads it, with one supplier for prior and updated. */
+  private static BonsaiValue<UInt256> readSlot(final UInt256 value) {
+    final Supplier<UInt256> loader = () -> value;
+    return BonsaiValue.withLazy(loader, loader);
   }
 }
