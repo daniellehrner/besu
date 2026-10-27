@@ -122,8 +122,9 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
    */
   public void importStateChangesFromSource(
       final PathBasedWorldStateUpdateAccumulator<ACCOUNT> source) {
-    importFrom(source, ImportMode.UPSERT);
+    // the slots of cleared storage preload from the empty root only once the clear is known
     storageToClear.addAll(source.storageToClear);
+    importFrom(source, ImportMode.UPSERT);
   }
 
   /**
