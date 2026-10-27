@@ -368,7 +368,7 @@ class StateRootCommitterIntegrationTest {
     @Test
     void persist_leavesAccountsTheBlockOnlyReadUntouched() {
       final BonsaiWorldStateKeyValueStorage.Updater writes =
-          writesOfABlockThatReadsAccounts(harness, new DefaultStateRootCommitter());
+          writesOfABlockThatReadsAccounts(new DefaultStateRootCommitter());
 
       verify(writes).putAccountInfoState(eq(EOA.addressHash()), any());
       verify(writes, never()).putAccountInfoState(eq(CONTRACT.addressHash()), any());
@@ -377,33 +377,9 @@ class StateRootCommitterIntegrationTest {
     }
 
     @Test
-    void partialFlatDbPersist_writesTheAccountsTheBlockOnlyReadToTheFlatDb() {
-      final BonsaiKvHarness partialHarness =
-          BonsaiKvHarness.create(
-              ImmutableDataStorageConfiguration.builder()
-                  .from(DataStorageConfiguration.DEFAULT_BONSAI_CONFIG)
-                  .extraStorageConfiguration(
-                      ImmutableExtraStorageConfiguration.builder()
-                          .unstable(
-                              ImmutableExtraStorageConfiguration.Unstable.builder()
-                                  .fullFlatDbEnabled(false)
-                                  .build())
-                          .build())
-                  .build());
-
-      final BonsaiWorldStateKeyValueStorage.Updater writes =
-          writesOfABlockThatReadsAccounts(partialHarness, new DefaultStateRootCommitter());
-
-      verify(writes).putAccountInfoState(eq(EOA.addressHash()), any());
-      verify(writes).putAccountInfoState(eq(CONTRACT.addressHash()), any());
-      verify(writes, never()).removeAccountInfoState(ABSENT.addressHash());
-      verify(writes, never()).putStorageValueBySlotHash(any(), any(), any());
-    }
-
-    @Test
     void trieDisabledPersist_leavesAccountsTheBlockOnlyReadUntouched() {
       final BonsaiWorldStateKeyValueStorage.Updater writes =
-          writesOfABlockThatReadsAccounts(harness, TrieDisabledStateRootCommitter.INSTANCE);
+          writesOfABlockThatReadsAccounts(TrieDisabledStateRootCommitter.INSTANCE);
 
       verify(writes).putAccountInfoState(eq(EOA.addressHash()), any());
       verify(writes, never()).putAccountInfoState(eq(CONTRACT.addressHash()), any());
@@ -416,19 +392,19 @@ class StateRootCommitterIntegrationTest {
      * only reads CONTRACT, its slot and ABSENT, and returns that block's writes.
      */
     private BonsaiWorldStateKeyValueStorage.Updater writesOfABlockThatReadsAccounts(
-        final BonsaiKvHarness kvHarness, final StateRootCommitter committer) {
-      final BlockHeader parent = kvHarness.persistParent();
+        final StateRootCommitter committer) {
+      final BlockHeader parent = harness.persistParent();
       final BlockChange firstBlock = BlockChange.complex();
-      final BlockHeader firstHeader = kvHarness.childHeader(parent, firstBlock);
-      try (BonsaiWorldState worldState = kvHarness.newWritableWorldState()) {
+      final BlockHeader firstHeader = harness.childHeader(parent, firstBlock);
+      try (BonsaiWorldState worldState = harness.newWritableWorldState()) {
         firstBlock.apply(worldState.updater());
         worldState.updater().commit();
         worldState.persist(firstHeader, new DefaultStateRootCommitter());
       }
 
       final BlockChange secondBlock = BlockChange.balanceAndNonce(EOA, Wei.of(7), 13L);
-      final BlockHeader secondHeader = kvHarness.childHeader(firstHeader, secondBlock);
-      try (BonsaiWorldState worldState = kvHarness.newWritableWorldState()) {
+      final BlockHeader secondHeader = harness.childHeader(firstHeader, secondBlock);
+      try (BonsaiWorldState worldState = harness.newWritableWorldState()) {
         final WorldUpdater blockUpdater = worldState.updater();
         final WorldUpdater transaction = blockUpdater.updater();
         secondBlock.apply(transaction);

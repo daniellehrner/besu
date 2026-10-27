@@ -30,7 +30,6 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.StorageConsumingMap;
-import org.hyperledger.besu.ethereum.worldstate.FlatDbMode;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.plugin.data.BlockHeader;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
@@ -103,12 +102,6 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
     /** Strategy that persists deferred writes, or drops them when storage is frozen. */
     private final WriteSink sink;
 
-    /**
-     * A partial flat database misses accounts, and every read of a missing one walks the trie, so
-     * the accounts a block reads are written to it.
-     */
-    private final boolean fillPartialFlatDb;
-
     DefaultComputation(
         final BonsaiWorldState bonsai,
         final BonsaiWorldStateUpdateAccumulator worldStateUpdater,
@@ -117,8 +110,6 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
       this.worldStateUpdater = worldStateUpdater;
       this.addressHasher = addressHasher;
       this.sink = bonsai.isStorageFrozen() ? new FrozenSink() : new PersistingSink(writes);
-      this.fillPartialFlatDb =
-          !sink.isFrozen() && bonsai.getWorldStateStorage().getFlatDbMode() == FlatDbMode.PARTIAL;
     }
 
     Hash executeInto(final List<StateRootComputations.UpdaterWrite> writeSink) {
@@ -160,11 +151,6 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
         final BonsaiValue<BonsaiAccount> accountValue = accountUpdate.getValue();
         if (isUnchanged(address, accountValue)) {
           // an unchanged account keeps its leaf and flat entry, rewriting them only costs time
-          // unless the flat database is partial
-          if (fillPartialFlatDb && accountValue.getUpdated() != null) {
-            sink.putAccountInfoState(
-                addressHasher.apply(bonsai, address), accountValue.getUpdated().serializeAccount());
-          }
           continue;
         }
         final Hash addressHash = addressHasher.apply(bonsai, address);
