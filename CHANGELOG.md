@@ -14,6 +14,7 @@
 - `eth_call`, `eth_estimateGas` and `callTracer` now decode `Panic(uint256)` revert data into a reason, such as `arithmetic underflow or overflow`, as geth does. [#11635](https://github.com/besu-eth/besu/pull/11635)
 - Discovery no longer buffers unbounded memory for inbound DiscV5 packets: over-sized datagrams are dropped before they are copied for dispatch, and the dispatch queue is bounded. [#11672](https://github.com/besu-eth/besu/pull/11672)
 - On OpenTelemetry, a supplied metric created again, as by the world state download after a resync, now replaces the old one, as on Prometheus. Previously a labelled supplied gauge or counter threw `IllegalStateException` and a gauge kept reporting its first supplier. `debug_metrics` no longer fails on OpenTelemetry once a supplied counter is registered. [#11773](https://github.com/besu-eth/besu/pull/11773)
+- The derived RocksDB max open files now comes from the total memory minus the maximum heap, instead of the free memory at startup. Nodes with a large heap get a lower value and may log a table cache warm-up warning at startup. [#11762](https://github.com/besu-eth/besu/pull/11762)
 
 ### Additions and Improvements
 - With `--Xevm-v2`, `MessageFrame.getMaybeUpdatedMemory` and `getMaybeUpdatedStorage` are recorded only while a tracer that traces operations runs. [#11690](https://github.com/besu-eth/besu/pull/11690)
@@ -53,7 +54,6 @@
 - A peer that answers a header, body or sync block body request with malformed RLP is now disconnected for breach of protocol, as it already was for pooled transactions, receipts and block access lists. Previously the decoding failure was logged at ERROR as a server error and the peer stayed connected. [#11451](https://github.com/besu-eth/besu/pull/11451)
 - The layered transaction pool notifies a transaction as added before the evictions that make space for it. Previously, when the pool was full after adding a transaction and the eviction dropped the transaction itself, it was notified as dropped before it was notified as added. [#11688](https://github.com/besu-eth/besu/pull/11688)
 - The sequenced transaction pool notifies transaction added and dropped events in the order they happen. Previously a transaction could be notified as dropped before it was notified as added, when another thread replaced it right after it was added, or when it was evicted because the pool was full after adding it. A transaction removed by the timed eviction after it had already been dropped is no longer notified as dropped a second time. [#11685](https://github.com/besu-eth/besu/pull/11685)
-- The derived RocksDB max open files no longer counts the heap the JVM has not committed yet as free memory. [#11762](https://github.com/besu-eth/besu/pull/11762)
 
 ### Additions and Improvements
 - `trace_filter` accepts `mode`: `intersection`, the default, or `union`, which matches a trace in either `fromAddress` or `toAddress`. An unknown value is rejected with `-32602`. [#11436](https://github.com/besu-eth/besu/pull/11436)
