@@ -823,6 +823,7 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
       final Optional<BlockAccessList> blockAccessList,
       final Executor blockWriter) {
     LOG.atDebug().setMessage("Remember block {}").addArgument(block::toLogString).log();
+    mempoolPrewarmer.ifPresent(prewarmer -> prewarmer.stop(Optional.of(block)));
     final var chain = protocolContext.getBlockchain();
     final var validationResult =
         protocolSchedule
