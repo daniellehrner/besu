@@ -46,6 +46,7 @@ import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
+import org.openjdk.jmh.infra.Blackhole;
 
 /**
  * Hashes the account trie the way a block does: its new root on the account-trie pool, and the
@@ -110,8 +111,10 @@ public class TrieHashingBenchmark {
     blockKeys = new Bytes32[BLOCKS][touchedAccounts];
     blockValues = new Bytes[BLOCKS][touchedAccounts];
     for (int b = 0; b < BLOCKS; b++) {
+      // distinct: stateRoot merges a repeated key, but preloadWalks would walk it twice
+      final int[] picks = random.ints(0, accounts).distinct().limit(touchedAccounts).toArray();
       for (int i = 0; i < touchedAccounts; i++) {
-        blockKeys[b][i] = keys[random.nextInt(accounts)];
+        blockKeys[b][i] = keys[picks[i]];
         blockValues[b][i] = account(random);
       }
     }
@@ -135,18 +138,20 @@ public class TrieHashingBenchmark {
   }
 
   @Benchmark
-  public void preloadWalks() {
+  public void preloadWalks(final Blackhole bh) {
     final Bytes32[] keys = blockKeys[nextBlock()];
     final CompletableFuture<?>[] walks = new CompletableFuture<?>[keys.length];
     for (int i = 0; i < keys.length; i++) {
       final Bytes32 key = keys[i];
-      walks[i] = CompletableFuture.runAsync(() -> walk(key), VIRTUAL_POOL);
+      walks[i] = CompletableFuture.supplyAsync(() -> walk(key), VIRTUAL_POOL);
     }
-    CompletableFuture.allOf(walks).join();
+    for (final CompletableFuture<?> walk : walks) {
+      bh.consume(walk.join());
+    }
   }
 
-  private void walk(final Bytes32 key) {
-    new StoredMerklePatriciaTrie<Bytes, Bytes>(
+  private Optional<Bytes> walk(final Bytes32 key) {
+    return new StoredMerklePatriciaTrie<Bytes, Bytes>(
             this::loadVerifiedNode, rootHash, Function.identity(), Function.identity())
         .get(key);
   }
