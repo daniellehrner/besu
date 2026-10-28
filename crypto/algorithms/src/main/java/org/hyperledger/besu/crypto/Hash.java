@@ -90,10 +90,10 @@ public abstract class Hash {
     try {
       input.update(digest);
       return Bytes32.wrap(digest.digest());
-    } catch (final RuntimeException | Error e) {
+    } catch (final Throwable t) {
       // A digest left half-updated would corrupt every later hash on this thread.
-      digest.reset();
-      throw e;
+      KECCAK256_DIGEST.remove();
+      throw t;
     }
   }
 
