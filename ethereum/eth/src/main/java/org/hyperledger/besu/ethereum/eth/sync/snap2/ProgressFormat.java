@@ -16,9 +16,12 @@ package org.hyperledger.besu.ethereum.eth.sync.snap2;
 
 import java.time.Duration;
 import java.util.Locale;
+import java.util.Optional;
 
-/** Formats the figures of the SNAP2 logs: counts, block numbers and durations. */
+/** Formats the figures of the SNAP2 logs: counts, block numbers, shares, rates and durations. */
 public final class ProgressFormat {
+
+  private static final Duration LONGEST_ETA = Duration.ofDays(365);
 
   private ProgressFormat() {}
 
@@ -78,5 +81,38 @@ public final class ProgressFormat {
   private static String twoUnits(
       final long first, final String firstUnit, final long second, final String secondUnit) {
     return second > 0 ? first + firstUnit + " " + second + secondUnit : first + firstUnit;
+  }
+
+  /** Returns the share of a total as a percentage, as in 37.4%, 0.0% without a total. */
+  public static String percent(final long done, final long total) {
+    final double share = total > 0 ? Math.clamp((double) done / total, 0, 1) : 0;
+    return String.format(Locale.ROOT, "%.1f%%", 100 * share);
+  }
+
+  /** Returns a rate in mebibytes per second, as in 11.8 MiB/s. */
+  public static String mibPerSecond(final double bytesPerSecond) {
+    return String.format(Locale.ROOT, "%.1f MiB/s", Math.max(0, bytesPerSecond) / (1024 * 1024));
+  }
+
+  /**
+   * Returns the time left to do what remains at the average rate since the start, as in ~45m or ~2h
+   * 31m, or empty with nothing done, nothing left, no time elapsed, or beyond a year.
+   */
+  public static Optional<String> eta(
+      final long done, final long remaining, final Duration elapsed) {
+    if (done <= 0 || remaining <= 0 || elapsed.toMillis() <= 0) {
+      return Optional.empty();
+    }
+    final double elapsedSeconds = elapsed.toMillis() / 1000.0;
+    final double seconds = Math.ceil(remaining * elapsedSeconds / done);
+    if (seconds > LONGEST_ETA.toSeconds()) {
+      return Optional.empty();
+    }
+    // a minute or more reads without its seconds
+    final Duration rounded =
+        seconds >= 60
+            ? Duration.ofMinutes(Math.round(seconds / 60))
+            : Duration.ofSeconds((long) seconds);
+    return Optional.of("~" + duration(rounded));
   }
 }
