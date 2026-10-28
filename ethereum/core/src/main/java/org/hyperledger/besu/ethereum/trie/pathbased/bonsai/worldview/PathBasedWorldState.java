@@ -103,6 +103,9 @@ public abstract class PathBasedWorldState
    */
   protected boolean isStorageFrozen;
 
+  private boolean deferTrieLog;
+  private Runnable trieLogWrite = () -> {};
+
   protected PathBasedWorldState(
       final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage,
       final PathBasedWorldStateCacheManager worldStateCacheManager,
@@ -175,6 +178,27 @@ public abstract class PathBasedWorldState
   }
 
   /**
+   * Leaves the trie log of the block persisted next to {@link #takeTrieLogWrite()}, for the caller
+   * to write once it has found the block valid. Only a frozen world state defers it: any other
+   * writes its trie log ahead of the state it persists. It is not deferred either if the trie log
+   * manager cannot defer it.
+   */
+  public void deferTrieLog() {
+    deferTrieLog = isStorageFrozen && trieLogManager.canDeferTrieLog();
+  }
+
+  /**
+   * Hands over the write of a deferred trie log.
+   *
+   * @return the write, which does nothing if no trie log was deferred
+   */
+  public Runnable takeTrieLogWrite() {
+    final Runnable write = trieLogWrite;
+    trieLogWrite = () -> {};
+    return write;
+  }
+
+  /**
    * Reset the worldState to this block header
    *
    * @param blockHeader block to use
@@ -229,8 +253,12 @@ public abstract class PathBasedWorldState
 
       if (blockHeader != null) {
         verifyWorldStateRoot(calculatedRootHash, blockHeader);
-        // Trie log first, ahead of composed state, in case of an abnormal shutdown.
-        trieLogManager.saveTrieLog(accumulator, calculatedRootHash, blockHeader, this);
+        if (deferTrieLog) {
+          trieLogWrite = trieLogManager.deferTrieLog(accumulator, calculatedRootHash, blockHeader);
+        } else {
+          // Trie log first, ahead of composed state, in case of an abnormal shutdown.
+          trieLogManager.saveTrieLog(accumulator, calculatedRootHash, blockHeader, this);
+        }
       }
 
       stateUpdater.commitComposedOnly();
