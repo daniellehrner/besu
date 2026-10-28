@@ -346,6 +346,7 @@ public abstract class MiningConfiguration {
     int DEFAULT_MEMPOOL_PREWARM_THREADS =
         Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
     int DEFAULT_MEMPOOL_PREWARM_GAS_LIMIT_MULTIPLIER = 4;
+    boolean DEFAULT_MEMPOOL_PREWARM_REUSE_ENABLED = true;
 
     MiningConfiguration.Unstable DEFAULT = ImmutableMiningConfiguration.Unstable.builder().build();
 
@@ -387,6 +388,11 @@ public abstract class MiningConfiguration {
     @Value.Default
     default int getMempoolPrewarmGasLimitMultiplier() {
       return DEFAULT_MEMPOOL_PREWARM_GAS_LIMIT_MULTIPLIER;
+    }
+
+    @Value.Default
+    default boolean isMempoolPrewarmReuseEnabled() {
+      return DEFAULT_MEMPOOL_PREWARM_REUSE_ENABLED;
     }
   }
 }

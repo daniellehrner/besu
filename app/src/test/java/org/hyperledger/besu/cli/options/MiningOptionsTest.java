@@ -198,10 +198,19 @@ public class MiningOptionsTest extends AbstractCLIOptionsTest<MiningConfiguratio
           assertThat(miningParams.getUnstable().isMempoolPrewarmEnabled()).isTrue();
           assertThat(miningParams.getUnstable().getMempoolPrewarmThreads()).isEqualTo(3);
           assertThat(miningParams.getUnstable().getMempoolPrewarmGasLimitMultiplier()).isEqualTo(2);
+          assertThat(miningParams.getUnstable().isMempoolPrewarmReuseEnabled()).isFalse();
         },
         "--Xmempool-prewarm-enabled=true",
         "--Xmempool-prewarm-threads=3",
-        "--Xmempool-prewarm-gas-limit-multiplier=2");
+        "--Xmempool-prewarm-gas-limit-multiplier=2",
+        "--Xmempool-prewarm-reuse-enabled=false");
+  }
+
+  @Test
+  public void mempoolPrewarmReuseIsEnabledByDefault() {
+    internalTestSuccess(
+        miningParams ->
+            assertThat(miningParams.getUnstable().isMempoolPrewarmReuseEnabled()).isTrue());
   }
 
   @Test

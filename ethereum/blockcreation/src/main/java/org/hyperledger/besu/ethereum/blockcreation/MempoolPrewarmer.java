@@ -35,6 +35,8 @@ import org.hyperledger.besu.ethereum.mainnet.MainnetTransactionProcessor;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSchedule;
 import org.hyperledger.besu.ethereum.mainnet.ProtocolSpec;
 import org.hyperledger.besu.ethereum.mainnet.TransactionValidationParams;
+import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList.BlockAccessListBuilder;
+import org.hyperledger.besu.ethereum.mainnet.parallelization.PrewarmedTransactions;
 import org.hyperledger.besu.ethereum.processing.TransactionProcessingResult;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.account.BonsaiAccount;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.provider.BonsaiWorldStateProvider;
@@ -42,6 +44,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.BonsaiWorldSt
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.BonsaiCachedMerkleTrieLoader;
+import org.hyperledger.besu.evm.Code;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
 import org.hyperledger.besu.evm.frame.MessageFrame;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
@@ -503,22 +506,35 @@ public class MempoolPrewarmer implements AutoCloseable {
               .getPreExecutionProcessor()
               .createBlockHashLookup(protocolContext.getBlockchain(), execution.header());
       final WorldUpdater updater = worldState.updater();
-      final OperationTracer tracer = new StoppingTracer(warming);
+      final StoppingTracer tracer = new StoppingTracer(warming);
+      final PrewarmedTransactions prewarmed = protocolContext.getPrewarmedTransactions();
+      PrewarmedTransactions.Execution previous = null;
       for (final Transaction transaction : transactions) {
         if (!isWarming(warming)) {
           break;
         }
         final WorldUpdater transactionUpdater = updater.updater();
+        tracer.enteredCode.clear();
+        // a result kept for the block pays its fee to an address the block replaces with its
+        // coinbase, and records what it read
         final TransactionProcessingResult result =
             transactionProcessor.processTransaction(
                 transactionUpdater,
                 execution.header(),
                 transaction,
-                execution.header().getCoinbase(),
+                prewarmed.isEnabled()
+                    ? PrewarmedTransactions.PREWARM_COINBASE
+                    : execution.header().getCoinbase(),
                 tracer,
                 blockHashLookup,
-                VALIDATION_PARAMS,
-                execution.blobGasPrice());
+                // a kept result must come from a transaction the block would accept
+                prewarmed.isEnabled()
+                    ? TransactionValidationParams.processingBlock()
+                    : VALIDATION_PARAMS,
+                execution.blobGasPrice(),
+                prewarmed.isEnabled()
+                    ? Optional.of(BlockAccessListBuilder.createTransactionAccessLocationTracker(0))
+                    : Optional.empty());
         if (!isCurrent(warming)) {
           // the tracer may have stopped the transaction halfway
           break;
@@ -532,6 +548,17 @@ public class MempoolPrewarmer implements AutoCloseable {
         updater.commit();
         updater.markTransactionBoundary();
         executedTransactions.inc();
+        if (prewarmed.isEnabled() && result.getPartialBlockAccessView().isPresent()) {
+          previous =
+              new PrewarmedTransactions.Execution(
+                  warming.head().getHash(),
+                  execution.header().getTimestamp(),
+                  execution.header().getGasLimit(),
+                  PrewarmedTransactions.blockValueReads(tracer.enteredCode),
+                  previous,
+                  result);
+          prewarmed.record(transaction.getHash(), previous);
+        }
         // a transaction warmed again for the sender's new ones reads what is cached already
         if (warming.warmed().add(transaction.getHash())) {
           warming.gasBudget().addAndGet(result.getGasRemaining() - transaction.getGasLimit());
@@ -645,6 +672,7 @@ public class MempoolPrewarmer implements AutoCloseable {
    */
   private final class StoppingTracer implements OperationTracer {
     private final Warming warming;
+    private final List<Code> enteredCode = new ArrayList<>();
 
     private StoppingTracer(final Warming warming) {
       this.warming = warming;
@@ -658,6 +686,8 @@ public class MempoolPrewarmer implements AutoCloseable {
     @Override
     public void traceContextEnter(final MessageFrame frame) {
       stopIfOver();
+      // which block values a kept result may have read
+      enteredCode.add(frame.getCode());
     }
 
     @Override

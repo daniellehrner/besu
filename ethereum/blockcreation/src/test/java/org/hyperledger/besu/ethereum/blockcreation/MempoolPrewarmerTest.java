@@ -30,10 +30,12 @@ import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.TransactionType;
 import org.hyperledger.besu.datatypes.VersionedHash;
 import org.hyperledger.besu.datatypes.Wei;
+import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.Block;
 import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
+import org.hyperledger.besu.ethereum.core.ConsensusContextFixture;
 import org.hyperledger.besu.ethereum.core.ExecutionContextTestFixture;
 import org.hyperledger.besu.ethereum.core.MiningConfiguration;
 import org.hyperledger.besu.ethereum.core.Transaction;
@@ -42,7 +44,9 @@ import org.hyperledger.besu.ethereum.eth.transactions.PendingTransaction;
 import org.hyperledger.besu.ethereum.eth.transactions.PendingTransactionAddedListener;
 import org.hyperledger.besu.ethereum.eth.transactions.PendingTransactions;
 import org.hyperledger.besu.ethereum.eth.transactions.TransactionPool;
+import org.hyperledger.besu.ethereum.mainnet.parallelization.PrewarmedTransactions;
 import org.hyperledger.besu.metrics.StubMetricsSystem;
+import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.data.TransactionSelectionResult;
 import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
@@ -191,6 +195,48 @@ class MempoolPrewarmerTest {
     assertThat(metricsSystem.getCounterValue("mempool_prewarm_transactions_total", "invalid"))
         .isZero();
     assertThat(selectionResults).isNotEmpty().allSatisfy(results -> assertThat(results).isEmpty());
+  }
+
+  @Test
+  void keepsTheResultsForTheNextBlockToTake() {
+    final PrewarmedTransactions prewarmed = new PrewarmedTransactions(new NoOpMetricsSystem());
+    prewarmer.close();
+    prewarmer =
+        new MempoolPrewarmer(
+            new ProtocolContext.Builder()
+                .withBlockchain(fixture.getBlockchain())
+                .withWorldStateArchive(fixture.getStateArchive())
+                .withConsensusContext(new ConsensusContextFixture())
+                .withPrewarmedTransactions(prewarmed)
+                .build(),
+            fixture.getProtocolSchedule(),
+            transactionPool,
+            MiningConfiguration.newDefault(),
+            2,
+            4,
+            metricsSystem,
+            clock);
+    addCandidate(transfer(0));
+    final BlockHeader next =
+        new BlockHeaderTestFixture().parentHash(head().getHash()).buildHeader();
+
+    prewarmer.start(head());
+
+    Awaitility.await()
+        .atMost(Duration.ofSeconds(10))
+        .until(() -> prewarmed.forBlock(next).isPresent());
+  }
+
+  @Test
+  void keepsNoResultsWithoutReuse() {
+    addCandidate(transfer(0));
+    final BlockHeader next =
+        new BlockHeaderTestFixture().parentHash(head().getHash()).buildHeader();
+
+    prewarmer.start(head());
+
+    awaitExecuted(1);
+    assertThat(fixture.getProtocolContext().getPrewarmedTransactions().forBlock(next)).isEmpty();
   }
 
   @Test

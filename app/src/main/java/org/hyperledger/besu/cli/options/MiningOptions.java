@@ -24,6 +24,7 @@ import static org.hyperledger.besu.ethereum.core.MiningConfiguration.MutableInit
 import static org.hyperledger.besu.ethereum.core.MiningConfiguration.MutableInitValues.DEFAULT_MIN_TRANSACTION_GAS_PRICE;
 import static org.hyperledger.besu.ethereum.core.MiningConfiguration.Unstable.DEFAULT_MEMPOOL_PREWARM_ENABLED;
 import static org.hyperledger.besu.ethereum.core.MiningConfiguration.Unstable.DEFAULT_MEMPOOL_PREWARM_GAS_LIMIT_MULTIPLIER;
+import static org.hyperledger.besu.ethereum.core.MiningConfiguration.Unstable.DEFAULT_MEMPOOL_PREWARM_REUSE_ENABLED;
 import static org.hyperledger.besu.ethereum.core.MiningConfiguration.Unstable.DEFAULT_MEMPOOL_PREWARM_THREADS;
 import static org.hyperledger.besu.ethereum.core.MiningConfiguration.Unstable.DEFAULT_POS_BLOCK_CREATION_MAX_TIME;
 import static org.hyperledger.besu.ethereum.core.MiningConfiguration.Unstable.DEFAULT_POS_BLOCK_CREATION_REPETITION_MIN_DURATION;
@@ -179,6 +180,14 @@ public class MiningOptions implements CLIOptions<MiningConfiguration> {
         description =
             "Gas of the pending transactions prewarmed between two blocks, as a multiple of the block gas limit (default: ${DEFAULT-VALUE})")
     Integer mempoolPrewarmGasLimitMultiplier = DEFAULT_MEMPOOL_PREWARM_GAS_LIMIT_MULTIPLIER;
+
+    @CommandLine.Option(
+        hidden = true,
+        names = {"--Xmempool-prewarm-reuse-enabled"},
+        description =
+            "Let a block take the result of a prewarmed transaction instead of executing it again, when every value the prewarm execution read is still the same (default: ${DEFAULT-VALUE})",
+        arity = "1")
+    Boolean mempoolPrewarmReuseEnabled = DEFAULT_MEMPOOL_PREWARM_REUSE_ENABLED;
   }
 
   private TransactionSelectionService transactionSelectionService;
@@ -329,6 +338,8 @@ public class MiningOptions implements CLIOptions<MiningConfiguration> {
         miningConfiguration.getUnstable().getMempoolPrewarmThreads();
     miningOptions.unstableOptions.mempoolPrewarmGasLimitMultiplier =
         miningConfiguration.getUnstable().getMempoolPrewarmGasLimitMultiplier();
+    miningOptions.unstableOptions.mempoolPrewarmReuseEnabled =
+        miningConfiguration.getUnstable().isMempoolPrewarmReuseEnabled();
 
     miningConfiguration.getTargetGasLimit().ifPresent(tgl -> miningOptions.targetGasLimit = tgl);
     return miningOptions;
@@ -372,6 +383,7 @@ public class MiningOptions implements CLIOptions<MiningConfiguration> {
                 .isMempoolPrewarmEnabled(unstableOptions.mempoolPrewarmEnabled)
                 .mempoolPrewarmThreads(unstableOptions.mempoolPrewarmThreads)
                 .mempoolPrewarmGasLimitMultiplier(unstableOptions.mempoolPrewarmGasLimitMultiplier)
+                .isMempoolPrewarmReuseEnabled(unstableOptions.mempoolPrewarmReuseEnabled)
                 .build())
         .build();
   }
