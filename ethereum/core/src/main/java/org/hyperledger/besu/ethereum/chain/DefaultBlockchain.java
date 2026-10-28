@@ -89,7 +89,6 @@ public class DefaultBlockchain implements MutableBlockchain {
   private Optional<Cache<Hash, BlockHeader>> blockHeadersCache;
   private Optional<Cache<Hash, BlockBody>> blockBodiesCache;
   private Optional<Cache<Hash, List<TransactionReceipt>>> transactionReceiptsCache;
-  private Optional<Cache<Hash, Difficulty>> totalDifficultyCache;
   private Optional<Cache<Hash, BlockAccessList>> blockAccessListCache;
 
   private Counter gasUsedCounter = NoOpMetricsSystem.NO_OP_COUNTER;
@@ -175,8 +174,6 @@ public class DefaultBlockchain implements MutableBlockchain {
           Optional.of(CacheBuilder.newBuilder().recordStats().maximumSize(blocksCacheSize).build());
       transactionReceiptsCache =
           Optional.of(CacheBuilder.newBuilder().recordStats().maximumSize(blocksCacheSize).build());
-      totalDifficultyCache =
-          Optional.of(CacheBuilder.newBuilder().recordStats().maximumSize(blocksCacheSize).build());
       blockAccessListCache =
           Optional.of(CacheBuilder.newBuilder().recordStats().maximumSize(blocksCacheSize).build());
       registerCacheMetrics(metricsSystem);
@@ -195,7 +192,6 @@ public class DefaultBlockchain implements MutableBlockchain {
   private void setBlockCachesEmpty() {
     blockBodiesCache = Optional.empty();
     transactionReceiptsCache = Optional.empty();
-    totalDifficultyCache = Optional.empty();
     blockAccessListCache = Optional.empty();
   }
 
@@ -204,8 +200,6 @@ public class DefaultBlockchain implements MutableBlockchain {
     metricsSystem.createGuavaCacheCollector(BLOCKCHAIN, "blockBodies", blockBodiesCache.get());
     metricsSystem.createGuavaCacheCollector(
         BLOCKCHAIN, "transactionReceipts", transactionReceiptsCache.get());
-    metricsSystem.createGuavaCacheCollector(
-        BLOCKCHAIN, "totalDifficulty", totalDifficultyCache.get());
   }
 
   private void registerHeadersCacheMetrics(final MetricsSystem metricsSystem) {
@@ -542,12 +536,7 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   @Override
   public Optional<Difficulty> getTotalDifficultyByHash(final Hash blockHeaderHash) {
-    return totalDifficultyCache
-        .map(
-            cache ->
-                Optional.ofNullable(cache.getIfPresent(blockHeaderHash))
-                    .or(() -> blockchainStorage.getTotalDifficulty(blockHeaderHash)))
-        .orElseGet(() -> blockchainStorage.getTotalDifficulty(blockHeaderHash));
+    return blockchainStorage.getTotalDifficulty(blockHeaderHash);
   }
 
   @Override
@@ -671,8 +660,6 @@ public class DefaultBlockchain implements MutableBlockchain {
     cacheBlockHeader(block.getHeader());
     blockBodiesCache.ifPresent(cache -> cache.put(block.getHash(), block.getBody()));
     transactionReceiptsCache.ifPresent(cache -> cache.put(block.getHash(), receipts));
-    totalDifficultyCache.ifPresent(
-        cache -> cache.put(block.getHash(), block.getHeader().getDifficulty()));
     blockAccessListCache.ifPresent(
         cache -> blockAccessList.ifPresent(t -> cache.put(block.getHash(), t)));
   }
@@ -1298,10 +1285,6 @@ public class DefaultBlockchain implements MutableBlockchain {
 
   public Optional<Cache<Hash, BlockAccessList>> getBlockAccessListCache() {
     return blockAccessListCache;
-  }
-
-  public Optional<Cache<Hash, Difficulty>> getTotalDifficultyCache() {
-    return totalDifficultyCache;
   }
 
   /**
