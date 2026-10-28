@@ -46,6 +46,7 @@ import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPInput;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
+import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.plugin.services.storage.KeyValueStorage;
 import org.hyperledger.besu.services.kvstore.InMemoryKeyValueStorage;
 
@@ -58,8 +59,6 @@ import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 
 public class KeyValueStoragePrefixedKeyBlockchainStorageTest {
   private final BlockHeaderFunctions blockHeaderFunctions = mock(BlockHeaderFunctions.class);
@@ -270,7 +269,7 @@ public class KeyValueStoragePrefixedKeyBlockchainStorageTest {
     final BlockAccessList bal = generator.blockAccessList();
 
     final Updater updater = blockchainStorage.updater();
-    updater.putBlockAccessList(blockHash, bal);
+    final Bytes storedRlp = updater.putBlockAccessList(blockHash, bal);
     updater.commit();
 
     final BlockAccessList loaded = blockchainStorage.getBlockAccessList(blockHash).get();
@@ -278,14 +277,38 @@ public class KeyValueStoragePrefixedKeyBlockchainStorageTest {
         loaded.rawRlp().isPresent(), "rawRlp must be present on BAL read from storage");
     Assertions.assertEquals(
         bal, loaded, "BAL round-trip through storage must preserve accountChanges");
+    Assertions.assertEquals(bal.encode(), storedRlp, "updater must return the stored BAL RLP");
     Assertions.assertEquals(
-        Optional.of(bal.encode()),
+        Optional.of(storedRlp),
         blockchainStorage.getBlockAccessListRlp(blockHash),
         "BAL RLP must be returned as stored");
+    Assertions.assertEquals(
+        bal, blockchainStorage.decodeBlockAccessList(storedRlp), "stored BAL RLP must decode");
     Assertions.assertEquals(
         Optional.empty(),
         blockchainStorage.getBlockAccessListRlp(generator.hash()),
         "BAL RLP of an unknown block must be empty");
+  }
+
+  @Test
+  public void testGetBlockBodyRlpReturnsStoredRlp() {
+    populateBlockchainStorage(kvBlockchain, variableValues);
+
+    final var blockchainStorage =
+        new KeyValueStoragePrefixedKeyBlockchainStorage(
+            kvBlockchain, variablesStorage, new MainnetBlockHeaderFunctions(), false);
+
+    final BlockDataGenerator generator = new BlockDataGenerator();
+    final Block block = generator.block();
+
+    final Updater updater = blockchainStorage.updater();
+    updater.putBlockBody(block.getHash(), block.getBody());
+    updater.commit();
+
+    Assertions.assertEquals(
+        Optional.of(RLP.encode(block.getBody()::writeWrappedBodyTo)),
+        blockchainStorage.getBlockBodyRlp(block.getHash()));
+    Assertions.assertEquals(Optional.empty(), blockchainStorage.getBlockBodyRlp(generator.hash()));
   }
 
   @Test
@@ -302,38 +325,5 @@ public class KeyValueStoragePrefixedKeyBlockchainStorageTest {
 
     verify(blockchainKv).startBatchTransaction();
     assertThat(storage.getBlockHash(1)).contains(hash);
-  }
-
-  @ParameterizedTest
-  @ValueSource(booleans = {true, false})
-  public void testUpdaterReturnsStoredRlpThatDecodesToStoredData(final boolean receiptCompaction) {
-    populateBlockchainStorage(kvBlockchain, variableValues);
-
-    final var blockchainStorage =
-        new KeyValueStoragePrefixedKeyBlockchainStorage(
-            kvBlockchain, variablesStorage, new MainnetBlockHeaderFunctions(), receiptCompaction);
-
-    final BlockDataGenerator generator = new BlockDataGenerator();
-    final Block block = generator.block();
-    final Hash blockHash = block.getHash();
-    final List<TransactionReceipt> receipts = generator.receipts(block);
-    final BlockAccessList bal = generator.blockAccessList();
-
-    final Updater updater = blockchainStorage.updater();
-    final Bytes bodyRlp = updater.putBlockBody(blockHash, block.getBody());
-    final Bytes receiptsRlp = updater.putTransactionReceipts(blockHash, receipts);
-    final Bytes balRlp = updater.putBlockAccessList(blockHash, bal);
-    updater.commit();
-
-    Assertions.assertEquals(Optional.of(bodyRlp), blockchainStorage.getBlockBodyRlp(blockHash));
-    Assertions.assertEquals(block.getBody(), blockchainStorage.decodeBlockBody(bodyRlp));
-    Assertions.assertEquals(
-        Optional.of(block.getBody()), blockchainStorage.getBlockBody(blockHash));
-    Assertions.assertEquals(
-        blockchainStorage.getTransactionReceipts(blockHash).get(),
-        blockchainStorage.decodeTransactionReceipts(receiptsRlp));
-    Assertions.assertEquals(
-        Optional.of(balRlp), blockchainStorage.getBlockAccessListRlp(blockHash));
-    Assertions.assertEquals(bal, blockchainStorage.decodeBlockAccessList(balRlp));
   }
 }

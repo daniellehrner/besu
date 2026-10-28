@@ -668,18 +668,18 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
       names = {"--cache-last-blocks"},
       paramLabel = MANDATORY_INTEGER_FORMAT_HELP,
       description =
-          "Specifies the number of last imported blocks whose headers, bodies, receipts and block"
-              + " access lists to cache, 0 to disable (default: ${DEFAULT-VALUE})")
-  private final Integer numberOfBlocksToCache = DefaultBlockchain.DEFAULT_RECENT_BLOCKS_TO_CACHE;
+          "Specifies the number of last blocks whose headers, bodies, receipts and block access"
+              + " lists to cache, 0 to disable (default: ${DEFAULT-VALUE})")
+  private final Integer numberOfBlocksToCache = DefaultBlockchain.DEFAULT_BLOCKS_TO_CACHE;
 
   @CommandLine.Option(
       names = {"--cache-last-blocks-max-capacity"},
       paramLabel = MANDATORY_LONG_FORMAT_HELP,
       description =
-          "Max amount of memory, in bytes, that each of the caches of the bodies, receipts and block"
-              + " access lists of the last imported blocks could occupy (default: ${DEFAULT-VALUE})")
+          "Max amount of memory, in bytes, that the cache of the block access lists of the last"
+              + " blocks could occupy (default: ${DEFAULT-VALUE})")
   private final Long lastBlocksCacheMaxCapacity =
-      DefaultBlockchain.DEFAULT_RECENT_BLOCKS_CACHE_MAX_CAPACITY;
+      DefaultBlockchain.DEFAULT_BLOCK_ACCESS_LISTS_CACHE_MAX_CAPACITY;
 
   @CommandLine.Option(
       names = {"--cache-last-block-headers"},
@@ -2228,7 +2228,7 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
             .chainPruningConfiguration(unstableChainPruningOptions.toDomainObject())
             .cacheLastBlocks(numberOfBlocksToCache)
             .cacheLastBlocksMaxCapacity(lastBlocksCacheMaxCapacity)
-            .cacheLastBlockHeaders(Math.max(numberOfBlockHeadersToCache, numberOfBlocksToCache))
+            .cacheLastBlockHeaders(numberOfBlockHeadersToCache)
             .isCacheLastBlockHeadersPreloadEnabled(isCacheLastBlockHeadersPreloadEnabled)
             .senderNonceIndexingEnabled(txSenderNonceIndexEnabled)
             .p2pEnabled(p2PDiscoveryOptions.p2pEnabled)

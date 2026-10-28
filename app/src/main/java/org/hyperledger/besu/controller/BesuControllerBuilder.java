@@ -207,9 +207,9 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
   /** the Dagger configured context that can provide dependencies */
   protected Optional<BesuComponent> besuComponent = Optional.empty();
 
-  private int numberOfRecentBlocksToCache = DefaultBlockchain.DEFAULT_RECENT_BLOCKS_TO_CACHE;
-  private long recentBlocksCacheMaxCapacity =
-      DefaultBlockchain.DEFAULT_RECENT_BLOCKS_CACHE_MAX_CAPACITY;
+  private int numberOfBlocksToCache = 0;
+  private long blockAccessListsCacheMaxCapacity =
+      DefaultBlockchain.DEFAULT_BLOCK_ACCESS_LISTS_CACHE_MAX_CAPACITY;
   private int numberOfBlockHeadersToCache = 0;
   private boolean isCacheLastBlockHeadersPreloadEnabled;
   private boolean senderNonceIndexingEnabled = false;
@@ -510,26 +510,25 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
   }
 
   /**
-   * Sets the number of recently imported blocks whose bodies, receipts and block access lists are
-   * cached.
+   * Sets the number of blocks to cache.
    *
-   * @param numberOfRecentBlocksToCache the number of recent blocks to cache, 0 to disable
+   * @param numberOfBlocksToCache the number of blocks to cache
    * @return the besu controller builder
    */
-  public BesuControllerBuilder cacheLastBlocks(final Integer numberOfRecentBlocksToCache) {
-    this.numberOfRecentBlocksToCache = numberOfRecentBlocksToCache;
+  public BesuControllerBuilder cacheLastBlocks(final Integer numberOfBlocksToCache) {
+    this.numberOfBlocksToCache = numberOfBlocksToCache;
     return this;
   }
 
   /**
-   * Sets the number of bytes each of the recent block bodies, receipts and block access lists
-   * caches may hold.
+   * Sets the number of bytes the cache of block access lists may hold.
    *
-   * @param recentBlocksCacheMaxCapacity the max capacity in bytes of each cache
+   * @param blockAccessListsCacheMaxCapacity the max capacity in bytes of the cache
    * @return the besu controller builder
    */
-  public BesuControllerBuilder cacheLastBlocksMaxCapacity(final Long recentBlocksCacheMaxCapacity) {
-    this.recentBlocksCacheMaxCapacity = recentBlocksCacheMaxCapacity;
+  public BesuControllerBuilder cacheLastBlocksMaxCapacity(
+      final Long blockAccessListsCacheMaxCapacity) {
+    this.blockAccessListsCacheMaxCapacity = blockAccessListsCacheMaxCapacity;
     return this;
   }
 
@@ -714,8 +713,8 @@ public abstract class BesuControllerBuilder implements MiningConfigurationOverri
             metricsSystem,
             reorgLoggingThreshold,
             dataDirectory.toString(),
-            numberOfRecentBlocksToCache,
-            recentBlocksCacheMaxCapacity,
+            numberOfBlocksToCache,
+            blockAccessListsCacheMaxCapacity,
             numberOfBlockHeadersToCache,
             senderNonceIndexingEnabled);
 

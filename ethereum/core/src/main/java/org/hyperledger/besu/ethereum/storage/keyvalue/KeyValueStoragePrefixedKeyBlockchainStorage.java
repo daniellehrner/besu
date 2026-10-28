@@ -153,7 +153,8 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
 
   @Override
   public Optional<BlockBody> getBlockBody(final Hash blockHash) {
-    return get(BLOCK_BODY_PREFIX, blockHash.getBytes()).map(this::decodeBlockBody);
+    return get(BLOCK_BODY_PREFIX, blockHash.getBytes())
+        .map(bytes -> BlockBody.readWrappedBodyFrom(RLP.input(bytes), blockHeaderFunctions));
   }
 
   @Override
@@ -172,24 +173,14 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
   }
 
   @Override
-  public Optional<List<TransactionReceipt>> getTransactionReceipts(final Hash blockHash) {
-    return get(TRANSACTION_RECEIPTS_PREFIX, blockHash.getBytes())
-        .map(this::decodeTransactionReceipts);
-  }
-
-  @Override
-  public BlockBody decodeBlockBody(final Bytes rlp) {
-    return BlockBody.readWrappedBodyFrom(RLP.input(rlp), blockHeaderFunctions);
-  }
-
-  @Override
-  public List<TransactionReceipt> decodeTransactionReceipts(final Bytes rlp) {
-    return RLP.input(rlp).readList(in -> TransactionReceiptDecoder.readFrom(in, true));
-  }
-
-  @Override
   public BlockAccessList decodeBlockAccessList(final Bytes rlp) {
     return BlockAccessListDecoder.decode(RLP.input(rlp));
+  }
+
+  @Override
+  public Optional<List<TransactionReceipt>> getTransactionReceipts(final Hash blockHash) {
+    return get(TRANSACTION_RECEIPTS_PREFIX, blockHash.getBytes())
+        .map(this::rlpDecodeTransactionReceipts);
   }
 
   @Override
@@ -229,6 +220,10 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
   public Updater batchUpdater() {
     return new Updater(
         blockchainStorage.startBatchTransaction(), variablesStorage.updater(), receiptCompaction);
+  }
+
+  private List<TransactionReceipt> rlpDecodeTransactionReceipts(final Bytes bytes) {
+    return RLP.input(bytes).readList(in -> TransactionReceiptDecoder.readFrom(in, true));
   }
 
   private Hash bytesToHash(final Bytes bytes) {
@@ -369,10 +364,8 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
     }
 
     @Override
-    public Bytes putBlockBody(final Hash blockHash, final BlockBody blockBody) {
-      final Bytes rlp = RLP.encode(blockBody::writeWrappedBodyTo);
-      set(BLOCK_BODY_PREFIX, blockHash.getBytes(), rlp);
-      return rlp;
+    public void putBlockBody(final Hash blockHash, final BlockBody blockBody) {
+      set(BLOCK_BODY_PREFIX, blockHash.getBytes(), RLP.encode(blockBody::writeWrappedBodyTo));
     }
 
     @Override
@@ -403,11 +396,9 @@ public class KeyValueStoragePrefixedKeyBlockchainStorage implements BlockchainSt
     }
 
     @Override
-    public Bytes putTransactionReceipts(
+    public void putTransactionReceipts(
         final Hash blockHash, final List<TransactionReceipt> transactionReceipts) {
-      final Bytes rlp = rlpEncode(transactionReceipts);
-      set(TRANSACTION_RECEIPTS_PREFIX, blockHash.getBytes(), rlp);
-      return rlp;
+      set(TRANSACTION_RECEIPTS_PREFIX, blockHash.getBytes(), rlpEncode(transactionReceipts));
     }
 
     @Override

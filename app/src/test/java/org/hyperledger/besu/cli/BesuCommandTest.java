@@ -2933,22 +2933,6 @@ public class BesuCommandTest extends CommandTestAbstract {
   }
 
   @Test
-  public void cacheLastBlocksOptionSizesBlockHeadersCacheWhenHigher() {
-    parseCommand("--cache-last-blocks", "512");
-    verify(mockControllerBuilder).cacheLastBlockHeaders(intArgumentCaptor.capture());
-
-    assertThat(intArgumentCaptor.getValue()).isEqualTo(512);
-  }
-
-  @Test
-  public void cacheLastBlockHeadersOptionWinsWhenHigherThanCacheLastBlocks() {
-    parseCommand("--cache-last-blocks", "512", "--cache-last-block-headers", "5000");
-    verify(mockControllerBuilder).cacheLastBlockHeaders(intArgumentCaptor.capture());
-
-    assertThat(intArgumentCaptor.getValue()).isEqualTo(5000);
-  }
-
-  @Test
   public void cacheLastBlockHeadersOptionShouldWork() {
     int numberOfBlockHeaderToCache = 5000;
     parseCommand("--cache-last-block-headers", String.valueOf(numberOfBlockHeaderToCache));

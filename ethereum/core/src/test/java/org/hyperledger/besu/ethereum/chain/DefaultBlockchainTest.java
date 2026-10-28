@@ -30,7 +30,6 @@ import static org.mockito.Mockito.when;
 
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.core.Block;
-import org.hyperledger.besu.ethereum.core.BlockBody;
 import org.hyperledger.besu.ethereum.core.BlockDataGenerator;
 import org.hyperledger.besu.ethereum.core.BlockDataGenerator.BlockOptions;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -50,7 +49,6 @@ import org.hyperledger.besu.ethereum.mainnet.MainnetBlockHeaderFunctions;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPInput;
 import org.hyperledger.besu.ethereum.rlp.BytesValueRLPOutput;
-import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueStoragePrefixedKeyBlockchainStorage;
 import org.hyperledger.besu.ethereum.storage.keyvalue.VariablesKeyValueStorage;
 import org.hyperledger.besu.metrics.MetricsSystemFactory;
@@ -81,7 +79,9 @@ import java.util.function.IntSupplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import com.google.common.cache.Cache;
 import com.google.common.collect.Lists;
+import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -1041,7 +1041,7 @@ public class DefaultBlockchainTest {
   }
 
   @Test
-  public void testHeadersCacheEmptyWhenNumberOfBlockHeadersToCacheIsZero() {
+  public void testCacheEmptyWhenNumberOfBlocksToCacheIsZero() {
     final BlockDataGenerator gen = new BlockDataGenerator();
     final KeyValueStorage kvStore = new InMemoryKeyValueStorage();
     final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
@@ -1050,35 +1050,48 @@ public class DefaultBlockchainTest {
         createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock);
 
     assertThat(blockchain.getBlockHeadersCache()).isEmpty();
+    assertThat(blockchain.getBlockBodiesCache()).isEmpty();
+    assertThat(blockchain.getTransactionReceiptsCache()).isEmpty();
+    assertThat(blockchain.getBlockAccessListCache()).isEmpty();
   }
 
-  @ParameterizedTest
-  @CsvSource({"0, 134217728", "128, 1"})
-  public void recentBlockDataIsNotCachedWhenCacheIsDisabledOrTooSmall(
-      final int recentBlocksToCache, final long recentBlocksCacheMaxCapacity) {
+  @Test
+  public void testCacheUsedWhenNumberOfBlocksToCacheNotZero() {
     final BlockDataGenerator gen = new BlockDataGenerator();
-    final Block genesisBlock = gen.genesisBlock();
     final KeyValueStorage kvStore = new InMemoryKeyValueStorage();
     final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
+    final Block genesisBlock = gen.genesisBlock();
     final DefaultBlockchain blockchain =
-        createMutableBlockchain(
-            kvStore,
-            kvStoreVariables,
-            genesisBlock,
-            "/data/test",
-            recentBlocksToCache,
-            recentBlocksCacheMaxCapacity,
-            0);
-    final Block newBlock =
-        gen.block(new BlockOptions().setBlockNumber(1L).setParentHash(genesisBlock.getHash()));
-    final Hash blockHash = newBlock.getHash();
+        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock, "/data/test", 512, 0);
 
-    blockchain.appendBlock(newBlock, gen.receipts(newBlock), Optional.of(gen.blockAccessList()));
-    removeBlockDataFromStorage(createStorage(kvStore, kvStoreVariables), blockHash);
+    final BlockDataGenerator.BlockOptions options =
+        new BlockDataGenerator.BlockOptions()
+            .setBlockNumber(1L)
+            .setParentHash(genesisBlock.getHash());
+    final Block newBlock = gen.block(options);
+    final List<TransactionReceipt> receipts = gen.receipts(newBlock);
 
-    assertThat(blockchain.getBlockBody(blockHash)).isEmpty();
-    assertThat(blockchain.getTxReceipts(blockHash)).isEmpty();
-    assertThat(blockchain.getBlockAccessListRlp(blockHash)).isEmpty();
+    assertThat(blockchain.getBlockHeadersCache()).isNotEmpty();
+    assertThat(blockchain.getBlockBodiesCache()).isNotEmpty();
+    assertThat(blockchain.getTransactionReceiptsCache()).isNotEmpty();
+
+    assertThat(blockchain.getBlockHeadersCache().get().size()).isEqualTo(0);
+    assertThat(blockchain.getBlockBodiesCache().get().size()).isEqualTo(0);
+    assertThat(blockchain.getTransactionReceiptsCache().get().size()).isEqualTo(0);
+
+    blockchain.appendBlock(newBlock, receipts);
+
+    assertThat(blockchain.getBlockHeadersCache().get().size()).isEqualTo(1);
+    assertThat(blockchain.getBlockHeadersCache().get().getIfPresent(newBlock.getHash()))
+        .isEqualTo(newBlock.getHeader());
+
+    assertThat(blockchain.getBlockBodiesCache().get().size()).isEqualTo(1);
+    assertThat(blockchain.getBlockBodiesCache().get().getIfPresent(newBlock.getHash()))
+        .isEqualTo(newBlock.getBody());
+
+    assertThat(blockchain.getTransactionReceiptsCache().get().size()).isEqualTo(1);
+    assertThat(blockchain.getTransactionReceiptsCache().get().getIfPresent(newBlock.getHash()))
+        .isEqualTo(receipts);
   }
 
   @Test
@@ -1088,14 +1101,7 @@ public class DefaultBlockchainTest {
     final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
     final Block genesisBlock = gen.genesisBlock();
     final DefaultBlockchain blockchain =
-        createMutableBlockchain(
-            kvStore,
-            kvStoreVariables,
-            genesisBlock,
-            "/data/test",
-            DefaultBlockchain.DEFAULT_RECENT_BLOCKS_TO_CACHE,
-            DefaultBlockchain.DEFAULT_RECENT_BLOCKS_CACHE_MAX_CAPACITY,
-            512);
+        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock, "/data/test", 512, 0);
     final Block newBlock =
         gen.block(new BlockOptions().setBlockNumber(1L).setParentHash(genesisBlock.getHash()));
 
@@ -1107,108 +1113,164 @@ public class DefaultBlockchainTest {
   }
 
   @Test
-  public void recentBlockDataIsServedFromCacheAfterStorageRemoval() {
+  public void blockAccessListIsServedFromCacheAfterStorageRemoval() {
     final BlockDataGenerator gen = new BlockDataGenerator();
-    final Block genesisBlock = gen.genesisBlock();
     final KeyValueStorage kvStore = new InMemoryKeyValueStorage();
     final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
+    final Block genesisBlock = gen.genesisBlock();
     final DefaultBlockchain blockchain =
-        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock);
-    final Block newBlock =
+        createMutableBlockchain(
+            kvStore,
+            kvStoreVariables,
+            genesisBlock,
+            DefaultBlockchain.DEFAULT_BLOCKS_TO_CACHE,
+            DefaultBlockchain.DEFAULT_BLOCK_ACCESS_LISTS_CACHE_MAX_CAPACITY);
+    final Block block =
         gen.block(new BlockOptions().setBlockNumber(1L).setParentHash(genesisBlock.getHash()));
+    final Hash blockHash = block.getHash();
     final BlockAccessList blockAccessList = gen.blockAccessList();
-    final Hash blockHash = newBlock.getHash();
 
-    blockchain.appendBlock(newBlock, gen.receipts(newBlock), Optional.of(blockAccessList));
-
+    blockchain.appendBlock(block, gen.receipts(block), Optional.of(blockAccessList));
     final BlockchainStorage storage = createStorage(kvStore, kvStoreVariables);
-    final Optional<BlockBody> storedBody = storage.getBlockBody(blockHash);
-    final Optional<List<TransactionReceipt>> storedReceipts =
-        storage.getTransactionReceipts(blockHash);
     final Optional<BlockAccessList> storedBlockAccessList = storage.getBlockAccessList(blockHash);
-    assertThat(storedBody).contains(newBlock.getBody());
     assertThat(storedBlockAccessList).contains(blockAccessList);
-    removeBlockDataFromStorage(storage, blockHash);
+    removeBlockAccessListFromStorage(storage, blockHash);
 
-    assertThat(blockchain.getBlockBody(blockHash)).isEqualTo(storedBody);
-    assertThat(blockchain.getBlockBodyRlp(blockHash))
-        .contains(RLP.encode(newBlock.getBody()::writeWrappedBodyTo));
-    assertThat(blockchain.getTxReceipts(blockHash)).isEqualTo(storedReceipts);
     assertThat(blockchain.getBlockAccessListRlp(blockHash)).contains(blockAccessList.encode());
-    final Optional<BlockAccessList> cachedBlockAccessList =
-        blockchain.getBlockAccessList(blockHash);
-    assertThat(cachedBlockAccessList).isEqualTo(storedBlockAccessList);
-    assertThat(cachedBlockAccessList.get().rawRlp()).contains(blockAccessList.encode());
+    assertThat(blockchain.getBlockAccessList(blockHash)).isEqualTo(storedBlockAccessList);
   }
 
   @Test
-  public void blockDataReadFromStorageIsNotCached() {
+  public void blockAccessListReadFromStorageIsNotCached() {
     final BlockDataGenerator gen = new BlockDataGenerator();
-    final Block genesisBlock = gen.genesisBlock();
     final KeyValueStorage kvStore = new InMemoryKeyValueStorage();
     final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
     final DefaultBlockchain blockchain =
-        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock);
-    final Block block = gen.block();
-    final Hash blockHash = block.getHash();
+        createMutableBlockchain(
+            kvStore,
+            kvStoreVariables,
+            gen.genesisBlock(),
+            DefaultBlockchain.DEFAULT_BLOCKS_TO_CACHE,
+            DefaultBlockchain.DEFAULT_BLOCK_ACCESS_LISTS_CACHE_MAX_CAPACITY);
+    final Hash blockHash = gen.hash();
     final BlockchainStorage storage = createStorage(kvStore, kvStoreVariables);
-
     final BlockchainStorage.Updater updater = storage.updater();
-    updater.putBlockBody(blockHash, block.getBody());
-    updater.putTransactionReceipts(blockHash, gen.receipts(block));
     updater.putBlockAccessList(blockHash, gen.blockAccessList());
     updater.commit();
 
-    assertThat(blockchain.getBlockBody(blockHash)).isPresent();
-    assertThat(blockchain.getBlockBodyRlp(blockHash)).isPresent();
-    assertThat(blockchain.getTxReceipts(blockHash)).isPresent();
     assertThat(blockchain.getBlockAccessList(blockHash)).isPresent();
     assertThat(blockchain.getBlockAccessListRlp(blockHash)).isPresent();
-    removeBlockDataFromStorage(storage, blockHash);
+    removeBlockAccessListFromStorage(storage, blockHash);
 
-    assertThat(blockchain.getBlockBody(blockHash)).isEmpty();
-    assertThat(blockchain.getBlockBodyRlp(blockHash)).isEmpty();
-    assertThat(blockchain.getTxReceipts(blockHash)).isEmpty();
     assertThat(blockchain.getBlockAccessList(blockHash)).isEmpty();
     assertThat(blockchain.getBlockAccessListRlp(blockHash)).isEmpty();
   }
 
   @Test
-  public void oldestBlockDataIsEvictedOnceWindowIsFull() {
+  public void blockAccessListCacheHoldsAtMostNumberOfBlocksToCache() {
     final BlockDataGenerator gen = new BlockDataGenerator();
     final Block genesisBlock = gen.genesisBlock();
-    final KeyValueStorage kvStore = new InMemoryKeyValueStorage();
-    final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
     final DefaultBlockchain blockchain =
-        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock);
-    final List<Block> blocks =
-        gen.blockSequence(genesisBlock, DefaultBlockchain.DEFAULT_RECENT_BLOCKS_TO_CACHE + 1);
+        createMutableBlockchain(
+            new InMemoryKeyValueStorage(),
+            new InMemoryKeyValueStorage(),
+            genesisBlock,
+            2,
+            DefaultBlockchain.DEFAULT_BLOCK_ACCESS_LISTS_CACHE_MAX_CAPACITY);
+    final List<Block> blocks = gen.blockSequence(genesisBlock, 3);
 
     blocks.forEach(
         block ->
             blockchain.appendBlock(block, gen.receipts(block), Optional.of(gen.blockAccessList())));
 
-    final Hash oldestHash = blocks.getFirst().getHash();
-    final Hash secondHash = blocks.get(1).getHash();
-    final BlockchainStorage storage = createStorage(kvStore, kvStoreVariables);
-    removeBlockDataFromStorage(storage, oldestHash);
-    removeBlockDataFromStorage(storage, secondHash);
-
-    assertThat(blockchain.getBlockBody(oldestHash)).isEmpty();
-    assertThat(blockchain.getBlockBodyRlp(oldestHash)).isEmpty();
-    assertThat(blockchain.getTxReceipts(oldestHash)).isEmpty();
-    assertThat(blockchain.getBlockAccessListRlp(oldestHash)).isEmpty();
-    assertThat(blockchain.getBlockBody(secondHash)).isPresent();
-    assertThat(blockchain.getBlockBodyRlp(secondHash)).isPresent();
-    assertThat(blockchain.getTxReceipts(secondHash)).isPresent();
-    assertThat(blockchain.getBlockAccessListRlp(secondHash)).isPresent();
+    final Cache<Hash, Bytes> cache = blockchain.getBlockAccessListCache().orElseThrow();
+    assertThat(cache.size()).isEqualTo(2);
+    assertThat(cache.getIfPresent(blocks.get(0).getHash())).isNull();
+    assertThat(cache.getIfPresent(blocks.get(1).getHash())).isNotNull();
+    assertThat(cache.getIfPresent(blocks.get(2).getHash())).isNotNull();
   }
 
-  private static void removeBlockDataFromStorage(
+  @Test
+  public void blockAccessListCacheEvictsOldestOnceCapacityIsFull() {
+    final BlockDataGenerator gen = new BlockDataGenerator();
+    final Block genesisBlock = gen.genesisBlock();
+    final List<Block> blocks = gen.blockSequence(genesisBlock, 3);
+    final List<BlockAccessList> blockAccessLists =
+        List.of(gen.blockAccessList(), gen.blockAccessList(), gen.blockAccessList());
+    final DefaultBlockchain blockchain =
+        createMutableBlockchain(
+            new InMemoryKeyValueStorage(),
+            new InMemoryKeyValueStorage(),
+            genesisBlock,
+            DefaultBlockchain.DEFAULT_BLOCKS_TO_CACHE,
+            weight(blockAccessLists.get(1)) + weight(blockAccessLists.get(2)));
+
+    for (int i = 0; i < blocks.size(); i++) {
+      final Block block = blocks.get(i);
+      blockchain.appendBlock(block, gen.receipts(block), Optional.of(blockAccessLists.get(i)));
+    }
+
+    final Cache<Hash, Bytes> cache = blockchain.getBlockAccessListCache().orElseThrow();
+    assertThat(cache.getIfPresent(blocks.get(0).getHash())).isNull();
+    assertThat(cache.getIfPresent(blocks.get(1).getHash())).isNotNull();
+    assertThat(cache.getIfPresent(blocks.get(2).getHash())).isNotNull();
+  }
+
+  @Test
+  public void blockAccessListOverCapacityIsNotCachedAndEvictsNothing() {
+    final BlockDataGenerator gen = new BlockDataGenerator();
+    final Block genesisBlock = gen.genesisBlock();
+    final List<Block> blocks = gen.blockSequence(genesisBlock, 2);
+    final BlockAccessList small = gen.blockAccessList(1);
+    final BlockAccessList large = gen.blockAccessList(50);
+    final DefaultBlockchain blockchain =
+        createMutableBlockchain(
+            new InMemoryKeyValueStorage(),
+            new InMemoryKeyValueStorage(),
+            genesisBlock,
+            DefaultBlockchain.DEFAULT_BLOCKS_TO_CACHE,
+            weight(small));
+
+    blockchain.appendBlock(blocks.get(0), gen.receipts(blocks.get(0)), Optional.of(small));
+    blockchain.appendBlock(blocks.get(1), gen.receipts(blocks.get(1)), Optional.of(large));
+
+    final Cache<Hash, Bytes> cache = blockchain.getBlockAccessListCache().orElseThrow();
+    assertThat(cache.getIfPresent(blocks.get(0).getHash())).isNotNull();
+    assertThat(cache.getIfPresent(blocks.get(1).getHash())).isNull();
+  }
+
+  @ParameterizedTest
+  @CsvSource({"0, 134217728", "128, 0", "128, 1"})
+  public void blockAccessListIsNotCachedWhenCacheIsDisabledOrTooSmall(
+      final int numberOfBlocksToCache, final long blockAccessListsCacheMaxCapacity) {
+    final BlockDataGenerator gen = new BlockDataGenerator();
+    final KeyValueStorage kvStore = new InMemoryKeyValueStorage();
+    final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
+    final Block genesisBlock = gen.genesisBlock();
+    final DefaultBlockchain blockchain =
+        createMutableBlockchain(
+            kvStore,
+            kvStoreVariables,
+            genesisBlock,
+            numberOfBlocksToCache,
+            blockAccessListsCacheMaxCapacity);
+    final Block block =
+        gen.block(new BlockOptions().setBlockNumber(1L).setParentHash(genesisBlock.getHash()));
+
+    blockchain.appendBlock(block, gen.receipts(block), Optional.of(gen.blockAccessList()));
+    removeBlockAccessListFromStorage(createStorage(kvStore, kvStoreVariables), block.getHash());
+
+    assertThat(blockchain.getBlockAccessListRlp(block.getHash())).isEmpty();
+  }
+
+  private static long weight(final BlockAccessList blockAccessList) {
+    return (long) blockAccessList.encode().size()
+        + DefaultBlockchain.BLOCK_ACCESS_LIST_CACHE_ENTRY_OVERHEAD;
+  }
+
+  private static void removeBlockAccessListFromStorage(
       final BlockchainStorage storage, final Hash blockHash) {
     final BlockchainStorage.Updater updater = storage.updater();
-    updater.removeBlockBody(blockHash);
-    updater.removeTransactionReceipts(blockHash);
     updater.removeBlockAccessList(blockHash);
     updater.commit();
   }
@@ -1220,14 +1282,7 @@ public class DefaultBlockchainTest {
     final KeyValueStorage kvStoreVariables = new InMemoryKeyValueStorage();
     final Block genesisBlock = gen.genesisBlock();
     final DefaultBlockchain blockchain =
-        createMutableBlockchain(
-            kvStore,
-            kvStoreVariables,
-            genesisBlock,
-            "/data/test",
-            DefaultBlockchain.DEFAULT_RECENT_BLOCKS_TO_CACHE,
-            DefaultBlockchain.DEFAULT_RECENT_BLOCKS_CACHE_MAX_CAPACITY,
-            10000);
+        createMutableBlockchain(kvStore, kvStoreVariables, genesisBlock, "/data/test", 0, 10000);
 
     final BlockDataGenerator.BlockOptions options =
         new BlockDataGenerator.BlockOptions()
@@ -1237,6 +1292,8 @@ public class DefaultBlockchainTest {
     final List<TransactionReceipt> receipts = gen.receipts(newBlock);
 
     assertThat(blockchain.getBlockHeadersCache()).isNotEmpty();
+    assertThat(blockchain.getBlockBodiesCache()).isEmpty();
+    assertThat(blockchain.getTransactionReceiptsCache()).isEmpty();
 
     assertThat(blockchain.getBlockHeadersCache().get().size()).isEqualTo(0);
 
@@ -1633,6 +1690,25 @@ public class DefaultBlockchainTest {
             dataDirectory);
   }
 
+  private DefaultBlockchain createMutableBlockchain(
+      final KeyValueStorage kvStore,
+      final KeyValueStorage kvStorageVariables,
+      final Block genesisBlock,
+      final int numberOfBlocksToCache,
+      final long blockAccessListsCacheMaxCapacity) {
+    return (DefaultBlockchain)
+        DefaultBlockchain.createMutable(
+            genesisBlock,
+            createStorage(kvStore, kvStorageVariables),
+            new NoOpMetricsSystem(),
+            0,
+            "/data/test",
+            numberOfBlocksToCache,
+            blockAccessListsCacheMaxCapacity,
+            0,
+            false);
+  }
+
   private Blockchain createBlockchain(
       final KeyValueStorage kvStore, final KeyValueStorage kvStorageVariables) {
     return DefaultBlockchain.create(
@@ -1644,8 +1720,7 @@ public class DefaultBlockchainTest {
       final KeyValueStorage kvStorageVariables,
       final Block genesisBlock,
       final String dataDirectory,
-      final int recentBlocksToCache,
-      final long recentBlocksCacheMaxCapacity,
+      final int numberOfBlocksToCache,
       final int numberOfBlockHeadersToCache) {
     return (DefaultBlockchain)
         DefaultBlockchain.createMutable(
@@ -1654,10 +1729,8 @@ public class DefaultBlockchainTest {
             new NoOpMetricsSystem(),
             0,
             dataDirectory,
-            recentBlocksToCache,
-            recentBlocksCacheMaxCapacity,
-            numberOfBlockHeadersToCache,
-            false);
+            numberOfBlocksToCache,
+            numberOfBlockHeadersToCache);
   }
 
   @Test
