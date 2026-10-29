@@ -731,6 +731,9 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
       final Block block, final Optional<BlockAccessList> blockAccessList) {
     LOG.atDebug().setMessage("Remember block {}").addArgument(block::toLogString).log();
     final var chain = protocolContext.getBlockchain();
+    chain
+        .getBlockHeader(block.getHeader().getParentHash())
+        .ifPresent(parent -> protocolContext.getWorldStateArchive().capCachedLayerDepth(parent));
     final var validationResult = validateBlock(block, blockAccessList);
     validationResult
         .getYield()
@@ -794,8 +797,13 @@ public class MergeCoordinator implements MergeMiningCoordinator, BadChainListene
 
   private boolean setNewHead(final MutableBlockchain blockchain, final BlockHeader newHead) {
     // moved even when the chain head is already there: backward sync appends its blocks without
-    // the head world state lock, so a fork choice in between can leave the two at different blocks
-    if (!moveWorldStateTo(newHead)) {
+    // the head world state lock, so a fork choice in between can leave the two at different blocks.
+    // Not when it is above the chain head on the chain blocks are imported on, where the depth cap
+    // puts it, as a repeated fork choice to the same head would undo the cap on each call
+    final boolean keepWorldStateAboveHead =
+        newHead.getHash().equals(blockchain.getChainHeadHash())
+            && protocolContext.getWorldStateArchive().isHeadWorldStateAbove(newHead);
+    if (!keepWorldStateAboveHead && !moveWorldStateTo(newHead)) {
       LOG.atDebug()
           .setMessage("Failed to move the worldstate forward to hash {}, not moving chain head")
           .addArgument(newHead::toLogString)

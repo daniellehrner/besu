@@ -48,6 +48,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.bigints.UInt256;
@@ -68,6 +69,13 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
   // would leave its data out of step with its block hash marker. Fair, so that a fork choice
   // waiting for it is not overtaken by backward sync importing the next block
   private final ReentrantLock headWorldStateLock = new ReentrantLock(true);
+  // every block imported without a fork choice is a layer on its parent's, and a read that misses
+  // walks all of them
+  private int maxCachedLayerDepth = 64;
+  // a branch the cap failed on or did not apply to is tried again only once as many layers again
+  // are added on top of it
+  private volatile CapBackoff capBackoff = null;
+  private volatile Ancestry lastHeadWorldStateAncestry = null;
   protected final BonsaiWorldStateKeyValueStorage worldStateKeyValueStorage;
   protected EvmConfiguration evmConfiguration;
   // Configuration that will be shared by all instances of world state at their creation
@@ -226,9 +234,136 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
   private Optional<MutableWorldState> getFullWorldStateFromHead(final Hash blockHash) {
     // a failure here keeps the chain head from moving, so it must be visible at the default level
     return withHeadWorldStateLock(
-        () ->
-            rollFullWorldStateToBlockHash(headWorldState, blockHash, Level.WARN)
-                .map(MutableWorldState.class::cast));
+        () -> {
+          capBackoff = null;
+          return rollFullWorldStateToBlockHash(headWorldState, blockHash, Level.WARN)
+              .map(MutableWorldState.class::cast);
+        });
+  }
+
+  @Override
+  public void capCachedLayerDepth(final BlockHeader blockHeader) {
+    final int depth = worldStateCacheManager.getCachedLayerDepth(blockHeader);
+    if (depth <= maxCachedLayerDepth || isBackingOff(blockHeader, depth)) {
+      return;
+    }
+    withHeadWorldStateLock(
+        () -> {
+          // the head world state may have moved while this waited for the lock
+          if (worldStateCacheManager.getCachedLayerDepth(blockHeader) <= maxCachedLayerDepth
+              || headWorldState.blockHash().equals(blockHeader.getBlockHash())) {
+            return null;
+          }
+          final BlockHeader chainHead = blockchain.getChainHeadHeader();
+          // on a branch that forks below the chain head, every fork choice to the canonical chain
+          // would roll the world state back over the fork point
+          if (!descendsFromChainHead(blockHeader, chainHead)) {
+            capBackoff = new CapBackoff(blockHeader.getBlockHash(), depth + maxCachedLayerDepth);
+            return null;
+          }
+          try {
+            // the cached world state of the block becomes a snapshot of the persisted one
+            if (rollFullWorldStateToBlockHash(
+                    headWorldState, blockHeader.getBlockHash(), Level.WARN)
+                .isPresent()) {
+              capBackoff = null;
+              LOG.atInfo()
+                  .setMessage(
+                      "Persisted the world state at block {} to bound the {} in-memory layers of blocks imported without a fork choice")
+                  .addArgument(blockHeader::toLogString)
+                  .addArgument(depth)
+                  .log();
+              return null;
+            }
+          } catch (final RuntimeException e) {
+            // a roll that throws can leave part of its changes in the head world state
+            ((PathBasedWorldStateUpdateAccumulator<?>) headWorldState.updater()).reset();
+            LOG.warn(
+                "Failed to persist the world state at block {} to bound its in-memory layers",
+                blockHeader.toLogString(),
+                e);
+          }
+          // the block is still imported on top of the layers
+          capBackoff = new CapBackoff(blockHeader.getBlockHash(), depth + maxCachedLayerDepth);
+          return null;
+        });
+  }
+
+  private boolean isBackingOff(final BlockHeader blockHeader, final int depth) {
+    final CapBackoff backoff = capBackoff;
+    if (backoff == null || !blockHeader.getParentHash().equals(backoff.tip())) {
+      return false;
+    }
+    if (depth > backoff.retryDepth()) {
+      return false;
+    }
+    capBackoff = new CapBackoff(blockHeader.getBlockHash(), backoff.retryDepth());
+    return true;
+  }
+
+  private boolean descendsFromChainHead(
+      final BlockHeader blockHeader, final BlockHeader chainHead) {
+    // the block the world state is persisted at is a closer ancestor to walk to first
+    return (isHeadWorldStateAbove(chainHead)
+            && blockchain
+                .getBlockHeader(headWorldState.blockHash())
+                .map(persisted -> descendsFrom(blockHeader, persisted))
+                .orElse(false))
+        || descendsFrom(blockHeader, chainHead);
+  }
+
+  private boolean descendsFrom(final BlockHeader blockHeader, final BlockHeader ancestor) {
+    BlockHeader current = blockHeader;
+    while (current.getNumber() > ancestor.getNumber()) {
+      final Optional<BlockHeader> parent =
+          blockchain.getBlockHeader(current.getParentHash()).map(BlockHeader.class::cast);
+      if (parent.isEmpty()) {
+        return false;
+      }
+      current = parent.get();
+    }
+    return current.getBlockHash().equals(ancestor.getBlockHash());
+  }
+
+  @Override
+  public boolean isHeadWorldStateAbove(final BlockHeader blockHeader) {
+    final Hash headBlockHash = headWorldState.blockHash();
+    if (headBlockHash.equals(blockHeader.getBlockHash())) {
+      return false;
+    }
+    // asked on every fork choice to an unchanged head, while the world state moves only once per
+    // cap
+    final Ancestry last = lastHeadWorldStateAncestry;
+    if (last != null
+        && last.descendant().equals(headBlockHash)
+        && last.ancestor().equals(blockHeader.getBlockHash())) {
+      return last.descends();
+    }
+    final boolean descends =
+        blockchain
+            .getBlockHeader(headBlockHash)
+            .map(headHeader -> descendsFrom(headHeader, blockHeader))
+            .orElse(false);
+    lastHeadWorldStateAncestry = new Ancestry(headBlockHash, blockHeader.getBlockHash(), descends);
+    return descends;
+  }
+
+  private record CapBackoff(Hash tip, int retryDepth) {}
+
+  private record Ancestry(Hash descendant, Hash ancestor, boolean descends) {}
+
+  @VisibleForTesting
+  public void setMaxCachedLayerDepth(final int maxCachedLayerDepth) {
+    this.maxCachedLayerDepth = maxCachedLayerDepth;
+  }
+
+  /**
+   * Gets the hash of the chain head, whose world state stays cached.
+   *
+   * @return the chain head hash
+   */
+  public Hash getChainHeadHash() {
+    return blockchain.getChainHeadHash();
   }
 
   /**
@@ -414,6 +549,7 @@ public abstract class PathBasedWorldStateProvider implements WorldStateArchive {
   public void resetArchiveStateTo(final BlockHeader blockHeader) {
     headWorldStateLock.lock();
     try {
+      capBackoff = null;
       headWorldState.resetWorldStateTo(blockHeader);
       this.worldStateCacheManager.reset();
       this.worldStateCacheManager.addCachedLayer(
