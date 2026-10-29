@@ -26,6 +26,7 @@
 - `engine_newPayload` replies before it stores a valid block and its trie log. [#11682](https://github.com/besu-eth/besu/pull/11682)
 - Block import preloads and commits only the state a block changes, and builds trie keys without streams. [#11758](https://github.com/besu-eth/besu/pull/11758)
 - Parallel transaction execution keeps a reverted transaction's result when nothing it read changed, instead of executing it again. [#11806](https://github.com/besu-eth/besu/pull/11806)
+- Parallel transaction execution runs the transactions of one sender in order on one worker and keeps their results when the block holds the state they started from. [#11808](https://github.com/besu-eth/besu/pull/11808)
 
 ## 26.10.2
 
