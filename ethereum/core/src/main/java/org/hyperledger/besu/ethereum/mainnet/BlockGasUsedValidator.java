@@ -27,7 +27,8 @@ import java.util.OptionalLong;
  * <p>Prior to EIP-7778: Block gas equals the last receipt's cumulativeGasUsed (post-refund).
  *
  * <p>EIP-7778 (Amsterdam+): Block gas is pre-refund and may differ from receipt's
- * cumulativeGasUsed. Validation requires the cumulativeBlockGasUsed from block processing.
+ * cumulativeGasUsed. Validating a block with transactions requires the cumulativeBlockGasUsed from
+ * block processing.
  */
 @FunctionalInterface
 public interface BlockGasUsedValidator {
