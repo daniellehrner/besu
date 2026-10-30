@@ -149,6 +149,41 @@ class BonsaiWorldStateUpdateAccumulatorTest {
         .isEqualTo(Wei.of(3));
   }
 
+  @Test
+  void importAndCommitAccountChanges_mergesTheChangesBeforeAndAfterOneThatEmptiesTheAccount() {
+    // the slot is written before and after the account is emptied, and the account that ends
+    // non-empty is emptied by its last change
+    final List<PartialBlockAccessView> transactions =
+        List.of(
+            partialView(
+                1,
+                view ->
+                    view.getOrCreateAccountBuilder(ACCOUNT)
+                        .withPostBalance(Wei.of(5))
+                        .addStorageChange(SLOT, V0, V1)),
+            partialView(
+                2, view -> view.getOrCreateAccountBuilder(ACCOUNT).withPostBalance(Wei.of(6))),
+            partialView(
+                3, view -> view.getOrCreateAccountBuilder(ACCOUNT).withPostBalance(Wei.ZERO)),
+            partialView(
+                4,
+                view ->
+                    view.getOrCreateAccountBuilder(ACCOUNT)
+                        .withPostBalance(Wei.of(2))
+                        .addStorageChange(SLOT, UInt256.ZERO, V2)),
+            partialView(
+                5,
+                view -> {
+                  view.getOrCreateAccountBuilder(ACCOUNT).withPostBalance(Wei.of(1));
+                  view.getOrCreateAccountBuilder(CREATED).withPostBalance(Wei.of(10));
+                }),
+            partialView(
+                6, view -> view.getOrCreateAccountBuilder(CREATED).withPostBalance(Wei.ZERO)));
+
+    assertThat(trieLogOfImportingTogether(transactions).dump())
+        .isEqualTo(trieLogOfImportingOneByOne(transactions).dump());
+  }
+
   /**
    * Imports and commits the transactions one at a time, as the block's thread does. Trie logs are
    * compared by their dump: their accounts compare by identity.

@@ -166,10 +166,10 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
   /**
    * Imports the writes that a block's transactions made to some accounts and commits them, with the
    * result of importing each transaction's {@link PartialBlockAccessView} and committing after it.
-   * Nothing reads an account between its changes, so an account's changes are merged into one and
-   * committed once, unless one of them may empty the account: those changes are imported one by one
-   * and a change that deletes the account is committed right away, so that recreating it later in
-   * the block keeps its storage cleared.
+   * Nothing reads an account between its changes, so an account's changes are merged and committed
+   * once. Only a change that may empty the account ends a merge, so the account is checked for
+   * emptiness after the same changes as one by one, and a change that deletes the account is
+   * committed right away, so that recreating it later in the block keeps its storage cleared.
    *
    * <p>The changes of an account must be in transaction order. Calls for disjoint sets of accounts
    * may run concurrently, so a block's changes can be imported by several threads.
@@ -180,39 +180,30 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
   public void importAndCommitAccountChanges(
       final List<PartialBlockAccessView.AccountChanges> accountChanges,
       final boolean clearEmptyAccounts) {
-    final Map<Address, AccountChangesToImport> changesByAccount = new HashMap<>();
+    final Map<Address, List<PartialBlockAccessView.AccountChanges>> changesByAccount =
+        new HashMap<>();
     for (final PartialBlockAccessView.AccountChanges changes : accountChanges) {
-      changesByAccount
-          .computeIfAbsent(changes.getAddress(), __ -> new AccountChangesToImport())
-          .add(changes, clearEmptyAccounts);
+      changesByAccount.computeIfAbsent(changes.getAddress(), __ -> new ArrayList<>(1)).add(changes);
     }
     changesByAccount.forEach(
-        (address, toImport) -> {
-          if (toImport.mayEmptyAccount) {
-            for (final PartialBlockAccessView.AccountChanges change : toImport.changes) {
-              if (importAccountChanges(change, clearEmptyAccounts)) {
+        (address, changes) -> {
+          int mergeStart = 0;
+          for (int i = 0; i < changes.size(); i++) {
+            if (mayEmptyAccount(changes.get(i), clearEmptyAccounts)) {
+              if (importAccountChanges(
+                  merge(address, changes.subList(mergeStart, i + 1)), clearEmptyAccounts)) {
                 commitAccount(address);
               }
+              mergeStart = i + 1;
             }
-          } else {
-            importAccountChanges(merge(address, toImport.changes), clearEmptyAccounts);
+          }
+          if (mergeStart < changes.size()) {
+            importAccountChanges(
+                merge(address, changes.subList(mergeStart, changes.size())), clearEmptyAccounts);
           }
           commitAccount(address);
         });
     this.isAccumulatorStateChanged = true;
-  }
-
-  /** The changes of one account to import, in transaction order. */
-  private static final class AccountChangesToImport {
-    private final List<PartialBlockAccessView.AccountChanges> changes = new ArrayList<>(1);
-    private boolean mayEmptyAccount;
-
-    void add(
-        final PartialBlockAccessView.AccountChanges accountChanges,
-        final boolean clearEmptyAccounts) {
-      changes.add(accountChanges);
-      mayEmptyAccount |= mayEmptyAccount(accountChanges, clearEmptyAccounts);
-    }
   }
 
   /** Whether importing the changes checks if they left the account empty, to delete it. */
