@@ -165,8 +165,12 @@ public class LogsBloomFilter extends BytesHolder {
      * @return the builder
      */
     public Builder insertFilter(final LogsBloomFilter other) {
-      for (int i = 0; i < data.size(); ++i) {
-        data.set(i, (byte) ((data.get(i) | other.getBytes().get(i)) & 0xff));
+      // A block's bloom merges one filter per transaction, most of them without a bit set.
+      final byte[] otherBits = other.getBytes().toArrayUnsafe();
+      for (int i = 0; i < otherBits.length; ++i) {
+        if (otherBits[i] != 0) {
+          data.set(i, (byte) (data.get(i) | otherBits[i]));
+        }
       }
       return this;
     }
