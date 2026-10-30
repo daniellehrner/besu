@@ -63,6 +63,12 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
 
   private static final long TRIE_NODE_CACHE_SIZE = 300_000;
 
+  /**
+   * A miss looks up every kept block's nodes, so only this many blocks are kept, however few nodes
+   * they wrote.
+   */
+  private static final int TRIE_NODE_CACHE_BLOCKS = 16;
+
   private final AtomicLong globalVersion = new AtomicLong(0);
 
   /** Nested commit-bypass count; when readers ignore the cache entirely. */
@@ -77,7 +83,8 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
    * otherwise read back what was just written. The nodes are kept by how recently they were
    * written, not in a cache that admits what it has seen often: every node is new to it, so such a
    * cache turned away most of the nodes of a block that changes many accounts. The newest block's
-   * nodes are kept whole, older blocks' while all add up to {@link #trieNodeCacheSize}.
+   * nodes are kept whole, older blocks' while all add up to {@link #trieNodeCacheSize}, for at most
+   * {@link #TRIE_NODE_CACHE_BLOCKS} blocks.
    */
   private volatile List<Map<CacheKey, Bytes>> trieNodesByBlock = List.of();
 
@@ -560,7 +567,7 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
     long size = blockNodes.size();
     for (final Map<CacheKey, Bytes> olderBlockNodes : trieNodesByBlock) {
       size += olderBlockNodes.size();
-      if (size > trieNodeCacheSize) {
+      if (size > trieNodeCacheSize || kept.size() == TRIE_NODE_CACHE_BLOCKS) {
         break;
       }
       kept.add(olderBlockNodes);

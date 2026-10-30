@@ -226,6 +226,19 @@ class VersionedFlatDbCacheManagerTest {
     }
   }
 
+  @Test
+  void trieNodes_ofAtMostSixteenBlocksAreKept() {
+    for (int block = 0; block < 17; block++) {
+      cacheManager.putTrieNodes(trieNodes(block, 1));
+    }
+    await()
+        .untilAsserted(
+            () -> assertThat(cacheManager.getCacheSize(TRIE_BRANCH_STORAGE)).isEqualTo(16));
+
+    assertThat(cacheManager.getTrieNode(trieNodes(0, 1).getFirst().hash())).isEmpty();
+    assertThat(cacheManager.getTrieNode(trieNodes(16, 1).getFirst().hash())).isPresent();
+  }
+
   private static List<TrieNode> trieNodes(final int first, final int count) {
     return IntStream.range(first, first + count)
         .mapToObj(
