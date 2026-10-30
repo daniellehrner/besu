@@ -187,6 +187,8 @@ public record BlockAccessList(List<AccountChanges> accountChanges, Optional<Byte
 
   private record SortableSlotRead(byte[] sortKey, StorageSlotKey value) {}
 
+  private record SortableAccountChanges(byte[] sortKey, AccountChanges value) {}
+
   public static class BlockAccessListBuilder {
     private final Map<Address, AccountBuilder> accountChangesBuilders = new HashMap<>();
 
@@ -296,15 +298,21 @@ public record BlockAccessList(List<AccountChanges> accountChanges, Optional<Byte
     }
 
     public BlockAccessList build() {
-      final List<AccountChanges> accountChanges = new ArrayList<>(accountChangesBuilders.size());
+      // Sorted on a copy of each address taken once: an address that wraps part of a larger
+      // array, like a recovered sender's, would be copied by each of the sort's comparisons.
+      final SortableAccountChanges[] entries =
+          new SortableAccountChanges[accountChangesBuilders.size()];
+      int i = 0;
       for (AccountBuilder accountBuilder : accountChangesBuilders.values()) {
-        accountChanges.add(accountBuilder.build());
+        entries[i++] =
+            new SortableAccountChanges(
+                accountBuilder.address.getBytes().toArray(), accountBuilder.build());
       }
-      accountChanges.sort(
-          (left, right) ->
-              Arrays.compareUnsigned(
-                  left.address().getBytes().toArrayUnsafe(),
-                  right.address().getBytes().toArrayUnsafe()));
+      Arrays.sort(entries, (a, b) -> Arrays.compareUnsigned(a.sortKey(), b.sortKey()));
+      final List<AccountChanges> accountChanges = new ArrayList<>(entries.length);
+      for (SortableAccountChanges entry : entries) {
+        accountChanges.add(entry.value());
+      }
       final BlockAccessList blockAccessList = new BlockAccessList(accountChanges);
       checkState(
           itemCount == blockAccessList.eip7928ItemCount(),
