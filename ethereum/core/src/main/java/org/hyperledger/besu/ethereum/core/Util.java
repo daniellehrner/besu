@@ -23,6 +23,7 @@ import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.patricia.SimpleMerklePatriciaTrie;
 
 import java.util.List;
+import java.util.function.Function;
 import java.util.stream.IntStream;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -31,7 +32,8 @@ import org.apache.tuweni.units.bigints.UInt256;
 
 public class Util {
 
-  // A list this long, such as the transactions or receipts of a large block, is hashed in parallel.
+  // A list this long, such as the transactions or receipts of a large block, is encoded and hashed
+  // in parallel.
   private static final int MIN_ENTRIES_TO_HASH_IN_PARALLEL = 512;
 
   // The keys are RLP-encoded indices that share their first nibbles, so the subtries split by
@@ -81,6 +83,23 @@ public class Util {
    */
   public static Bytes indexKey(final int i) {
     return RLP.encodeOne(UInt256.valueOf(i).trimLeadingZeros());
+  }
+
+  /**
+   * Calculates the root of an MPT based on it's entries, encoding them in parallel for a long list.
+   *
+   * @param entries list of the entries strictly ordered by index, starting at 0
+   * @param encoder encodes an entry into its value in the MPT
+   * @param <T> the type of the entries
+   * @return the root hash of the MPT
+   */
+  public static <T> Hash getRootFromList(final List<T> entries, final Function<T, Bytes> encoder) {
+    return getRootFromListOfBytes(
+        (entries.size() >= MIN_ENTRIES_TO_HASH_IN_PARALLEL
+                ? entries.parallelStream()
+                : entries.stream())
+            .map(encoder)
+            .toList());
   }
 
   /**
