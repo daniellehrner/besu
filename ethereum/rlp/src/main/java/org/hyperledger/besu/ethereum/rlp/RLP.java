@@ -206,13 +206,13 @@ public abstract class RLP {
 
   /**
    * Returns the size (in bytes) of the encoding of a byte string of the given length, for a string
-   * of more than one byte: a single byte below 0x80 encodes as itself.
+   * of any length but one: a single byte below 0x80 encodes as itself.
    *
-   * @param length The length of the byte string, more than 1.
+   * @param length The length of the byte string, not 1.
    * @return The size of the encoded byte string, header included.
    */
   public static int encodedBytesSize(final int length) {
-    if (length <= 1) {
+    if (length == 1) {
       throw new IllegalArgumentException("The encoded size of a single byte depends on its value");
     }
     return length <= 55 ? 1 + length : 1 + RLPEncodingHelpers.sizeLength(length) + length;
