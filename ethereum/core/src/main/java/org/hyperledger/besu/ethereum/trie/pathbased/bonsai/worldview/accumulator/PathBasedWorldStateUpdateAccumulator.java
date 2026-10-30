@@ -472,6 +472,16 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
       final StorageSlotKey storageSlotKey,
       final BonsaiValue<UInt256> storageValue) {}
 
+  /**
+   * The account as the world state this accumulator wraps holds it, or null if it holds none.
+   *
+   * @param address the address of the account
+   * @return the account, or null
+   */
+  protected Account loadAccountFromWorldView(final Address address) {
+    return wrappedWorldView().get(address);
+  }
+
   public ACCOUNT loadAccount(
       final Address address, final Function<BonsaiValue<ACCOUNT>, ACCOUNT> accountFunction) {
     try {
@@ -482,7 +492,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
         if (fromParent.isPresent()) {
           return fromParent.get();
         }
-        final Account account = wrappedWorldView().get(address);
+        final Account account = loadAccountFromWorldView(address);
         if (account instanceof BonsaiAccount pathBasedAccount) {
           final ACCOUNT updatedAccount = copyAccount((ACCOUNT) pathBasedAccount, this, true);
           final BonsaiValue<ACCOUNT> accountValue =

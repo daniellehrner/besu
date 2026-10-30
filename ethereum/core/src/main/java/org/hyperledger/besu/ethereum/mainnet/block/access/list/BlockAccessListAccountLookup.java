@@ -22,6 +22,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
+
+import org.apache.tuweni.bytes.Bytes;
 
 /**
  * Account and storage-slot lookup over a {@link BlockAccessList}, built once per block and shared
@@ -70,6 +73,35 @@ public final class BlockAccessListAccountLookup {
     return entry == null ? Optional.empty() : Optional.of(entry.addressHash());
   }
 
+  /**
+   * The encoded account at the parent block: what {@code reader} returns for the address's hash,
+   * read on the first call for a listed address and kept for the block's other transactions, which
+   * all read the same parent state. An address the list does not hold is read on every call.
+   *
+   * @param address the address of the account
+   * @param reader reads the encoded account by address hash at the parent block
+   * @return the encoded account, or empty if there is none at the parent block
+   */
+  public Optional<Bytes> parentAccount(
+      final Address address, final Function<Hash, Optional<Bytes>> reader) {
+    final AccountEntry entry = accountEntries.get(address);
+    return entry == null ? reader.apply(address.addressHash()) : entry.parentAccount(reader);
+  }
+
+  /**
+   * Keeps an account read at the parent block, such as by a prefetch, for {@link #parentAccount} to
+   * return, unless one is kept already or the list does not hold the address.
+   *
+   * @param address the address of the account
+   * @param account the encoded account, or empty if there is none at the parent block
+   */
+  public void putParentAccount(final Address address, final Optional<Bytes> account) {
+    final AccountEntry entry = accountEntries.get(address);
+    if (entry != null && entry.parentAccount == null) {
+      entry.parentAccount = account;
+    }
+  }
+
   Optional<BlockAccessList.SlotChanges> getSlotChanges(
       final Address address, final StorageSlotKey storageSlotKey) {
     final AccountEntry entry = accountEntries.get(address);
@@ -83,10 +115,21 @@ public final class BlockAccessListAccountLookup {
     // before the block's transactions can start. Kept here rather than in Address's shared hash
     // cache, which holds fewer entries than a large block touches.
     private volatile Hash addressHash;
+    // The account at the parent block, read on first use. Null until then.
+    private volatile Optional<Bytes> parentAccount;
 
     private AccountEntry(final BlockAccessList.AccountChanges accountChanges) {
       this.accountChanges = accountChanges;
       this.storageBySlot = buildStorageBySlot(accountChanges.storageChanges());
+    }
+
+    Optional<Bytes> parentAccount(final Function<Hash, Optional<Bytes>> reader) {
+      Optional<Bytes> account = parentAccount;
+      if (account == null) {
+        account = reader.apply(addressHash());
+        parentAccount = account;
+      }
+      return account;
     }
 
     Hash addressHash() {

@@ -23,7 +23,6 @@ import org.hyperledger.besu.ethereum.mainnet.BalConfiguration;
 import org.hyperledger.besu.ethereum.mainnet.MainnetTransactionProcessor;
 import org.hyperledger.besu.ethereum.mainnet.TransactionValidationParams;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.AccessLocationTracker;
-import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList.BlockAccessListBuilder;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListAccountLookup;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListOverlay;
@@ -59,7 +58,6 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
       LoggerFactory.getLogger(BalConcurrentTransactionProcessor.class);
 
   private final MainnetTransactionProcessor transactionProcessor;
-  private final BlockAccessList blockAccessList;
   private final BlockAccessListAccountLookup blockAccessListAccountLookup;
   private final Optional<BalPrefetcher> maybePrefetcher;
   // Two groups per thread of the pool, so that a group with a busy account does not hold the
@@ -74,7 +72,6 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
       final BlockAccessListAccountLookup blockAccessListAccountLookup,
       final BalConfiguration balConfiguration) {
     this.transactionProcessor = transactionProcessor;
-    this.blockAccessList = blockAccessListAccountLookup.blockAccessList();
     this.blockAccessListAccountLookup = blockAccessListAccountLookup;
     this.maybePrefetcher =
         balConfiguration.isBalPreFetchReadingEnabled()
@@ -165,7 +162,7 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
             balPrefetchMechanism
                 .prefetch(
                     maybeWorldState.get(),
-                    blockAccessList,
+                    blockAccessListAccountLookup,
                     BlockProcessingExecutors.ioExecutor(),
                     BlockProcessingExecutors.ioExecutor())
                 .exceptionally(
