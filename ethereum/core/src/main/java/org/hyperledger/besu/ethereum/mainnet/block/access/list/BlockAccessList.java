@@ -139,9 +139,18 @@ public final class BlockAccessList {
     if (a.size() != b.size()) {
       return false;
     }
-    final IntStream indices = IntStream.range(0, a.size());
-    return (a.size() >= MIN_ENTRIES_TO_COMPARE_IN_PARALLEL ? indices.parallel() : indices)
-        .allMatch(i -> sameEntry.test(a.get(i), b.get(i)));
+    if (a.size() >= MIN_ENTRIES_TO_COMPARE_IN_PARALLEL) {
+      return IntStream.range(0, a.size())
+          .parallel()
+          .allMatch(i -> sameEntry.test(a.get(i), b.get(i)));
+    }
+    // a loop, not a stream: most lists are short and there are several per account
+    for (int i = 0; i < a.size(); i++) {
+      if (!sameEntry.test(a.get(i), b.get(i))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   @Override
