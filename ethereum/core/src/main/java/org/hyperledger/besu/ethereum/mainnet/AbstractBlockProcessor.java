@@ -64,6 +64,7 @@ import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
@@ -354,6 +355,10 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
           nbParallelTx++;
         }
       }
+      // The body validation after processing needs the receipts root, which is computed while the
+      // rest of the block is processed.
+      final CompletableFuture<Hash> receiptsRoot =
+          CompletableFuture.supplyAsync(() -> BodyValidation.receiptsRoot(receipts));
       completeParallelExecution(parallelProcessor, worldState);
 
       final var optionalHeaderBlobGasUsed = blockHeader.getBlobGasUsed();
@@ -543,7 +548,9 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
                   maybeBlockAccessList,
                   gasMetered,
                   blockHashLookup.getAccessedAncestors(),
-                  inclusionListValidationResult)),
+                  inclusionListValidationResult,
+                  () -> {},
+                  receiptsRoot::join)),
           parallelizedTxFound ? Optional.of(nbParallelTx) : Optional.empty());
     } catch (final MerkleTrieException | StorageException e) {
       // the block may be processed again on this world state, without the transactions before
