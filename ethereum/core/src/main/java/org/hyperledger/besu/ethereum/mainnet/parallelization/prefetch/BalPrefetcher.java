@@ -87,7 +87,7 @@ public class BalPrefetcher {
               worldState.disableCacheMerkleTrieLoader();
 
               // Collect all keys to prefetch
-              final PrefetchKeys keys = collectKeys(accountLookup.accountChanges());
+              final PrefetchKeys keys = collectKeys(accountLookup);
 
               LOG.debug(
                   "Prefetch: collected {} account keys and {} storage keys",
@@ -118,13 +118,16 @@ public class BalPrefetcher {
   }
 
   /** Collect all account and storage keys from the block access list. */
-  private PrefetchKeys collectKeys(final List<BlockAccessList.AccountChanges> accounts) {
+  private PrefetchKeys collectKeys(final BlockAccessListAccountLookup accountLookup) {
+    final List<BlockAccessList.AccountChanges> accounts = accountLookup.accountChanges();
     final List<Address> accountAddresses = new ArrayList<>(accounts.size());
     final List<byte[]> accountKeys = new ArrayList<>(accounts.size());
     final List<byte[]> storageKeys = new ArrayList<>();
     for (final BlockAccessList.AccountChanges accountChanges : accounts) {
       final Address address = accountChanges.address();
-      final byte[] addressHash = address.addressHash().getBytes().toArrayUnsafe();
+      // the lookup hashes each address once for the block, for the transactions too
+      final byte[] addressHash =
+          accountLookup.getAddressHash(address).orElseThrow().getBytes().toArrayUnsafe();
       accountAddresses.add(address);
       accountKeys.add(addressHash);
       final List<BlockAccessList.SlotChanges> storageChanges = accountChanges.storageChanges();
