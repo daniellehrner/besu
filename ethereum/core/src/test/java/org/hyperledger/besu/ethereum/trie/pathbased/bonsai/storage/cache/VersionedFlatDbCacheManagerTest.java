@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.trie.pathbased.bonsai.storage.cache;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_INFO_STATE;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
 import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.TRIE_BRANCH_STORAGE;
 
 import org.hyperledger.besu.datatypes.Hash;
@@ -25,7 +26,9 @@ import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 
 import java.util.AbstractList;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.function.Consumer;
@@ -38,6 +41,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class VersionedFlatDbCacheManagerTest {
+
+  private static final Bytes STORED = Bytes.of(0xff);
 
   private VersionedFlatDbCacheManager cacheManager;
 
@@ -237,6 +242,77 @@ class VersionedFlatDbCacheManagerTest {
 
     assertThat(cacheManager.getTrieNode(trieNodes(0, 1).getFirst().hash())).isEmpty();
     assertThat(cacheManager.getTrieNode(trieNodes(16, 1).getFirst().hash())).isPresent();
+  }
+
+  @Test
+  void committedWrites_areServedEvenWhenTheCacheTurnsThemAway() {
+    final List<Bytes> keys = IntStream.range(0, 50).mapToObj(i -> Bytes.of(i)).toList();
+    final Map<Bytes, Bytes> accounts = new HashMap<>();
+    keys.forEach(key -> accounts.put(key, Bytes.concatenate(key, key)));
+
+    // the account cache holds 100 entries, all of them read often
+    for (int i = 0; i < 100; i++) {
+      final Bytes hot = Bytes.of(1, i);
+      for (int read = 0; read < 3; read++) {
+        cacheManager.getFromCacheOrStorage(
+            ACCOUNT_INFO_STATE, hot, 0L, () -> Optional.of(Bytes.of(7)));
+      }
+    }
+    cacheManager.putCommittedWrites(Map.of(ACCOUNT_INFO_STATE, accounts), 1L);
+
+    assertThat(keys)
+        .allSatisfy(
+            key ->
+                assertThat(
+                        cacheManager.getFromCacheOrStorage(
+                            ACCOUNT_INFO_STATE, key, 1L, () -> Optional.of(STORED)))
+                    .contains(Bytes.concatenate(key, key)));
+  }
+
+  @Test
+  void committedWrites_areServedAsOfTheReadersVersion() {
+    final Bytes key = Bytes.of(1);
+    final Map<Bytes, Bytes> removal = new HashMap<>();
+    removal.put(key, null);
+    cacheManager.putCommittedWrites(Map.of(ACCOUNT_STORAGE_STORAGE, Map.of(key, Bytes.of(10))), 1L);
+    cacheManager.putCommittedWrites(Map.of(ACCOUNT_STORAGE_STORAGE, Map.of(key, Bytes.of(20))), 2L);
+    cacheManager.putCommittedWrites(Map.of(ACCOUNT_INFO_STATE, Map.of(key, Bytes.of(30))), 3L);
+    cacheManager.putCommittedWrites(Map.of(ACCOUNT_STORAGE_STORAGE, removal), 4L);
+
+    assertThat(storageAt(key, 1L)).contains(Bytes.of(10));
+    assertThat(storageAt(key, 2L)).contains(Bytes.of(20));
+    assertThat(storageAt(key, 3L)).contains(Bytes.of(20));
+    assertThat(storageAt(key, 4L)).isEmpty();
+    assertThat(
+            cacheManager.getMultipleFromCacheOrStorage(
+                ACCOUNT_STORAGE_STORAGE, List.of(key), 3L, keys -> List.of(Optional.of(STORED))))
+        .containsExactly(Optional.of(Bytes.of(20)));
+  }
+
+  @Test
+  void committedWrites_beforeASkippedVersionAreDropped() {
+    final Bytes key = Bytes.of(1);
+    cacheManager.putCommittedWrites(Map.of(ACCOUNT_STORAGE_STORAGE, Map.of(key, Bytes.of(10))), 1L);
+    // version 2 changed the key without handing over its writes
+    cacheManager.putInCache(ACCOUNT_STORAGE_STORAGE, key, Bytes.of(20), 2L);
+    cacheManager.putCommittedWrites(Map.of(ACCOUNT_STORAGE_STORAGE, Map.of()), 3L);
+
+    assertThat(storageAt(key, 3L)).contains(Bytes.of(20));
+  }
+
+  @Test
+  void committedWrites_areDroppedByAClear() {
+    final Bytes key = Bytes.of(1);
+    cacheManager.putCommittedWrites(Map.of(ACCOUNT_STORAGE_STORAGE, Map.of(key, Bytes.of(10))), 1L);
+
+    cacheManager.clear(ACCOUNT_STORAGE_STORAGE);
+
+    assertThat(storageAt(key, 1L)).contains(STORED);
+  }
+
+  private Optional<Bytes> storageAt(final Bytes key, final long version) {
+    return cacheManager.getFromCacheOrStorage(
+        ACCOUNT_STORAGE_STORAGE, key, version, () -> Optional.of(STORED));
   }
 
   private static List<TrieNode> trieNodes(final int first, final int count) {
