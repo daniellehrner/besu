@@ -20,8 +20,9 @@ import org.hyperledger.besu.crypto.SignatureAlgorithmFactory;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.ethereum.rlp.RLP;
-import org.hyperledger.besu.ethereum.trie.patricia.SimpleMerklePatriciaTrie;
+import org.hyperledger.besu.ethereum.trie.patricia.AscendingCollapsePatriciaTrie;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
 import java.util.stream.IntStream;
@@ -36,9 +37,7 @@ public class Util {
   // in parallel.
   private static final int MIN_ENTRIES_TO_HASH_IN_PARALLEL = 512;
 
-  // The keys are RLP-encoded indices that share their first nibbles, so the subtries split by
-  // index only from the third level on; four levels down they hold 256 entries each.
-  private static final int PARALLEL_HASH_DEPTH = 4;
+  private static final int ENTRIES_PER_SUBTREE = 256;
 
   /**
    * Converts a Signature to an Address, underlying math requires the hash of the data used to
@@ -103,7 +102,12 @@ public class Util {
   }
 
   /**
-   * Calculates the root of an MPT based on it's entries.
+   * Calculates the root of an MPT based on it's entries, which must not be empty.
+   *
+   * <p>The trie is built from its keys in ascending order, holding only the path still being
+   * filled, rather than by inserting each entry from the root. The keys are the RLP-encoded
+   * indices: 1 to 127 encode as a single byte, 0 as 0x80, and from 128 on they are length-prefixed
+   * and increase with the index.
    *
    * @param bytes list of the entries strictly ordered by index, starting at 0
    * @return the root hash of the MPT
@@ -112,15 +116,45 @@ public class Util {
     if (bytes.isEmpty()) {
       return Hash.EMPTY_TRIE_HASH;
     }
-    final SimpleMerklePatriciaTrie<Bytes, Bytes> trie = new SimpleMerklePatriciaTrie<>(b -> b);
-    IntStream.range(0, bytes.size())
-        .forEach(
-            i -> {
-              trie.put(indexKey(i), bytes.get(i));
-            });
-    return Hash.wrap(
-        bytes.size() >= MIN_ENTRIES_TO_HASH_IN_PARALLEL
-            ? trie.getRootHashInParallel(PARALLEL_HASH_DEPTH)
-            : trie.getRootHash());
+    final int size = bytes.size();
+    final AscendingCollapsePatriciaTrie trie = new AscendingCollapsePatriciaTrie();
+    for (int i = 1; i < Math.min(size, 0x80); i++) {
+      trie.insert(indexKey(i), bytes.get(i));
+    }
+    trie.insert(indexKey(0), bytes.get(0));
+    if (size < MIN_ENTRIES_TO_HASH_IN_PARALLEL) {
+      for (int i = 0x80; i < size; i++) {
+        trie.insert(indexKey(i), bytes.get(i));
+      }
+    } else {
+      for (int i = 0x80; i < Math.min(size, ENTRIES_PER_SUBTREE); i++) {
+        trie.insert(indexKey(i), bytes.get(i));
+      }
+      // From 256 on, the keys of each run of 256 indices differ only in their last byte, so each
+      // run is a complete subtree that can be built and hashed on its own.
+      IntStream.iterate(
+              ENTRIES_PER_SUBTREE, start -> start < size, start -> start + ENTRIES_PER_SUBTREE)
+          .boxed()
+          .toList()
+          .parallelStream()
+          .map(
+              start ->
+                  prepareSubtree(trie, bytes, start, Math.min(size, start + ENTRIES_PER_SUBTREE)))
+          .toList()
+          .forEach(trie::insert);
+    }
+    return Hash.wrap(trie.rootHash());
+  }
+
+  private static AscendingCollapsePatriciaTrie.Subtree prepareSubtree(
+      final AscendingCollapsePatriciaTrie trie,
+      final List<Bytes> bytes,
+      final int start,
+      final int end) {
+    final List<Bytes> keys = new ArrayList<>(end - start);
+    for (int i = start; i < end; i++) {
+      keys.add(indexKey(i));
+    }
+    return trie.prepare(keys, bytes.subList(start, end));
   }
 }
