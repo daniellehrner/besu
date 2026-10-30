@@ -31,7 +31,9 @@ import org.hyperledger.besu.plugin.services.exception.StorageException;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -63,11 +65,11 @@ class PendingStateChangesTest {
 
   @Test
   void importsEveryChangeOnceWithEachAccountsChangesInTransactionOrder() {
-    final List<List<PartialBlockAccessView.AccountChanges>> imported =
+    final List<Map<Address, List<PartialBlockAccessView.AccountChanges>>> imported =
         Collections.synchronizedList(new ArrayList<>());
     doAnswer(
             invocation -> {
-              imported.add(new ArrayList<>(invocation.getArgument(0)));
+              imported.add(new HashMap<>(invocation.getArgument(0)));
               return null;
             })
         .when(accumulator)
@@ -79,16 +81,15 @@ class PendingStateChangesTest {
     }
     pending.importInto(accumulator, true, LOOKUP, executor);
 
-    assertThat(imported.stream().mapToInt(List::size).sum()).isEqualTo(10 * ACCOUNTS.size());
+    assertThat(imported.stream().flatMap(group -> group.values().stream()).mapToInt(List::size))
+        .containsOnly(10)
+        .hasSize(ACCOUNTS.size());
     for (final Address account : ACCOUNTS) {
-      final List<List<PartialBlockAccessView.AccountChanges>> groupsWithAccount =
-          imported.stream()
-              .filter(group -> group.stream().anyMatch(c -> c.getAddress().equals(account)))
-              .toList();
+      final List<Map<Address, List<PartialBlockAccessView.AccountChanges>>> groupsWithAccount =
+          imported.stream().filter(group -> group.containsKey(account)).toList();
       assertThat(groupsWithAccount).hasSize(1);
       assertThat(
-              groupsWithAccount.getFirst().stream()
-                  .filter(c -> c.getAddress().equals(account))
+              groupsWithAccount.getFirst().get(account).stream()
                   .map(c -> c.getPostBalance().orElseThrow()))
           .containsExactly(
               Wei.of(1),

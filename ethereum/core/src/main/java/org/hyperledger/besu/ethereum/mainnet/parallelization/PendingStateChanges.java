@@ -14,12 +14,15 @@
  */
 package org.hyperledger.besu.ethereum.mainnet.parallelization;
 
+import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListAccountLookup;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.PartialBlockAccessView;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
@@ -34,12 +37,14 @@ import java.util.concurrent.Executor;
  */
 final class PendingStateChanges {
 
-  private final List<List<PartialBlockAccessView.AccountChanges>> groups;
+  // Each group holds the changes of some accounts, by account. They are grouped as the
+  // transactions finish, on the thread that waits for them, rather than when they are imported.
+  private final List<Map<Address, List<PartialBlockAccessView.AccountChanges>>> groups;
 
   PendingStateChanges(final int groupCount) {
     groups = new ArrayList<>(groupCount);
     for (int i = 0; i < groupCount; i++) {
-      groups.add(new ArrayList<>());
+      groups.add(new HashMap<>());
     }
   }
 
@@ -47,8 +52,10 @@ final class PendingStateChanges {
   void add(final PartialBlockAccessView partialView) {
     for (final PartialBlockAccessView.AccountChanges accountChanges :
         partialView.accountChanges()) {
+      final Address address = accountChanges.getAddress();
       groups
-          .get(Math.floorMod(accountChanges.getAddress().hashCode(), groups.size()))
+          .get(Math.floorMod(address.hashCode(), groups.size()))
+          .computeIfAbsent(address, __ -> new ArrayList<>(1))
           .add(accountChanges);
     }
   }
@@ -64,7 +71,7 @@ final class PendingStateChanges {
       final BlockAccessListAccountLookup accountLookup,
       final Executor executor) {
     final List<CompletableFuture<Void>> imports = new ArrayList<>(groups.size());
-    for (final List<PartialBlockAccessView.AccountChanges> group : groups) {
+    for (final Map<Address, List<PartialBlockAccessView.AccountChanges>> group : groups) {
       if (!group.isEmpty()) {
         imports.add(
             CompletableFuture.runAsync(
@@ -82,7 +89,7 @@ final class PendingStateChanges {
       }
       throw e;
     } finally {
-      groups.forEach(List::clear);
+      groups.forEach(Map::clear);
     }
   }
 }

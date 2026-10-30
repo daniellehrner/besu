@@ -52,9 +52,12 @@ import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
@@ -207,8 +210,10 @@ class BonsaiWorldStateUpdateAccumulatorTest {
     try (BonsaiWorldState worldState = newEmptyWorldState()) {
       final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
       accumulator.importAndCommitAccountChanges(
-          partialView(1, view -> view.getOrCreateAccountBuilder(ABSENT).withPostBalance(Wei.of(5)))
-              .accountChanges(),
+          byAccount(
+              partialView(
+                      1, view -> view.getOrCreateAccountBuilder(ABSENT).withPostBalance(Wei.of(5)))
+                  .accountChanges()),
           true,
           lookup);
 
@@ -241,11 +246,22 @@ class BonsaiWorldStateUpdateAccumulatorTest {
     try (BonsaiWorldState worldState = newEmptyWorldState()) {
       final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
       accumulator.importAndCommitAccountChanges(
-          transactions.stream().flatMap(t -> t.accountChanges().stream()).toList(),
+          byAccount(transactions.stream().flatMap(t -> t.accountChanges().stream()).toList()),
           true,
           BlockAccessListAccountLookup.of(new BlockAccessList(List.of())));
       return trieLog(accumulator);
     }
+  }
+
+  /** The changes grouped by account, each account's in the order given. */
+  private static Map<Address, List<PartialBlockAccessView.AccountChanges>> byAccount(
+      final List<PartialBlockAccessView.AccountChanges> changes) {
+    return changes.stream()
+        .collect(
+            Collectors.groupingBy(
+                PartialBlockAccessView.AccountChanges::getAddress,
+                LinkedHashMap::new,
+                Collectors.toList()));
   }
 
   private static TrieLogLayer trieLog(final BonsaiWorldStateUpdateAccumulator accumulator) {

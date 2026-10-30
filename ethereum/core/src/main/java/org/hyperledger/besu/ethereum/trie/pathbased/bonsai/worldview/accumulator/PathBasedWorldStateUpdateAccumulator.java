@@ -42,7 +42,6 @@ import org.hyperledger.besu.plugin.services.trielogs.TrieLogAccumulator;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -178,19 +177,14 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
    * <p>The changes of an account must be in transaction order. Calls for disjoint sets of accounts
    * may run concurrently, so a block's changes can be imported by several threads.
    *
-   * @param accountChanges changes to accounts, each account's in transaction order
+   * @param changesByAccount the changes to each account, in transaction order
    * @param clearEmptyAccounts when true, delete accounts that become empty after applying writes
    * @param accountLookup the lookup of the block's access list
    */
   public void importAndCommitAccountChanges(
-      final List<PartialBlockAccessView.AccountChanges> accountChanges,
+      final Map<Address, List<PartialBlockAccessView.AccountChanges>> changesByAccount,
       final boolean clearEmptyAccounts,
       final BlockAccessListAccountLookup accountLookup) {
-    final Map<Address, List<PartialBlockAccessView.AccountChanges>> changesByAccount =
-        new HashMap<>();
-    for (final PartialBlockAccessView.AccountChanges changes : accountChanges) {
-      changesByAccount.computeIfAbsent(changes.getAddress(), __ -> new ArrayList<>(1)).add(changes);
-    }
     changesByAccount.forEach(
         (address, changes) -> {
           loadAccount(
