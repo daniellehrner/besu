@@ -180,35 +180,54 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
   public void importAndCommitAccountChanges(
       final List<PartialBlockAccessView.AccountChanges> accountChanges,
       final boolean clearEmptyAccounts) {
-    final Map<Address, List<PartialBlockAccessView.AccountChanges>> changesByAccount =
-        new HashMap<>();
+    final Map<Address, AccountChangesToImport> changesByAccount = new HashMap<>();
     for (final PartialBlockAccessView.AccountChanges changes : accountChanges) {
-      changesByAccount.computeIfAbsent(changes.getAddress(), __ -> new ArrayList<>(1)).add(changes);
+      changesByAccount
+          .computeIfAbsent(changes.getAddress(), __ -> new AccountChangesToImport())
+          .add(changes, clearEmptyAccounts);
     }
     changesByAccount.forEach(
-        (address, changes) -> {
-          if (changes.stream().anyMatch(c -> mayEmptyAccount(c, clearEmptyAccounts))) {
-            for (final PartialBlockAccessView.AccountChanges change : changes) {
+        (address, toImport) -> {
+          if (toImport.mayEmptyAccount) {
+            for (final PartialBlockAccessView.AccountChanges change : toImport.changes) {
               if (importAccountChanges(change, clearEmptyAccounts)) {
                 commitAccount(address);
               }
             }
           } else {
-            importAccountChanges(merge(address, changes), clearEmptyAccounts);
+            importAccountChanges(merge(address, toImport.changes), clearEmptyAccounts);
           }
           commitAccount(address);
         });
     this.isAccumulatorStateChanged = true;
   }
 
+  /** The changes of one account to import, in transaction order. */
+  private static final class AccountChangesToImport {
+    private final List<PartialBlockAccessView.AccountChanges> changes = new ArrayList<>(1);
+    private boolean mayEmptyAccount;
+
+    void add(
+        final PartialBlockAccessView.AccountChanges accountChanges,
+        final boolean clearEmptyAccounts) {
+      changes.add(accountChanges);
+      mayEmptyAccount |= mayEmptyAccount(accountChanges, clearEmptyAccounts);
+    }
+  }
+
   /** Whether importing the changes checks if they left the account empty, to delete it. */
   private static boolean mayEmptyAccount(
       final PartialBlockAccessView.AccountChanges accountChanges,
       final boolean clearEmptyAccounts) {
-    return clearEmptyAccounts
-        && (accountChanges.getPostBalance().map(Wei::isZero).orElse(false)
-            || accountChanges.getNonceChange().map(nonce -> nonce == 0L).orElse(false)
-            || accountChanges.getNewCode().map(Bytes::isEmpty).orElse(false));
+    if (!clearEmptyAccounts) {
+      return false;
+    }
+    final Optional<Wei> postBalance = accountChanges.getPostBalance();
+    final Optional<Long> nonce = accountChanges.getNonceChange();
+    final Optional<Bytes> code = accountChanges.getNewCode();
+    return (postBalance.isPresent() && postBalance.get().isZero())
+        || (nonce.isPresent() && nonce.get() == 0L)
+        || (code.isPresent() && code.get().isEmpty());
   }
 
   /**
