@@ -167,12 +167,17 @@ public class BytesValueRLPInput implements RLPInput {
   private void prepareCurrentItem() {
     // Sets the kind of the item, the offset at which his payload starts and the size of this
     // payload.
+    // Computed without RLPDecodingHelpers.rlpElementMetadata: every item read goes through here,
+    // and the object it returns is allocated whenever the compiler does not inline it.
     try {
-      final RLPDecodingHelpers.RLPElementMetadata elementMetadata =
-          RLPDecodingHelpers.rlpElementMetadata(byteGetter, size, currentItem);
-      currentKind = elementMetadata.kind;
-      currentPayloadOffset = elementMetadata.payloadStart;
-      currentPayloadSize = elementMetadata.payloadSize;
+      final int prefix = RLPDecodingHelpers.prefix(byteGetter, currentItem);
+      final RLPDecodingHelpers.Kind kind = RLPDecodingHelpers.Kind.of(prefix);
+      final long payloadStart = RLPDecodingHelpers.payloadStart(kind, prefix, currentItem);
+      final int payloadSize =
+          RLPDecodingHelpers.payloadSize(byteGetter, size, kind, prefix, currentItem);
+      currentKind = kind;
+      currentPayloadOffset = payloadStart;
+      currentPayloadSize = payloadSize;
       currentRlpSize = Math.toIntExact(currentPayloadOffset - currentItem) + currentPayloadSize;
     } catch (final RLPException exception) {
       final String message =
