@@ -38,10 +38,13 @@ import org.hyperledger.besu.evm.worldstate.UpdateTrackingAccount;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLogAccumulator;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -155,64 +158,134 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
       final PartialBlockAccessView partialView, final boolean clearEmptyAccounts) {
     for (final PartialBlockAccessView.AccountChanges accountChanges :
         partialView.accountChanges()) {
-      final Address address = accountChanges.getAddress();
-      final boolean hasHeaderChange =
-          accountChanges.getPostBalance().isPresent()
-              || accountChanges.getNonceChange().isPresent()
-              || accountChanges.getNewCode().isPresent();
-      final boolean hasStorageChange = !accountChanges.getStorageChanges().isEmpty();
-
-      if (!hasHeaderChange && !hasStorageChange) {
-        continue;
-      }
-
-      MutableAccount accountValue = getOrCreate(address);
-
-      boolean shouldCheckForEmptyAccount = false;
-
-      if (accountChanges.getPostBalance().isPresent()) {
-        final Wei balance = accountChanges.getPostBalance().get();
-        accountValue.setBalance(balance);
-        shouldCheckForEmptyAccount = clearEmptyAccounts && balance.isZero();
-      }
-
-      if (accountChanges.getNonceChange().isPresent()) {
-        final long nonce = accountChanges.getNonceChange().get();
-        accountValue.setNonce(nonce);
-        shouldCheckForEmptyAccount |= clearEmptyAccounts && nonce == 0L;
-      }
-
-      if (accountChanges.getNewCode().isPresent()) {
-        final Bytes code = accountChanges.getNewCode().get();
-        accountValue.setCode(code);
-        shouldCheckForEmptyAccount |= clearEmptyAccounts && code.isEmpty();
-      }
-
-      if (hasStorageChange) {
-        final StorageConsumingMap<StorageSlotKey, BonsaiValue<UInt256>> pendingStorageUpdates =
-            storageToUpdate.computeIfAbsent(address, this::newStorageMap);
-        for (final PartialBlockAccessView.SlotChange slotChange :
-            accountChanges.getStorageChanges()) {
-          final StorageSlotKey slotKey = slotChange.slot();
-          final UInt256 prior =
-              slotChange.previousValue() != null ? slotChange.previousValue() : UInt256.ZERO;
-          final UInt256 updated =
-              slotChange.newValue() != null ? slotChange.newValue() : UInt256.ZERO;
-
-          final BonsaiValue<UInt256> pendingValue = pendingStorageUpdates.get(slotKey);
-          if (pendingValue == null) {
-            pendingStorageUpdates.put(slotKey, new BonsaiValue<>(prior, updated));
-          } else {
-            pendingStorageUpdates.update(slotKey, pendingValue, updated);
-          }
-        }
-      }
-
-      if (shouldCheckForEmptyAccount && accountValue.isEmpty()) {
-        deleteAccount(address);
-      }
+      importAccountChanges(accountChanges, clearEmptyAccounts);
     }
     this.isAccumulatorStateChanged = true;
+  }
+
+  /**
+   * Imports the writes that a block's transactions made to some accounts and commits them, with the
+   * result of importing each transaction's {@link PartialBlockAccessView} and committing after it.
+   * Nothing reads an account between its changes, so an account's changes are merged into one and
+   * committed once, unless one of them may empty the account: those changes are imported one by one
+   * and a change that deletes the account is committed right away, so that recreating it later in
+   * the block keeps its storage cleared.
+   *
+   * <p>The changes of an account must be in transaction order. Calls for disjoint sets of accounts
+   * may run concurrently, so a block's changes can be imported by several threads.
+   *
+   * @param accountChanges changes to accounts, each account's in transaction order
+   * @param clearEmptyAccounts when true, delete accounts that become empty after applying writes
+   */
+  public void importAndCommitAccountChanges(
+      final List<PartialBlockAccessView.AccountChanges> accountChanges,
+      final boolean clearEmptyAccounts) {
+    final Map<Address, List<PartialBlockAccessView.AccountChanges>> changesByAccount =
+        new HashMap<>();
+    for (final PartialBlockAccessView.AccountChanges changes : accountChanges) {
+      changesByAccount.computeIfAbsent(changes.getAddress(), __ -> new ArrayList<>(1)).add(changes);
+    }
+    changesByAccount.forEach(
+        (address, changes) -> {
+          if (changes.stream().anyMatch(c -> mayEmptyAccount(c, clearEmptyAccounts))) {
+            for (final PartialBlockAccessView.AccountChanges change : changes) {
+              if (importAccountChanges(change, clearEmptyAccounts)) {
+                commitAccount(address);
+              }
+            }
+          } else {
+            importAccountChanges(merge(address, changes), clearEmptyAccounts);
+          }
+          commitAccount(address);
+        });
+    this.isAccumulatorStateChanged = true;
+  }
+
+  /** Whether importing the changes checks if they left the account empty, to delete it. */
+  private static boolean mayEmptyAccount(
+      final PartialBlockAccessView.AccountChanges accountChanges,
+      final boolean clearEmptyAccounts) {
+    return clearEmptyAccounts
+        && (accountChanges.getPostBalance().map(Wei::isZero).orElse(false)
+            || accountChanges.getNonceChange().map(nonce -> nonce == 0L).orElse(false)
+            || accountChanges.getNewCode().map(Bytes::isEmpty).orElse(false));
+  }
+
+  /**
+   * The changes of one account as one: its last balance, nonce and code, and all its slot changes
+   * in order, which importing merges into the first prior and the last value of each slot.
+   */
+  private static PartialBlockAccessView.AccountChanges merge(
+      final Address address, final List<PartialBlockAccessView.AccountChanges> changes) {
+    if (changes.size() == 1) {
+      return changes.getFirst();
+    }
+    Optional<Wei> postBalance = Optional.empty();
+    Optional<Long> nonceChange = Optional.empty();
+    Optional<Bytes> newCode = Optional.empty();
+    final List<PartialBlockAccessView.SlotChange> storageChanges = new ArrayList<>();
+    for (final PartialBlockAccessView.AccountChanges change : changes) {
+      if (change.getPostBalance().isPresent()) {
+        postBalance = change.getPostBalance();
+      }
+      if (change.getNonceChange().isPresent()) {
+        nonceChange = change.getNonceChange();
+      }
+      if (change.getNewCode().isPresent()) {
+        newCode = change.getNewCode();
+      }
+      storageChanges.addAll(change.getStorageChanges());
+    }
+    return new PartialBlockAccessView.AccountChanges(
+        address, postBalance, nonceChange, newCode, List.of(), storageChanges);
+  }
+
+  /** Imports one account's writes, returning whether they deleted the account. */
+  private boolean importAccountChanges(
+      final PartialBlockAccessView.AccountChanges accountChanges,
+      final boolean clearEmptyAccounts) {
+    final Address address = accountChanges.getAddress();
+    final boolean hasHeaderChange =
+        accountChanges.getPostBalance().isPresent()
+            || accountChanges.getNonceChange().isPresent()
+            || accountChanges.getNewCode().isPresent();
+    final boolean hasStorageChange = !accountChanges.getStorageChanges().isEmpty();
+
+    if (!hasHeaderChange && !hasStorageChange) {
+      return false;
+    }
+
+    MutableAccount accountValue = getOrCreate(address);
+
+    accountChanges.getPostBalance().ifPresent(accountValue::setBalance);
+    accountChanges.getNonceChange().ifPresent(accountValue::setNonce);
+    accountChanges.getNewCode().ifPresent(accountValue::setCode);
+
+    if (hasStorageChange) {
+      final StorageConsumingMap<StorageSlotKey, BonsaiValue<UInt256>> pendingStorageUpdates =
+          storageToUpdate.computeIfAbsent(address, this::newStorageMap);
+      for (final PartialBlockAccessView.SlotChange slotChange :
+          accountChanges.getStorageChanges()) {
+        final StorageSlotKey slotKey = slotChange.slot();
+        final UInt256 prior =
+            slotChange.previousValue() != null ? slotChange.previousValue() : UInt256.ZERO;
+        final UInt256 updated =
+            slotChange.newValue() != null ? slotChange.newValue() : UInt256.ZERO;
+
+        final BonsaiValue<UInt256> pendingValue = pendingStorageUpdates.get(slotKey);
+        if (pendingValue == null) {
+          pendingStorageUpdates.put(slotKey, new BonsaiValue<>(prior, updated));
+        } else {
+          pendingStorageUpdates.update(slotKey, pendingValue, updated);
+        }
+      }
+    }
+
+    if (mayEmptyAccount(accountChanges, clearEmptyAccounts) && accountValue.isEmpty()) {
+      deleteAccount(address);
+      return true;
+    }
+    return false;
   }
 
   private enum ImportMode {
@@ -450,64 +523,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
     this.isAccumulatorStateChanged = true;
 
     for (final Address deletedAddress : getDeletedAccounts()) {
-      final BonsaiValue<ACCOUNT> accountValue =
-          accountsToUpdate.computeIfAbsent(
-              deletedAddress,
-              __ -> loadAccountFromParent(deletedAddress, new BonsaiValue<>(null, null, true)));
-      storageToClear.add(deletedAddress);
-      final BonsaiValue<Bytes> codeValue = codeToUpdate.get(deletedAddress);
-      if (codeValue != null) {
-        codeValue.setUpdated(null).setCleared();
-      } else {
-        wrappedWorldView()
-            .getCode(
-                deletedAddress,
-                Optional.ofNullable(accountValue)
-                    .map(BonsaiValue::getPrior)
-                    .map(BonsaiAccount::getCodeHash)
-                    .orElse(Hash.EMPTY))
-            .map(Code::getBytes)
-            .ifPresent(
-                deletedCode ->
-                    codeToUpdate.put(deletedAddress, new BonsaiValue<>(deletedCode, null, true)));
-      }
-
-      // mark all updated storage as to be cleared
-      final StorageConsumingMap<StorageSlotKey, BonsaiValue<UInt256>> deletedStorageUpdates =
-          storageToUpdate.computeIfAbsent(deletedAddress, this::newStorageMap);
-      final Iterator<Map.Entry<StorageSlotKey, BonsaiValue<UInt256>>> iter =
-          deletedStorageUpdates.entrySet().iterator();
-      while (iter.hasNext()) {
-        final Map.Entry<StorageSlotKey, BonsaiValue<UInt256>> updateEntry = iter.next();
-        final BonsaiValue<UInt256> updatedSlot = updateEntry.getValue();
-        if (updatedSlot.getPrior() == null || updatedSlot.getPrior().isZero()) {
-          iter.remove();
-        } else {
-          deletedStorageUpdates.update(updateEntry.getKey(), updatedSlot, null);
-          updatedSlot.setCleared();
-        }
-      }
-
-      final ACCOUNT originalValue = accountValue.getPrior();
-      if (originalValue != null) {
-        // Enumerate and delete addresses not updated
-        wrappedWorldView()
-            .getAllAccountStorage(deletedAddress, originalValue.getStorageRoot())
-            .forEach(
-                (keyHash, entryValue) -> {
-                  final StorageSlotKey storageSlotKey =
-                      new StorageSlotKey(Hash.wrap(keyHash), Optional.empty());
-                  if (!deletedStorageUpdates.containsKey(storageSlotKey)) {
-                    final UInt256 value = UInt256.fromBytes(RLP.decodeOne(entryValue));
-                    deletedStorageUpdates.put(storageSlotKey, new BonsaiValue<>(value, null, true));
-                  }
-                });
-      }
-      if (deletedStorageUpdates.isEmpty()) {
-        storageToUpdate.remove(deletedAddress);
-      }
-      accountValue.setUpdated(null);
-      accountsToUpdate.preloadIfChanged(deletedAddress);
+      commitDeletedAccount(deletedAddress);
     }
 
     // The block updater is committed after every transaction, usually with a handful of accounts:
@@ -530,6 +546,81 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
     if (failure.get() != null) {
       throw failure.get();
     }
+  }
+
+  /**
+   * Commits one account as {@link #commit()} does and stops tracking it as {@link
+   * #markTransactionBoundary()} does.
+   */
+  private void commitAccount(final Address address) {
+    if (getDeletedAccounts().remove(address)) {
+      commitDeletedAccount(address);
+    }
+    final UpdateTrackingAccount<ACCOUNT> tracked = updatedAccounts.remove(address);
+    if (tracked != null) {
+      commitUpdatedAccount(tracked);
+    }
+  }
+
+  private void commitDeletedAccount(final Address deletedAddress) {
+    final BonsaiValue<ACCOUNT> accountValue =
+        accountsToUpdate.computeIfAbsent(
+            deletedAddress,
+            __ -> loadAccountFromParent(deletedAddress, new BonsaiValue<>(null, null, true)));
+    storageToClear.add(deletedAddress);
+    final BonsaiValue<Bytes> codeValue = codeToUpdate.get(deletedAddress);
+    if (codeValue != null) {
+      codeValue.setUpdated(null).setCleared();
+    } else {
+      wrappedWorldView()
+          .getCode(
+              deletedAddress,
+              Optional.ofNullable(accountValue)
+                  .map(BonsaiValue::getPrior)
+                  .map(BonsaiAccount::getCodeHash)
+                  .orElse(Hash.EMPTY))
+          .map(Code::getBytes)
+          .ifPresent(
+              deletedCode ->
+                  codeToUpdate.put(deletedAddress, new BonsaiValue<>(deletedCode, null, true)));
+    }
+
+    // mark all updated storage as to be cleared
+    final StorageConsumingMap<StorageSlotKey, BonsaiValue<UInt256>> deletedStorageUpdates =
+        storageToUpdate.computeIfAbsent(deletedAddress, this::newStorageMap);
+    final Iterator<Map.Entry<StorageSlotKey, BonsaiValue<UInt256>>> iter =
+        deletedStorageUpdates.entrySet().iterator();
+    while (iter.hasNext()) {
+      final Map.Entry<StorageSlotKey, BonsaiValue<UInt256>> updateEntry = iter.next();
+      final BonsaiValue<UInt256> updatedSlot = updateEntry.getValue();
+      if (updatedSlot.getPrior() == null || updatedSlot.getPrior().isZero()) {
+        iter.remove();
+      } else {
+        deletedStorageUpdates.update(updateEntry.getKey(), updatedSlot, null);
+        updatedSlot.setCleared();
+      }
+    }
+
+    final ACCOUNT originalValue = accountValue.getPrior();
+    if (originalValue != null) {
+      // Enumerate and delete addresses not updated
+      wrappedWorldView()
+          .getAllAccountStorage(deletedAddress, originalValue.getStorageRoot())
+          .forEach(
+              (keyHash, entryValue) -> {
+                final StorageSlotKey storageSlotKey =
+                    new StorageSlotKey(Hash.wrap(keyHash), Optional.empty());
+                if (!deletedStorageUpdates.containsKey(storageSlotKey)) {
+                  final UInt256 value = UInt256.fromBytes(RLP.decodeOne(entryValue));
+                  deletedStorageUpdates.put(storageSlotKey, new BonsaiValue<>(value, null, true));
+                }
+              });
+    }
+    if (deletedStorageUpdates.isEmpty()) {
+      storageToUpdate.remove(deletedAddress);
+    }
+    accountValue.setUpdated(null);
+    accountsToUpdate.preloadIfChanged(deletedAddress);
   }
 
   private void commitUpdatedAccount(final UpdateTrackingAccount<ACCOUNT> tracked) {

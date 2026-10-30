@@ -354,6 +354,7 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
           nbParallelTx++;
         }
       }
+      completeParallelExecution(parallelProcessor, worldState);
 
       final var optionalHeaderBlobGasUsed = blockHeader.getBlobGasUsed();
       if (optionalHeaderBlobGasUsed.isPresent()) {
@@ -583,6 +584,15 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
       final Optional<BlockHeader> maybeParentHeader) {
     return Optional.empty();
   }
+
+  /**
+   * Called once the block's transactions are processed, before the state they leave is read. A
+   * {@code parallelProcessor} that imports its results later does so here. Does nothing by default.
+   */
+  @SuppressWarnings("unused") // the parameters are used by subclasses
+  protected void completeParallelExecution(
+      final Optional<ParallelBlockTransactionProcessor> parallelProcessor,
+      final MutableWorldState worldState) {}
 
   /**
    * Processes a transaction of the block, by default sequentially. Subclasses may instead return

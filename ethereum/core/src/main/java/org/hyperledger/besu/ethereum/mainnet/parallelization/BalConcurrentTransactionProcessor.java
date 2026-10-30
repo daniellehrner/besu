@@ -60,6 +60,10 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
   private final BlockAccessList blockAccessList;
   private final BlockAccessListAccountLookup blockAccessListAccountLookup;
   private final Optional<BalPrefetcher> maybePrefetcher;
+  // Two groups per thread of the pool, so that a group with a busy account does not hold the
+  // import back much.
+  private final PendingStateChanges pendingStateChanges =
+      new PendingStateChanges(2 * Runtime.getRuntime().availableProcessors());
 
   public BalConcurrentTransactionProcessor(
       final MainnetTransactionProcessor transactionProcessor,
@@ -230,10 +234,6 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
         return Optional.empty();
       }
 
-      final PathBasedWorldState pathWs = (PathBasedWorldState) worldState;
-      final PathBasedWorldStateUpdateAccumulator blockAccumulator =
-          (PathBasedWorldStateUpdateAccumulator) pathWs.updater();
-
       final TransactionProcessingResult result = ctx.transactionProcessingResult();
       final Optional<PartialBlockAccessView> maybePartialBlockAccessView =
           result.getPartialBlockAccessView();
@@ -242,9 +242,7 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
         return Optional.empty();
       }
 
-      // Not caught: falling back would run the transaction again on top of a partial import.
-      blockAccumulator.importStateChangesFromPartialView(
-          maybePartialBlockAccessView.get(), transactionProcessor.getClearEmptyAccounts());
+      pendingStateChanges.add(maybePartialBlockAccessView.get());
 
       confirmedParallelizedTransactionCounter.ifPresent(Counter::inc);
       result.setIsProcessedInParallel(Optional.of(Boolean.TRUE));
@@ -254,5 +252,18 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
 
     LOG.error("No future found for transaction {}.", txIndex);
     return Optional.empty();
+  }
+
+  /**
+   * Imports the state changes of the results returned so far into the block's world state. Not
+   * caught by callers: running a transaction again on top of a partial import would apply it twice.
+   */
+  @Override
+  public void importPendingStateChanges(
+      final MutableWorldState worldState, final Executor executor) {
+    pendingStateChanges.importInto(
+        (PathBasedWorldStateUpdateAccumulator<?>) ((PathBasedWorldState) worldState).updater(),
+        transactionProcessor.getClearEmptyAccounts(),
+        executor);
   }
 }

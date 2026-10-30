@@ -219,17 +219,31 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
                     confirmedParallelizedTransactionCounter,
                     conflictingButCachedTransactionCounter))
         // No usable parallel result (a conflict, or nothing ran in parallel): process it
-        // sequentially.
+        // sequentially, on the state the transactions before it left.
         .orElseGet(
-            () ->
-                processTransactionSequentially(
-                    blockProcessingContext,
-                    transactionUpdater,
-                    blobGasPrice,
-                    miningBeneficiary,
-                    transaction,
-                    blockHashLookup,
-                    accessLocationTracker));
+            () -> {
+              parallelProcessor.ifPresent(
+                  processor ->
+                      processor.importPendingStateChanges(
+                          blockProcessingContext.getWorldState(), Runnable::run));
+              return processTransactionSequentially(
+                  blockProcessingContext,
+                  transactionUpdater,
+                  blobGasPrice,
+                  miningBeneficiary,
+                  transaction,
+                  blockHashLookup,
+                  accessLocationTracker);
+            });
+  }
+
+  @Override
+  protected void completeParallelExecution(
+      final Optional<ParallelBlockTransactionProcessor> parallelProcessor,
+      final MutableWorldState worldState) {
+    // the workers are done with the transactions, so the import gets their threads
+    parallelProcessor.ifPresent(
+        processor -> processor.importPendingStateChanges(worldState, executor));
   }
 
   public static class ParallelBlockProcessorBuilder

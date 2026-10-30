@@ -127,6 +127,17 @@ public abstract class ParallelBlockTransactionProcessor {
       Optional<BlockAccessListBuilder> blockAccessListBuilder,
       Optional<BlockHeader> maybeParentHeader);
 
+  /**
+   * Imports into the block's world state the state changes of results returned by {@link
+   * #getProcessingResult} but not imported yet, before anything else reads or changes that state.
+   * Nothing is pending by default: the results are imported as they are returned.
+   *
+   * @param worldState the block's world state
+   * @param executor runs the import, possibly in several tasks
+   */
+  public void importPendingStateChanges(
+      final MutableWorldState worldState, final Executor executor) {}
+
   public abstract Optional<TransactionProcessingResult> getProcessingResult(
       MutableWorldState worldState,
       Address miningBeneficiary,

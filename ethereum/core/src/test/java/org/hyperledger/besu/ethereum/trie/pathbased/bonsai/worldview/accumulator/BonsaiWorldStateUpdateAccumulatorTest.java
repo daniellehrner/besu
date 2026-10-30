@@ -49,6 +49,9 @@ import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 
+import java.util.List;
+import java.util.function.Consumer;
+
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.Test;
@@ -98,6 +101,95 @@ class BonsaiWorldStateUpdateAccumulatorTest {
       assertThat(trieLogSlot.getPrior()).isEqualTo(V0);
       assertThat(trieLogSlot.getUpdated()).isEqualTo(V2);
     }
+  }
+
+  @Test
+  void importAndCommitAccountChanges_leavesTheStateOfImportingEachTransactionInTurn() {
+    final List<PartialBlockAccessView> transactions =
+        List.of(
+            partialView(
+                1,
+                view -> {
+                  view.getOrCreateAccountBuilder(ACCOUNT)
+                      .withPostBalance(Wei.of(5))
+                      .withNonceChange(1L)
+                      .addStorageChange(SLOT, V0, V1);
+                  view.getOrCreateAccountBuilder(CREATED).withPostBalance(Wei.of(10));
+                }),
+            partialView(
+                2,
+                view -> {
+                  view.getOrCreateAccountBuilder(ACCOUNT)
+                      .withPostBalance(Wei.of(7))
+                      .addStorageChange(SLOT, V1, V2);
+                  view.getOrCreateAccountBuilder(CREATED).withNonceChange(3L);
+                }),
+            partialView(
+                3, view -> view.getOrCreateAccountBuilder(ABSENT).withPostBalance(Wei.of(4))));
+
+    assertThat(trieLogOfImportingTogether(transactions).dump())
+        .isEqualTo(trieLogOfImportingOneByOne(transactions).dump());
+  }
+
+  @Test
+  void importAndCommitAccountChanges_keepsTheStorageOfAnAccountDeletedAndCreatedAgainCleared() {
+    // the account has neither nonce nor code, so a zero balance empties it and deletes its slot
+    final List<PartialBlockAccessView> transactions =
+        List.of(
+            partialView(
+                1, view -> view.getOrCreateAccountBuilder(ACCOUNT).withPostBalance(Wei.ZERO)),
+            partialView(
+                2, view -> view.getOrCreateAccountBuilder(ACCOUNT).withPostBalance(Wei.of(3))));
+
+    final TrieLogLayer trieLog = trieLogOfImportingTogether(transactions);
+
+    assertThat(trieLog.dump()).isEqualTo(trieLogOfImportingOneByOne(transactions).dump());
+    assertThat(trieLog.getStorageChanges(ACCOUNT).get(SLOT).getUpdated()).isNull();
+    assertThat(trieLog.getAccountChanges().get(ACCOUNT).getUpdated().getBalance())
+        .isEqualTo(Wei.of(3));
+  }
+
+  /**
+   * Imports and commits the transactions one at a time, as the block's thread does. Trie logs are
+   * compared by their dump: their accounts compare by identity.
+   */
+  private static TrieLogLayer trieLogOfImportingOneByOne(
+      final List<PartialBlockAccessView> transactions) {
+    try (BonsaiWorldState worldState = newEmptyWorldState()) {
+      final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
+      for (final PartialBlockAccessView transaction : transactions) {
+        accumulator.importStateChangesFromPartialView(transaction, true);
+        accumulator.commit();
+        accumulator.markTransactionBoundary();
+      }
+      return trieLog(accumulator);
+    }
+  }
+
+  private static TrieLogLayer trieLogOfImportingTogether(
+      final List<PartialBlockAccessView> transactions) {
+    try (BonsaiWorldState worldState = newEmptyWorldState()) {
+      final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
+      accumulator.importAndCommitAccountChanges(
+          transactions.stream().flatMap(t -> t.accountChanges().stream()).toList(), true);
+      return trieLog(accumulator);
+    }
+  }
+
+  private static TrieLogLayer trieLog(final BonsaiWorldStateUpdateAccumulator accumulator) {
+    return new BonsaiTrieLogFactory()
+        .create(
+            accumulator,
+            new BlockHeaderTestFixture().number(1).stateRoot(Hash.EMPTY).buildHeader());
+  }
+
+  private static PartialBlockAccessView partialView(
+      final long txIndex,
+      final Consumer<PartialBlockAccessView.PartialBlockAccessViewBuilder> changes) {
+    final PartialBlockAccessView.PartialBlockAccessViewBuilder builder =
+        new PartialBlockAccessView.PartialBlockAccessViewBuilder().withTxIndex(txIndex);
+    changes.accept(builder);
+    return builder.build();
   }
 
   @Test

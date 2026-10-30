@@ -384,6 +384,7 @@ class BalTransactionProcessorUnitTest {
 
       assertTrue(result.isPresent(), "Expected processing result to be present");
       assertNull(result.get().accumulator, "Expected BAL result not to retain the accumulator");
+      processor.importPendingStateChanges(env.worldState(), Runnable::run);
 
       final Account account = env.worldState().updater().get(writeAddress);
       assertNotNull(account, "Expected write account to be created from partial BAL writes");
@@ -468,6 +469,7 @@ class BalTransactionProcessorUnitTest {
               Optional.empty());
 
       assertTrue(result.isPresent(), "Expected processing result to be present");
+      processor.importPendingStateChanges(env.worldState(), Runnable::run);
       assertNull(
           env.worldState().updater().get(accountAddress),
           "Account zeroed by partial BAL writes should be cleared from the block accumulator");
@@ -798,12 +800,24 @@ class BalTransactionProcessorUnitTest {
     }
 
     @Test
-    @DisplayName("Propagates a failure to import the result into the block")
+    @DisplayName("Propagates a failure to import the results into the block")
     void propagatesImportFailure() {
       final TestEnvironment env = createTestEnvironment();
       final BlockAccessList blockAccessList = mockEmptyBlockAccessList();
       final Transaction transaction = mockTransaction();
-      stubSuccessfulTransaction();
+      final PartialBlockAccessView.PartialBlockAccessViewBuilder view =
+          new PartialBlockAccessView.PartialBlockAccessViewBuilder().withTxIndex(1);
+      view.getOrCreateAccountBuilder(Address.fromHexString("0x1234")).withPostBalance(Wei.ONE);
+      when(transactionProcessor.processTransaction(
+              any(), any(), any(), any(), any(), any(), any(), any(), any()))
+          .thenReturn(
+              TransactionProcessingResult.successful(
+                  Collections.emptyList(),
+                  0,
+                  0,
+                  Bytes.EMPTY,
+                  Optional.of(view.build()),
+                  ValidationResult.valid()));
 
       final BalConcurrentTransactionProcessor processor =
           new BalConcurrentTransactionProcessor(
@@ -822,25 +836,28 @@ class BalTransactionProcessorUnitTest {
           Optional.empty(),
           env.maybeParentHeader());
 
-      // The import may have applied part of the transaction, so it is not processed again.
       final BonsaiWorldState blockWorldState = mock(BonsaiWorldState.class);
       final PathBasedWorldStateUpdateAccumulator<?> blockAccumulator =
           mock(PathBasedWorldStateUpdateAccumulator.class);
       doReturn(blockAccumulator).when(blockWorldState).updater();
       doThrow(new StorageException("Simulated failure"))
           .when(blockAccumulator)
-          .importStateChangesFromPartialView(any(), anyBoolean());
+          .importAndCommitAccountChanges(any(), anyBoolean());
 
-      assertThrows(
-          StorageException.class,
-          () ->
-              processor.getProcessingResult(
+      // The result is imported with the block's other results, so the failure surfaces there.
+      assertTrue(
+          processor
+              .getProcessingResult(
                   blockWorldState,
                   MINING_BENEFICIARY,
                   transaction,
                   0,
                   Optional.empty(),
-                  Optional.empty()));
+                  Optional.empty())
+              .isPresent());
+      assertThrows(
+          StorageException.class,
+          () -> processor.importPendingStateChanges(blockWorldState, Runnable::run));
     }
   }
 }
