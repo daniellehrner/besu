@@ -14,6 +14,7 @@
  */
 package org.hyperledger.besu.ethereum.mainnet.parallelization;
 
+import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListAccountLookup;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.PartialBlockAccessView;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 
@@ -28,7 +29,8 @@ import java.util.concurrent.Executor;
  * into the block's world state together. Importing them one transaction at a time on the thread
  * that processes the block takes longer than running the transactions once they run in parallel,
  * and it reads every account from the database on that thread. Instead the changes are grouped by
- * account and the groups are imported in parallel, each account's changes in transaction order.
+ * account and the groups are imported in parallel, each account's changes in transaction order,
+ * reading the accounts through the block access list's lookup.
  */
 final class PendingStateChanges {
 
@@ -59,13 +61,16 @@ final class PendingStateChanges {
   void importInto(
       final PathBasedWorldStateUpdateAccumulator<?> accumulator,
       final boolean clearEmptyAccounts,
+      final BlockAccessListAccountLookup accountLookup,
       final Executor executor) {
     final List<CompletableFuture<Void>> imports = new ArrayList<>(groups.size());
     for (final List<PartialBlockAccessView.AccountChanges> group : groups) {
       if (!group.isEmpty()) {
         imports.add(
             CompletableFuture.runAsync(
-                () -> accumulator.importAndCommitAccountChanges(group, clearEmptyAccounts),
+                () ->
+                    accumulator.importAndCommitAccountChanges(
+                        group, clearEmptyAccounts, accountLookup),
                 executor));
       }
     }

@@ -297,6 +297,7 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
     pendingStateChanges.importInto(
         (PathBasedWorldStateUpdateAccumulator<?>) ((PathBasedWorldState) worldState).updater(),
         transactionProcessor.getClearEmptyAccounts(),
+        blockAccessListAccountLookup,
         executor);
   }
 }

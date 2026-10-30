@@ -23,6 +23,8 @@ import static org.mockito.Mockito.mock;
 
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Wei;
+import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
+import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListAccountLookup;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.PartialBlockAccessView;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
@@ -38,6 +40,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 class PendingStateChangesTest {
+
+  private static final BlockAccessListAccountLookup LOOKUP =
+      BlockAccessListAccountLookup.of(new BlockAccessList(List.of()));
 
   private static final List<Address> ACCOUNTS =
       List.of(
@@ -66,13 +71,13 @@ class PendingStateChangesTest {
               return null;
             })
         .when(accumulator)
-        .importAndCommitAccountChanges(any(), anyBoolean());
+        .importAndCommitAccountChanges(any(), anyBoolean(), any());
 
     final PendingStateChanges pending = new PendingStateChanges(3);
     for (int transaction = 1; transaction <= 10; transaction++) {
       pending.add(balancesOfEveryAccount(transaction));
     }
-    pending.importInto(accumulator, true, executor);
+    pending.importInto(accumulator, true, LOOKUP, executor);
 
     assertThat(imported.stream().mapToInt(List::size).sum()).isEqualTo(10 * ACCOUNTS.size());
     for (final Address account : ACCOUNTS) {
@@ -113,12 +118,12 @@ class PendingStateChangesTest {
               return null;
             })
         .when(accumulator)
-        .importAndCommitAccountChanges(any(), anyBoolean());
+        .importAndCommitAccountChanges(any(), anyBoolean(), any());
 
     final PendingStateChanges pending = new PendingStateChanges(ACCOUNTS.size());
     pending.add(balancesOfEveryAccount(1));
 
-    assertThatThrownBy(() -> pending.importInto(accumulator, true, executor))
+    assertThatThrownBy(() -> pending.importInto(accumulator, true, LOOKUP, executor))
         .isInstanceOf(StorageException.class);
     // every other group was imported before the failure was rethrown
     assertThat(calls.get()).isGreaterThan(1);
@@ -134,12 +139,12 @@ class PendingStateChangesTest {
               return null;
             })
         .when(accumulator)
-        .importAndCommitAccountChanges(any(), anyBoolean());
+        .importAndCommitAccountChanges(any(), anyBoolean(), any());
 
     final PendingStateChanges pending = new PendingStateChanges(1);
     pending.add(balancesOfEveryAccount(1));
-    pending.importInto(accumulator, true, Runnable::run);
-    pending.importInto(accumulator, true, Runnable::run);
+    pending.importInto(accumulator, true, LOOKUP, Runnable::run);
+    pending.importInto(accumulator, true, LOOKUP, Runnable::run);
 
     assertThat(imports.get()).isEqualTo(1);
   }

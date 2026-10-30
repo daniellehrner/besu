@@ -902,7 +902,7 @@ class BalTransactionProcessorUnitTest {
       doReturn(blockAccumulator).when(blockWorldState).updater();
       doThrow(new StorageException("Simulated failure"))
           .when(blockAccumulator)
-          .importAndCommitAccountChanges(any(), anyBoolean());
+          .importAndCommitAccountChanges(any(), anyBoolean(), any());
 
       // The result is imported with the block's other results, so the failure surfaces there.
       assertTrue(

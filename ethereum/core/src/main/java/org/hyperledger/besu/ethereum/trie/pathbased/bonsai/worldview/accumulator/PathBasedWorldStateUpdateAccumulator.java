@@ -19,6 +19,7 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.datatypes.Wei;
+import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListAccountLookup;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.PartialBlockAccessView;
 import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.MerkleTrieException;
@@ -171,15 +172,20 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
    * emptiness after the same changes as one by one, and a change that deletes the account is
    * committed right away, so that recreating it later in the block keeps its storage cleared.
    *
+   * <p>The accounts are read at the parent block through the block access list's lookup, which the
+   * block's transactions read them through already.
+   *
    * <p>The changes of an account must be in transaction order. Calls for disjoint sets of accounts
    * may run concurrently, so a block's changes can be imported by several threads.
    *
    * @param accountChanges changes to accounts, each account's in transaction order
    * @param clearEmptyAccounts when true, delete accounts that become empty after applying writes
+   * @param accountLookup the lookup of the block's access list
    */
   public void importAndCommitAccountChanges(
       final List<PartialBlockAccessView.AccountChanges> accountChanges,
-      final boolean clearEmptyAccounts) {
+      final boolean clearEmptyAccounts,
+      final BlockAccessListAccountLookup accountLookup) {
     final Map<Address, List<PartialBlockAccessView.AccountChanges>> changesByAccount =
         new HashMap<>();
     for (final PartialBlockAccessView.AccountChanges changes : accountChanges) {
@@ -187,6 +193,10 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
     }
     changesByAccount.forEach(
         (address, changes) -> {
+          loadAccount(
+              address,
+              BonsaiValue::getUpdated,
+              unloaded -> loadParentAccount(accountLookup, unloaded));
           int mergeStart = 0;
           for (int i = 0; i < changes.size(); i++) {
             if (mayEmptyAccount(changes.get(i), clearEmptyAccounts)) {
@@ -492,8 +502,36 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
     return wrappedWorldView().get(address);
   }
 
+  /**
+   * The account at the parent block, read through the block access list's lookup, which reads each
+   * account it lists once for the block, or null if there is none.
+   *
+   * @param accountLookup the lookup of the block's access list
+   * @param address the address of the account
+   * @return the account, or null
+   */
+  protected Account loadParentAccount(
+      final BlockAccessListAccountLookup accountLookup, final Address address) {
+    // the lookup hashes each listed address once for the block, while the transaction's address
+    // is a new instance that has not been hashed yet
+    final Hash addressHash = accountLookup.getAddressHash(address).orElseGet(address::addressHash);
+    return accountLookup
+        .parentAccount(address, hash -> getWorldStateStorage().getAccount(hash))
+        .map(
+            encoded ->
+                BonsaiAccount.fromRLP(this, address, addressHash, encoded, true, codeCache()))
+        .orElse(null);
+  }
+
   public ACCOUNT loadAccount(
       final Address address, final Function<BonsaiValue<ACCOUNT>, ACCOUNT> accountFunction) {
+    return loadAccount(address, accountFunction, this::loadAccountFromWorldView);
+  }
+
+  private ACCOUNT loadAccount(
+      final Address address,
+      final Function<BonsaiValue<ACCOUNT>, ACCOUNT> accountFunction,
+      final Function<Address, Account> worldViewAccount) {
     try {
       final BonsaiValue<ACCOUNT> pathBasedValue = accountsToUpdate.get(address);
       if (pathBasedValue == null) {
@@ -502,7 +540,7 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
         if (fromParent.isPresent()) {
           return fromParent.get();
         }
-        final Account account = loadAccountFromWorldView(address);
+        final Account account = worldViewAccount.apply(address);
         if (account instanceof BonsaiAccount pathBasedAccount) {
           final ACCOUNT updatedAccount = copyAccount((ACCOUNT) pathBasedAccount, this, true);
           final BonsaiValue<ACCOUNT> accountValue =

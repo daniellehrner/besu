@@ -18,7 +18,6 @@ import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.datatypes.Wei;
-import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListAccountLookup;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListOverlay;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.account.BonsaiAccount;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.code.BonsaiCodeCache;
@@ -69,16 +68,7 @@ public class BonsaiBalWorldStateUpdateAccumulator extends BonsaiWorldStateUpdate
    */
   @Override
   protected Account loadAccountFromWorldView(final Address address) {
-    final BlockAccessListAccountLookup accountLookup = blockAccessListOverlay.getAccountLookup();
-    // the lookup hashes each listed address once for the block, while the transaction's address
-    // is a new instance that has not been hashed yet
-    final Hash addressHash = accountLookup.getAddressHash(address).orElseGet(address::addressHash);
-    return accountLookup
-        .parentAccount(address, hash -> getWorldStateStorage().getAccount(hash))
-        .map(
-            encoded ->
-                BonsaiAccount.fromRLP(this, address, addressHash, encoded, true, codeCache()))
-        .orElse(null);
+    return loadParentAccount(blockAccessListOverlay.getAccountLookup(), address);
   }
 
   @Override

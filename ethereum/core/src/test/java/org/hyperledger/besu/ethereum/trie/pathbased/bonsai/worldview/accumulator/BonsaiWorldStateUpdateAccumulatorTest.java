@@ -32,7 +32,10 @@ import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
+import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList;
+import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessListAccountLookup;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.PartialBlockAccessView;
+import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.trie.common.PatriciaTrieAccountValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.account.BonsaiAccount;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.code.BonsaiCodeCache;
@@ -50,6 +53,7 @@ import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Consumer;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -184,6 +188,37 @@ class BonsaiWorldStateUpdateAccumulatorTest {
         .isEqualTo(trieLogOfImportingOneByOne(transactions).dump());
   }
 
+  @Test
+  void importAndCommitAccountChanges_readsTheAccountsThroughTheLookup() {
+    // the lookup holds an account that the world state does not, as if read for the block before
+    final BlockAccessListAccountLookup lookup =
+        BlockAccessListAccountLookup.of(
+            new BlockAccessList(
+                List.of(
+                    new BlockAccessList.AccountChanges(
+                        ABSENT, List.of(), List.of(), List.of(), List.of(), List.of()))));
+    lookup.putParentAccount(
+        ABSENT,
+        Optional.of(
+            RLP.encode(
+                new PatriciaTrieAccountValue(3L, Wei.of(42), Hash.EMPTY_TRIE_HASH, Hash.EMPTY)
+                    ::writeTo)));
+
+    try (BonsaiWorldState worldState = newEmptyWorldState()) {
+      final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
+      accumulator.importAndCommitAccountChanges(
+          partialView(1, view -> view.getOrCreateAccountBuilder(ABSENT).withPostBalance(Wei.of(5)))
+              .accountChanges(),
+          true,
+          lookup);
+
+      final BonsaiValue<?> account = accumulator.getAccountsToUpdate().get(ABSENT);
+      assertThat(((BonsaiAccount) account.getPrior()).getBalance()).isEqualTo(Wei.of(42));
+      assertThat(((BonsaiAccount) account.getUpdated()).getBalance()).isEqualTo(Wei.of(5));
+      assertThat(((BonsaiAccount) account.getUpdated()).getNonce()).isEqualTo(3L);
+    }
+  }
+
   /**
    * Imports and commits the transactions one at a time, as the block's thread does. Trie logs are
    * compared by their dump: their accounts compare by identity.
@@ -206,7 +241,9 @@ class BonsaiWorldStateUpdateAccumulatorTest {
     try (BonsaiWorldState worldState = newEmptyWorldState()) {
       final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
       accumulator.importAndCommitAccountChanges(
-          transactions.stream().flatMap(t -> t.accountChanges().stream()).toList(), true);
+          transactions.stream().flatMap(t -> t.accountChanges().stream()).toList(),
+          true,
+          BlockAccessListAccountLookup.of(new BlockAccessList(List.of())));
       return trieLog(accumulator);
     }
   }
