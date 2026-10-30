@@ -39,6 +39,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiPredicate;
+import java.util.stream.IntStream;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
@@ -46,6 +48,11 @@ import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
 
 public final class BlockAccessList {
+
+  /**
+   * Lists of at least this many entries are compared in parallel, see {@link #hasSameChangesAs}.
+   */
+  private static final int MIN_ENTRIES_TO_COMPARE_IN_PARALLEL = 512;
 
   private final List<AccountChanges> accountChanges;
   private final Optional<Bytes> rawRlp;
@@ -104,6 +111,37 @@ public final class BlockAccessList {
       return false;
     }
     return Objects.equals(accountChanges, that.accountChanges);
+  }
+
+  /**
+   * Whether the list holds the same changes as {@code other}, as {@link #equals} compares them. A
+   * long list's accounts, and an account's changes when it has many, are compared in parallel: a
+   * block of many transfers has tens of thousands of accounts or one with a change per transaction.
+   *
+   * @param other the list to compare with
+   * @return whether the lists hold the same changes
+   */
+  public boolean hasSameChangesAs(final BlockAccessList other) {
+    return sameEntries(accountChanges, other.accountChanges, BlockAccessList::sameChanges);
+  }
+
+  private static boolean sameChanges(final AccountChanges a, final AccountChanges b) {
+    return a.address().equals(b.address())
+        && sameEntries(a.storageChanges(), b.storageChanges(), Object::equals)
+        && sameEntries(a.storageReads(), b.storageReads(), Object::equals)
+        && sameEntries(a.balanceChanges(), b.balanceChanges(), Object::equals)
+        && sameEntries(a.nonceChanges(), b.nonceChanges(), Object::equals)
+        && sameEntries(a.codeChanges(), b.codeChanges(), Object::equals);
+  }
+
+  private static <T> boolean sameEntries(
+      final List<T> a, final List<T> b, final BiPredicate<T, T> sameEntry) {
+    if (a.size() != b.size()) {
+      return false;
+    }
+    final IntStream indices = IntStream.range(0, a.size());
+    return (a.size() >= MIN_ENTRIES_TO_COMPARE_IN_PARALLEL ? indices.parallel() : indices)
+        .allMatch(i -> sameEntry.test(a.get(i), b.get(i)));
   }
 
   @Override

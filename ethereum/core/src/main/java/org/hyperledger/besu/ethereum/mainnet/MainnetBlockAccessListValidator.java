@@ -113,7 +113,7 @@ public class MainnetBlockAccessListValidator implements BlockAccessListValidator
     // An executed list equal to the supplied one has its hash, which the checks before execution
     // kept, so the executed list is not encoded and hashed again.
     final BlockAccessList balToHash =
-        suppliedBlockAccessList.filter(executedBal::equals).orElse(executedBal);
+        suppliedBlockAccessList.filter(executedBal::hasSameChangesAs).orElse(executedBal);
     return balHashMismatchAgainstHeaderIfAny(
         balToHash,
         blockHeader.getBalHash(),
