@@ -28,6 +28,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -41,6 +42,7 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.InMemoryKeyValueStorageProvider;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.mainnet.BalConfiguration;
+import org.hyperledger.besu.ethereum.mainnet.ImmutableBalConfiguration;
 import org.hyperledger.besu.ethereum.mainnet.MainnetTransactionProcessor;
 import org.hyperledger.besu.ethereum.mainnet.TransactionValidationParams;
 import org.hyperledger.besu.ethereum.mainnet.ValidationResult;
@@ -55,6 +57,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.trielog.NoOpTrieLogMa
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.preload.NoOpBonsaiCachedMerkleTrieLoader;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.bal.BonsaiBalWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.cache.NoOpBonsaiWorldStateCacheManager;
 import org.hyperledger.besu.ethereum.worldstate.DataStorageConfiguration;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateArchive;
@@ -68,6 +71,7 @@ import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -237,6 +241,62 @@ class BalTransactionProcessorUnitTest {
               eq(TransactionValidationParams.processingBlock()),
               eq(BLOB_GAS_PRICE),
               any());
+    }
+
+    @Test
+    @DisplayName("Transactions reuse world states, each with its own overlay, closed on abort")
+    void transactionsReuseWorldStates() {
+      final TestEnvironment env = createTestEnvironment();
+      final List<BonsaiWorldState> opened = new ArrayList<>();
+      when(env.worldStateArchive().getWorldState(any()))
+          .thenAnswer(
+              invocation -> {
+                final BonsaiWorldState worldState = spy(createEmptyWorldState());
+                opened.add(worldState);
+                return Optional.of(worldState);
+              });
+      final List<Long> overlayLimits = new ArrayList<>();
+      when(transactionProcessor.processTransaction(
+              any(), any(), any(), any(), any(), any(), any(), any(), any()))
+          .thenAnswer(
+              invocation -> {
+                overlayLimits.add(
+                    ((BonsaiBalWorldStateUpdateAccumulator) opened.getLast().getAccumulator())
+                        .getBlockAccessListOverlay()
+                        .getMaxTxIndexExclusive());
+                return TransactionProcessingResult.successful(
+                    Collections.emptyList(),
+                    0,
+                    0,
+                    Bytes.EMPTY,
+                    Optional.of(emptyPartialBlockAccessView(0)),
+                    ValidationResult.valid());
+              });
+
+      // without the prefetch, which opens a world state of its own
+      final BalConcurrentTransactionProcessor processor =
+          new BalConcurrentTransactionProcessor(
+              transactionProcessor,
+              BlockAccessListAccountLookup.of(mockEmptyBlockAccessList()),
+              ImmutableBalConfiguration.builder().isBalPreFetchReadingEnabled(false).build());
+      processor.runAsyncBlock(
+          env.protocolContext(),
+          env.blockHeader(),
+          List.of(mockTransaction(), mockTransaction(), mockTransaction()),
+          MINING_BENEFICIARY,
+          EMPTY_BLOCK_HASH_LOOKUP,
+          BLOB_GAS_PRICE,
+          sameThreadExecutor,
+          Optional.empty(),
+          env.maybeParentHeader());
+
+      // the transactions ran one after the other on one thread, so on one world state
+      assertEquals(1, opened.size());
+      assertEquals(List.of(1L, 2L, 3L), overlayLimits);
+      verify(opened.getFirst(), never()).close();
+
+      processor.abort();
+      verify(opened.getFirst()).close();
     }
 
     @Test

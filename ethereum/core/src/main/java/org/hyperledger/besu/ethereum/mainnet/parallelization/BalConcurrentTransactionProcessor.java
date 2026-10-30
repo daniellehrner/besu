@@ -42,8 +42,10 @@ import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 
@@ -64,6 +66,8 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
   // import back much.
   private final PendingStateChanges pendingStateChanges =
       new PendingStateChanges(2 * Runtime.getRuntime().availableProcessors());
+  private final Queue<BonsaiWorldState> idleWorldStates = new ConcurrentLinkedQueue<>();
+  private volatile boolean closed;
 
   public BalConcurrentTransactionProcessor(
       final MainnetTransactionProcessor transactionProcessor,
@@ -81,23 +85,55 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
             : Optional.empty();
   }
 
-  private Optional<BonsaiWorldState> getWorldStateForTransaction(
-      final ProtocolContext protocolContext,
-      final Optional<BlockHeader> maybeParentHeader,
-      final int transactionLocation) {
-    return maybeParentHeader.flatMap(
-        blockHeader ->
-            protocolContext
-                .getWorldStateArchive()
-                .getWorldState(
-                    WorldStateQueryParams.newBuilder()
-                        .withBlockHeader(blockHeader)
-                        .withShouldWorldStateUpdateHead(false)
-                        .withBalOverlay(
-                            new BlockAccessListOverlay(
-                                blockAccessListAccountLookup, (long) transactionLocation + 1L))
-                        .build())
-                .map(BonsaiWorldState.class::cast));
+  /**
+   * A world state at the parent block for a transaction: one left by a transaction that finished,
+   * or a new one. Each transaction puts its own overlay and accumulator on it, which costs less
+   * than opening a world state, so a block opens about one per thread that runs its transactions.
+   */
+  private Optional<BonsaiWorldState> acquireWorldState(
+      final ProtocolContext protocolContext, final Optional<BlockHeader> maybeParentHeader) {
+    final BonsaiWorldState idle = idleWorldStates.poll();
+    if (idle != null) {
+      return Optional.of(idle);
+    }
+    return maybeParentHeader
+        .flatMap(
+            parentHeader ->
+                protocolContext
+                    .getWorldStateArchive()
+                    .getWorldState(
+                        WorldStateQueryParams.newBuilder()
+                            .withBlockHeader(parentHeader)
+                            .withShouldWorldStateUpdateHead(false)
+                            .build())
+                    .map(BonsaiWorldState.class::cast))
+        .map(
+            worldState -> {
+              worldState.disableCacheMerkleTrieLoader();
+              return worldState;
+            });
+  }
+
+  private void releaseWorldState(final BonsaiWorldState worldState) {
+    idleWorldStates.offer(worldState);
+    if (closed) {
+      closeIdleWorldStates();
+    }
+  }
+
+  private void closeIdleWorldStates() {
+    BonsaiWorldState worldState;
+    while ((worldState = idleWorldStates.poll()) != null) {
+      worldState.close();
+    }
+  }
+
+  /** Also closes the world states the transactions ran on, or each as its transaction finishes. */
+  @Override
+  public void abort() {
+    super.abort();
+    closed = true;
+    closeIdleWorldStates();
   }
 
   @Override
@@ -166,15 +202,15 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
       final Optional<BlockAccessListBuilder> blockAccessListBuilder,
       final Optional<BlockHeader> maybeParentHeader) {
 
-    final BonsaiWorldState ws =
-        getWorldStateForTransaction(protocolContext, maybeParentHeader, transactionLocation)
-            .orElse(null);
+    final BonsaiWorldState ws = acquireWorldState(protocolContext, maybeParentHeader).orElse(null);
     if (ws == null) {
       return null;
     }
 
     try {
-      ws.disableCacheMerkleTrieLoader();
+      ws.applyBlockAccessListOverlay(
+          new BlockAccessListOverlay(
+              blockAccessListAccountLookup, (long) transactionLocation + 1L));
       final ParallelizedTransactionContext.Builder ctxBuilder =
           new ParallelizedTransactionContext.Builder();
 
@@ -202,7 +238,7 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
 
       return ctxBuilder.build();
     } finally {
-      ws.close();
+      releaseWorldState(ws);
     }
   }
 
