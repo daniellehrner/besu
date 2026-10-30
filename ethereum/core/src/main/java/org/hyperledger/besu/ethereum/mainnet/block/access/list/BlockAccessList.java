@@ -18,6 +18,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 
 import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.core.encoding.BlockAccessListDecoder;
@@ -44,7 +45,18 @@ import com.fasterxml.jackson.annotation.JsonValue;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
 
-public record BlockAccessList(List<AccountChanges> accountChanges, Optional<Bytes> rawRlp) {
+public final class BlockAccessList {
+
+  private final List<AccountChanges> accountChanges;
+  private final Optional<Bytes> rawRlp;
+  // Hashed on first use and kept: a new block's list is hashed for its header and then checked
+  // against the header before and after the block is executed.
+  private volatile Hash hash;
+
+  public BlockAccessList(final List<AccountChanges> accountChanges, final Optional<Bytes> rawRlp) {
+    this.accountChanges = accountChanges;
+    this.rawRlp = rawRlp;
+  }
 
   public BlockAccessList(final List<AccountChanges> accountChanges) {
     this(accountChanges, Optional.empty());
@@ -57,6 +69,30 @@ public record BlockAccessList(List<AccountChanges> accountChanges, Optional<Byte
   @JsonCreator
   public static BlockAccessList fromBytes(final Bytes bytes) {
     return BlockAccessListDecoder.decode(new BytesValueRLPInput(bytes, false));
+  }
+
+  public List<AccountChanges> accountChanges() {
+    return accountChanges;
+  }
+
+  /** The bytes the list was decoded from, empty if it was not decoded. */
+  public Optional<Bytes> rawRlp() {
+    return rawRlp;
+  }
+
+  /**
+   * The hash of the list's encoding, which is the bytes it was decoded from if it was decoded, so
+   * that it is not encoded again.
+   *
+   * @return the hash of the encoded list
+   */
+  public Hash hash() {
+    Hash result = hash;
+    if (result == null) {
+      result = Hash.hash(rawRlp.orElseGet(this::encode));
+      hash = result;
+    }
+    return result;
   }
 
   @Override
