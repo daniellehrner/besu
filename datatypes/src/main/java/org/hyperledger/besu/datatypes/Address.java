@@ -97,11 +97,6 @@ public final class Address extends BytesHolder implements Comparable<Address> {
   static final Cache<Address, Hash> hashCache =
       Caffeine.newBuilder().executor(Runnable::run).maximumSize(4_000).build();
 
-  // This address's hash once it was asked for. Kept here as well as in the shared cache, which
-  // holds fewer addresses than a large block touches, each several times: by its transaction, the
-  // import of the block's state and the state root.
-  private @Nullable Hash hash;
-
   /**
    * Instantiates a new Address.
    *
@@ -235,13 +230,7 @@ public final class Address extends BytesHolder implements Comparable<Address> {
    * @return the hash of the address.
    */
   public Hash addressHash() {
-    // A Hash is immutable, so a racing thread at worst hashes the address again.
-    Hash addressHash = hash;
-    if (addressHash == null) {
-      addressHash = hashCache.get(this, k -> Hash.hash(k.getBytes()));
-      hash = addressHash;
-    }
-    return addressHash;
+    return hashCache.get(this, k -> Hash.hash(k.getBytes()));
   }
 
   /**
