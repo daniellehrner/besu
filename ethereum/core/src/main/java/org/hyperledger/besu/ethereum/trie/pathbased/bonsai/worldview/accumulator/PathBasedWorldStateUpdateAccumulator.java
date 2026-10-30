@@ -95,6 +95,9 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
       final Consumer<StorageSlotKey> storagePreloader,
       final EvmConfiguration evmConfiguration) {
     super(world, evmConfiguration);
+    // a block's changes are imported on several threads at once, which all look up and remove
+    // accounts here, see importAndCommitAccountChanges
+    this.deletedAccounts = ConcurrentHashMap.newKeySet();
     this.accountsToUpdate = new AccountConsumingMap<>(new ConcurrentHashMap<>(), accountPreloader);
     this.accountPreloader = accountPreloader;
     this.storagePreloader = storagePreloader;
