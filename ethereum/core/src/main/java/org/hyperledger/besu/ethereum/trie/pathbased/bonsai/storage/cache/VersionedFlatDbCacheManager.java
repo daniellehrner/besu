@@ -26,7 +26,9 @@ import org.hyperledger.besu.plugin.services.storage.SegmentIdentifier;
 import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -42,6 +44,7 @@ import java.util.function.Supplier;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.slf4j.Logger;
@@ -69,10 +72,16 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
   private final Cache<CacheKey, VersionedValue> storageCache;
 
   /**
-   * Trie nodes committed by recent blocks, keyed by hash. Every node on a modified path gets a new
-   * hash, so the next block's walk down that path would otherwise read back what was just written.
+   * Trie nodes committed by recent blocks, keyed by hash, one map per block, the newest first.
+   * Every node on a modified path gets a new hash, so the next block's walk down that path would
+   * otherwise read back what was just written. The nodes are kept by how recently they were
+   * written, not in a cache that admits what it has seen often: every node is new to it, so such a
+   * cache turned away most of the nodes of a block that changes many accounts. The newest block's
+   * nodes are kept whole, older blocks' while all add up to {@link #trieNodeCacheSize}.
    */
-  private final Cache<CacheKey, Bytes> trieNodeCache;
+  private volatile List<Map<CacheKey, Bytes>> trieNodesByBlock = List.of();
+
+  private final long trieNodeCacheSize;
 
   /**
    * Bumped by a clear, so that batches queued before it are dropped instead of refilling the cache.
@@ -119,9 +128,20 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
       final long storageCacheSize,
       final MetricsSystem metricsSystem,
       final int drainThreshold) {
+    this(accountCacheSize, storageCacheSize, metricsSystem, drainThreshold, TRIE_NODE_CACHE_SIZE);
+  }
+
+  @VisibleForTesting
+  VersionedFlatDbCacheManager(
+      final long accountCacheSize,
+      final long storageCacheSize,
+      final MetricsSystem metricsSystem,
+      final int drainThreshold,
+      final long trieNodeCacheSize) {
 
     requirePositiveCacheMaxSize("accountCacheSize", accountCacheSize);
     requirePositiveCacheMaxSize("storageCacheSize", storageCacheSize);
+    this.trieNodeCacheSize = trieNodeCacheSize;
 
     this.maintenanceWorker =
         Executors.newSingleThreadExecutor(
@@ -135,7 +155,6 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
 
     this.accountCache = createCache(accountCacheSize);
     this.storageCache = createCache(storageCacheSize);
-    this.trieNodeCache = createCache(TRIE_NODE_CACHE_SIZE);
 
     this.cacheRequestCounter =
         metricsSystem.createCounter(
@@ -244,7 +263,6 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
       final int drained = drainExecutor.drain();
       accountCache.cleanUp();
       storageCache.cleanUp();
-      trieNodeCache.cleanUp();
       if (drained > 0) {
         LOG.trace("Cache maintenance drained {} tasks", drained);
       }
@@ -306,7 +324,7 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
     if (segment == TRIE_BRANCH_STORAGE) {
       synchronized (trieNodeLock) {
         trieNodeGeneration.incrementAndGet();
-        trieNodeCache.invalidateAll();
+        trieNodesByBlock = List.of();
       }
       return;
     }
@@ -499,13 +517,16 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
 
   @Override
   public Optional<Bytes> getTrieNode(final Bytes32 nodeHash) {
-    final Bytes node = trieNodeCache.getIfPresent(CacheKey.of(nodeHash));
-    if (node == null) {
-      trieNodeCacheMissCounter.inc();
-      return Optional.empty();
+    final CacheKey key = CacheKey.of(nodeHash);
+    for (final Map<CacheKey, Bytes> blockNodes : trieNodesByBlock) {
+      final Bytes node = blockNodes.get(key);
+      if (node != null) {
+        trieNodeCacheHitCounter.inc();
+        return Optional.of(node);
+      }
     }
-    trieNodeCacheHitCounter.inc();
-    return Optional.of(node);
+    trieNodeCacheMissCounter.inc();
+    return Optional.empty();
   }
 
   /** Runs on the maintenance worker, so the committing thread does not pay for the inserts. */
@@ -520,7 +541,7 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
           () -> {
             synchronized (trieNodeLock) {
               if (generation == trieNodeGeneration.get()) {
-                nodes.forEach(node -> trieNodeCache.put(CacheKey.of(node.hash()), node.node()));
+                trieNodesByBlock = withBlockNodes(nodes);
               }
             }
             doMaintenance();
@@ -530,10 +551,27 @@ public class VersionedFlatDbCacheManager implements FlatDbCacheManager, Closeabl
     }
   }
 
+  /** The kept trie nodes with a block's committed nodes added as the newest. */
+  private List<Map<CacheKey, Bytes>> withBlockNodes(final List<TrieNode> nodes) {
+    final Map<CacheKey, Bytes> blockNodes = HashMap.newHashMap(nodes.size());
+    nodes.forEach(node -> blockNodes.put(CacheKey.of(node.hash()), node.node()));
+    final List<Map<CacheKey, Bytes>> kept = new ArrayList<>();
+    kept.add(blockNodes);
+    long size = blockNodes.size();
+    for (final Map<CacheKey, Bytes> olderBlockNodes : trieNodesByBlock) {
+      size += olderBlockNodes.size();
+      if (size > trieNodeCacheSize) {
+        break;
+      }
+      kept.add(olderBlockNodes);
+    }
+    return List.copyOf(kept);
+  }
+
   @Override
   public long getCacheSize(final SegmentIdentifier segment) {
     if (segment == TRIE_BRANCH_STORAGE) {
-      return trieNodeCache.estimatedSize();
+      return trieNodesByBlock.stream().mapToLong(Map::size).sum();
     }
     final Cache<CacheKey, VersionedValue> cache = cacheForSegment(segment);
     return cache != null ? cache.estimatedSize() : 0;

@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.function.Consumer;
+import java.util.stream.IntStream;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
@@ -193,5 +194,45 @@ class VersionedFlatDbCacheManagerTest {
     cacheManager.putTrieNodes(List.of(new TrieNode(nodeHash, node)));
 
     assertThat(cacheManager.getTrieNode(nodeHash)).isEmpty();
+  }
+
+  @Test
+  void trieNodes_ofRecentBlocksAreKeptWhileTheyFit() {
+    final VersionedFlatDbCacheManager smallCache =
+        new VersionedFlatDbCacheManager(10, 10, new NoOpMetricsSystem(), 1000, 4);
+    try {
+      final List<TrieNode> first = trieNodes(0, 2);
+      final List<TrieNode> second = trieNodes(2, 2);
+      final List<TrieNode> third = trieNodes(4, 3);
+
+      smallCache.putTrieNodes(first);
+      smallCache.putTrieNodes(second);
+      await()
+          .untilAsserted(
+              () -> assertThat(smallCache.getCacheSize(TRIE_BRANCH_STORAGE)).isEqualTo(4));
+      assertThat(first).allSatisfy(n -> assertThat(smallCache.getTrieNode(n.hash())).isPresent());
+
+      // the newest block is kept whole, the block before it while all fit
+      smallCache.putTrieNodes(third);
+      await()
+          .untilAsserted(
+              () -> assertThat(smallCache.getCacheSize(TRIE_BRANCH_STORAGE)).isEqualTo(3));
+      assertThat(third)
+          .allSatisfy(n -> assertThat(smallCache.getTrieNode(n.hash())).contains(n.node()));
+      assertThat(second).allSatisfy(n -> assertThat(smallCache.getTrieNode(n.hash())).isEmpty());
+      assertThat(first).allSatisfy(n -> assertThat(smallCache.getTrieNode(n.hash())).isEmpty());
+    } finally {
+      smallCache.close();
+    }
+  }
+
+  private static List<TrieNode> trieNodes(final int first, final int count) {
+    return IntStream.range(first, first + count)
+        .mapToObj(
+            i -> {
+              final Bytes node = Bytes.of(0xc2, 0x80, i);
+              return new TrieNode(Bytes32.wrap(Hash.hash(node).getBytes()), node);
+            })
+        .toList();
   }
 }
