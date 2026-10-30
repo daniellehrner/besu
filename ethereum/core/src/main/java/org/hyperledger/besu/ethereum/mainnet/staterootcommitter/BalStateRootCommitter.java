@@ -208,8 +208,9 @@ public final class BalStateRootCommitter implements StateRootCommitter {
    *
    * @param root computed state root hash
    * @param writes deferred KV writes to apply at persist time (empty when storage is frozen)
-   * @param storageRoots new per-account storage roots, patched into the EVM accumulator by {@link
-   *     #compute}
+   * @param storageRoots new storage roots of the accounts whose storage the block changed, patched
+   *     into the EVM accumulator by {@link #compute}; every other account keeps the root it was
+   *     loaded with
    */
   private record BackgroundResult(
       Hash root,
@@ -228,7 +229,10 @@ public final class BalStateRootCommitter implements StateRootCommitter {
     private final ConcurrentLinkedQueue<StateRootComputations.UpdaterWrite> writes =
         new ConcurrentLinkedQueue<>();
 
-    /** Populated during account resolution once storage futures complete. */
+    /**
+     * Populated during account resolution once storage futures complete, for the accounts with
+     * storage changes only.
+     */
     private final Map<Address, Hash> storageRoots = new ConcurrentHashMap<>();
 
     /**
@@ -342,8 +346,8 @@ public final class BalStateRootCommitter implements StateRootCommitter {
       } else {
         // Join the pre-launched storage future; by now it is likely already complete.
         newStorageRoot = storageFutures.get(address).join();
+        storageRoots.put(address, newStorageRoot);
       }
-      storageRoots.put(address, newStorageRoot);
 
       final PatriciaTrieAccountValue updatedAccount =
           new PatriciaTrieAccountValue(newNonce, newBalance, newStorageRoot, newCodeHash);
