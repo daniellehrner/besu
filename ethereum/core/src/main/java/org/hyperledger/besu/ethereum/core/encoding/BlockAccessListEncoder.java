@@ -19,29 +19,23 @@ import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.ethereum.rlp.RLPOutput;
 
 import java.util.List;
+import java.util.function.BiConsumer;
 
 import org.apache.tuweni.bytes.Bytes;
 
 public final class BlockAccessListEncoder {
 
-  /** Lists of at least this many accounts are encoded in parallel, one account per task. */
-  private static final int MIN_ACCOUNTS_TO_ENCODE_IN_PARALLEL = 512;
+  /**
+   * Lists of at least this many entries, whether the accounts or the changes of one account, are
+   * encoded in parallel, one entry per task: a block of many transactions has a list of many
+   * accounts or an account with a change for each transaction.
+   */
+  private static final int MIN_ENTRIES_TO_ENCODE_IN_PARALLEL = 512;
 
   private BlockAccessListEncoder() {}
 
   public static void encode(final BlockAccessList bal, final RLPOutput out) {
-    final List<BlockAccessList.AccountChanges> accountChanges = bal.accountChanges();
-    if (accountChanges.size() < MIN_ACCOUNTS_TO_ENCODE_IN_PARALLEL) {
-      out.writeList(accountChanges, BlockAccessListEncoder::encodeAccount);
-      return;
-    }
-    final List<Bytes> encodedAccounts =
-        accountChanges.parallelStream()
-            .map(acct -> RLP.encode(acctOut -> encodeAccount(acct, acctOut)))
-            .toList();
-    out.startList();
-    encodedAccounts.forEach(out::writeRaw);
-    out.endList();
+    writeList(out, bal.accountChanges(), BlockAccessListEncoder::encodeAccount);
   }
 
   private static void encodeAccount(
@@ -49,12 +43,14 @@ public final class BlockAccessListEncoder {
     acctOut.startList();
     acctOut.writeBytes(acct.address().getBytes());
 
-    acctOut.writeList(
+    writeList(
+        acctOut,
         acct.storageChanges(),
         (sc, scOut) -> {
           scOut.startList();
           scOut.writeUInt256Scalar(sc.slot().getSlotKey().get());
-          scOut.writeList(
+          writeList(
+              scOut,
               sc.changes(),
               (chg, chgOut) -> {
                 chgOut.startList();
@@ -65,10 +61,13 @@ public final class BlockAccessListEncoder {
           scOut.endList();
         });
 
-    acctOut.writeList(
-        acct.storageReads(), (sr, srOut) -> srOut.writeUInt256Scalar(sr.slot().getSlotKey().get()));
+    writeList(
+        acctOut,
+        acct.storageReads(),
+        (sr, srOut) -> srOut.writeUInt256Scalar(sr.slot().getSlotKey().get()));
 
-    acctOut.writeList(
+    writeList(
+        acctOut,
         acct.balanceChanges(),
         (bc, bcOut) -> {
           bcOut.startList();
@@ -77,7 +76,8 @@ public final class BlockAccessListEncoder {
           bcOut.endList();
         });
 
-    acctOut.writeList(
+    writeList(
+        acctOut,
         acct.nonceChanges(),
         (nc, ncOut) -> {
           ncOut.startList();
@@ -86,7 +86,8 @@ public final class BlockAccessListEncoder {
           ncOut.endList();
         });
 
-    acctOut.writeList(
+    writeList(
+        acctOut,
         acct.codeChanges(),
         (cc, ccOut) -> {
           ccOut.startList();
@@ -96,5 +97,20 @@ public final class BlockAccessListEncoder {
         });
 
     acctOut.endList();
+  }
+
+  private static <T> void writeList(
+      final RLPOutput out, final List<T> entries, final BiConsumer<T, RLPOutput> entryEncoder) {
+    if (entries.size() < MIN_ENTRIES_TO_ENCODE_IN_PARALLEL) {
+      out.writeList(entries, entryEncoder);
+      return;
+    }
+    final List<Bytes> encodedEntries =
+        entries.parallelStream()
+            .map(entry -> RLP.encode(entryOut -> entryEncoder.accept(entry, entryOut)))
+            .toList();
+    out.startList();
+    encodedEntries.forEach(out::writeRaw);
+    out.endList();
   }
 }
