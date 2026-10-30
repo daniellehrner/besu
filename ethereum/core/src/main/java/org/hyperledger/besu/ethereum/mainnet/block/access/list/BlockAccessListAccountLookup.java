@@ -67,7 +67,7 @@ public final class BlockAccessListAccountLookup {
 
   public Optional<Hash> getAddressHash(final Address address) {
     final AccountEntry entry = accountEntries.get(address);
-    return entry == null ? Optional.empty() : Optional.of(entry.addressHash);
+    return entry == null ? Optional.empty() : Optional.of(entry.addressHash());
   }
 
   Optional<BlockAccessList.SlotChanges> getSlotChanges(
@@ -78,15 +78,24 @@ public final class BlockAccessListAccountLookup {
 
   private static final class AccountEntry {
     private final BlockAccessList.AccountChanges accountChanges;
-    private final Hash addressHash;
     private final Map<StorageSlotKey, BlockAccessList.SlotChanges> storageBySlot;
+    // Hashed on first use, by the transaction that needs it, rather than for every account
+    // before the block's transactions can start. Kept here rather than in Address's shared hash
+    // cache, which holds fewer entries than a large block touches.
+    private volatile Hash addressHash;
 
     private AccountEntry(final BlockAccessList.AccountChanges accountChanges) {
       this.accountChanges = accountChanges;
-      // Hashed here rather than through Address's shared hash cache, which holds fewer entries
-      // than a large block touches and would evict and recompute them.
-      this.addressHash = Hash.hash(accountChanges.address().getBytes());
       this.storageBySlot = buildStorageBySlot(accountChanges.storageChanges());
+    }
+
+    Hash addressHash() {
+      Hash hash = addressHash;
+      if (hash == null) {
+        hash = Hash.hash(accountChanges.address().getBytes());
+        addressHash = hash;
+      }
+      return hash;
     }
 
     private static Map<StorageSlotKey, BlockAccessList.SlotChanges> buildStorageBySlot(
