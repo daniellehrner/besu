@@ -138,6 +138,29 @@ public class BonsaiAccount implements MutableAccount, TrieAccountValue {
       final boolean mutable,
       final CodeCache codeCache)
       throws RLPException {
+    return fromRLP(context, address, address.addressHash(), encoded, mutable, codeCache);
+  }
+
+  /**
+   * Decodes an account whose address hash the caller already holds.
+   *
+   * @param context the world view of the account
+   * @param address the address of the account
+   * @param addressHash the hash of {@code address}
+   * @param encoded the encoded account
+   * @param mutable whether the account can be changed
+   * @param codeCache the code cache
+   * @return the account
+   * @throws RLPException if the encoding is invalid
+   */
+  public static BonsaiAccount fromRLP(
+      final BonsaiWorldView context,
+      final Address address,
+      final Hash addressHash,
+      final Bytes encoded,
+      final boolean mutable,
+      final CodeCache codeCache)
+      throws RLPException {
     final RLPInput in = RLP.input(encoded);
     in.enterList();
 
@@ -153,7 +176,7 @@ public class BonsaiAccount implements MutableAccount, TrieAccountValue {
     return new BonsaiAccount(
         context,
         address,
-        address.addressHash(),
+        addressHash,
         nonce,
         balance,
         storageRootStrategy,
