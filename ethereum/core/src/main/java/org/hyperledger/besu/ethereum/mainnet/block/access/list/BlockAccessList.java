@@ -29,6 +29,7 @@ import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -190,6 +191,9 @@ public record BlockAccessList(List<AccountChanges> accountChanges, Optional<Byte
   private record SortableAccountChanges(byte[] sortKey, AccountChanges value) {}
 
   public static class BlockAccessListBuilder {
+    /** Lists of at least this many accounts are built in parallel, one account per task. */
+    private static final int MIN_ACCOUNTS_TO_BUILD_IN_PARALLEL = 512;
+
     private final Map<Address, AccountBuilder> accountChangesBuilders = new HashMap<>();
 
     // Kept up to date on every change so a budget check per transaction does not walk the list.
@@ -298,17 +302,19 @@ public record BlockAccessList(List<AccountChanges> accountChanges, Optional<Byte
     }
 
     public BlockAccessList build() {
+      final Collection<AccountBuilder> accountBuilders = accountChangesBuilders.values();
       // Sorted on a copy of each address taken once: an address that wraps part of a larger
       // array, like a recovered sender's, would be copied by each of the sort's comparisons.
       final SortableAccountChanges[] entries =
-          new SortableAccountChanges[accountChangesBuilders.size()];
-      int i = 0;
-      for (AccountBuilder accountBuilder : accountChangesBuilders.values()) {
-        entries[i++] =
-            new SortableAccountChanges(
-                accountBuilder.address.getBytes().toArray(), accountBuilder.build());
-      }
-      Arrays.sort(entries, (a, b) -> Arrays.compareUnsigned(a.sortKey(), b.sortKey()));
+          (accountBuilders.size() >= MIN_ACCOUNTS_TO_BUILD_IN_PARALLEL
+                  ? accountBuilders.parallelStream()
+                  : accountBuilders.stream())
+              .map(
+                  accountBuilder ->
+                      new SortableAccountChanges(
+                          accountBuilder.address.getBytes().toArray(), accountBuilder.build()))
+              .toArray(SortableAccountChanges[]::new);
+      Arrays.parallelSort(entries, (a, b) -> Arrays.compareUnsigned(a.sortKey(), b.sortKey()));
       final List<AccountChanges> accountChanges = new ArrayList<>(entries.length);
       for (SortableAccountChanges entry : entries) {
         accountChanges.add(entry.value());
