@@ -6,8 +6,11 @@
 - `eth_getProof` now follows the execution-apis rules, regarding leading zeros and error codes. [#11668](https://github.com/besu-eth/besu/pull/11668)
 - `engine_getPayload` no longer waits for the in-progress block build when only the empty block has been built, as [execution-apis#958](https://github.com/ethereum/execution-apis/pull/958) requires. The default of `--Xpos-block-finalization-timeout-ms` changes from 800 to 0 and the option now accepts 0; set it to a positive value to restore the previous wait. [#11774](https://github.com/besu-eth/besu/pull/11774)
 - `eth_simulateV1` now rejects unknown account overrides [#11695](https://github.com/besu-eth/besu/pull/11695)
+- `trace_filter` rejects a single address string as `fromAddress` or `toAddress`, and a negative `after` or `count`, with `Invalid filter params` (`-32602`). A legacy call with another chain's `chainId` fails with `Wrong chainId` instead of running with the `chainId` dropped. [#11439](https://github.com/besu-eth/besu/pull/11439)
 
 ### Bug fixes
+- Full sync no longer keeps every 5-second sync target retry reachable while the node waits at the chain head, which grew the live heap of a long-running QBFT validator by about 6 MB a day. [#11760](https://github.com/besu-eth/besu/issues/11760)
+- `eth_simulateV1` now rejects precompiles moved to their own address with error `-38022`. [#11793](https://github.com/besu-eth/besu/issues/11793)
 - Block propagation now retries a block that peers do not serve with a delay that grows from 250 ms to 30 s and stops after 10 retries, releasing the block number for a later announcement. Previously it rescheduled the retrieval immediately and without a limit for as long as the number stayed in the propagation range. Block propagation stops once a finalized forkchoice is received, so this only affects networks that do not send one (Clique/PoA) and tests, not mainnet. [#11674](https://github.com/besu-eth/besu/pull/11674)
 - `eth_call`, `eth_estimateGas`, `eth_createAccessList` and `debug_traceCall` now reject an invalid state override with the error declared for it instead of `Internal error` (`-32603`). An account override that sets both `state` and `stateDiff` returns `Invalid call params` (`-32602`) and is no longer logged at `ERROR`, and `movePrecompileToAddress` on an address that is not a precompile returns `-32000`, as `eth_simulateV1` does. [#11590](https://github.com/besu-eth/besu/issues/11590)
 - eth_simulateV1 call errors now match the execution-apis schema: reverts return execution reverted[: <reason>], out of gas returns out of gas, and a failing precompile returns -32015 instead of 3. [#11635](https://github.com/besu-eth/besu/pull/11635)
@@ -16,6 +19,7 @@
 - On OpenTelemetry, a supplied metric created again, as by the world state download after a resync, now replaces the old one, as on Prometheus. Previously a labelled supplied gauge or counter threw `IllegalStateException` and a gauge kept reporting its first supplier. `debug_metrics` no longer fails on OpenTelemetry once a supplied counter is registered. [#11773](https://github.com/besu-eth/besu/pull/11773)
 - `trace_rawTransaction` now applies the `--rpc-max-trace-steps` cap, as `trace_call` and `trace_callMany` already do. It traced every step of the submitted transaction regardless of the setting. [#11438](https://github.com/besu-eth/besu/pull/11438)
 - Strict transaction replay protection (`--strict-tx-replay-protection-enabled`) no longer rejects transactions from priority senders received from peers; it applies only to transactions submitted via JSON-RPC, as documented. [#11466](https://github.com/besu-eth/besu/pull/11466)
+- With `--cache-last-blocks` set, RPC methods return the total difficulty of recently imported blocks instead of their own difficulty, which is 0 after the merge. [#11790](https://github.com/besu-eth/besu/pull/11790)
 
 ### Additions and Improvements
 - With `--Xevm-v2`, `MessageFrame.getMaybeUpdatedMemory` and `getMaybeUpdatedStorage` are recorded only while a tracer that traces operations runs. [#11690](https://github.com/besu-eth/besu/pull/11690)
@@ -24,6 +28,8 @@
 - Support Amsterdam hardfork at genesis on Ephemery, aligning with Ephemery iteration 165 and removing dynamic in-cycle BPO offsets. [#11728](https://github.com/besu-eth/besu/pull/11728)
 - `engine_newPayload` replies before it stores a valid block and its trie log. [#11682](https://github.com/besu-eth/besu/pull/11682)
 - Block import preloads and commits only the state a block changes, and builds trie keys without streams. [#11758](https://github.com/besu-eth/besu/pull/11758)
+- QBFT validators import a committed block without executing it again when they created it or validated it as a proposal, including after a round change, removing one block execution from the critical path of every block. A proposer no longer executes its own proposal again to validate it. [#11469](https://github.com/besu-eth/besu/pull/11469) [#11817](https://github.com/besu-eth/besu/pull/11817)
+- `--sync-mode=SNAP2` downloads the chain and the state together, the state following the chain head through block access lists. [#11803](https://github.com/besu-eth/besu/pull/11803)
 
 ## 26.10.2
 
