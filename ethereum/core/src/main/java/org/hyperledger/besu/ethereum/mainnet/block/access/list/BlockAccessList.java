@@ -40,6 +40,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiPredicate;
+import java.util.function.ToLongFunction;
 import java.util.stream.IntStream;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
@@ -121,8 +122,10 @@ public final class BlockAccessList {
    * @param other the list to compare with
    * @return whether the lists hold the same changes
    */
+  @SuppressWarnings("ReferenceEquality") // a block's own list is often compared with itself
   public boolean hasSameChangesAs(final BlockAccessList other) {
-    return sameEntries(accountChanges, other.accountChanges, BlockAccessList::sameChanges);
+    return other == this
+        || sameEntries(accountChanges, other.accountChanges, BlockAccessList::sameChanges);
   }
 
   private static boolean sameChanges(final AccountChanges a, final AccountChanges b) {
@@ -384,6 +387,37 @@ public final class BlockAccessList {
       }
     }
 
+    /**
+     * Whether the list {@link #build()} returns would hold the same changes as {@code list},
+     * checked without building it: a block's list that matches its execution is then used as it is,
+     * rather than built, sorted and compared again. A list out of canonical order never matches.
+     *
+     * @param list the list to compare with
+     * @return whether the built list would hold the same changes
+     */
+    public boolean hasSameChangesAs(final BlockAccessList list) {
+      final List<AccountChanges> accounts = list.accountChanges();
+      if (accounts.size() != accountChangesBuilders.size()) {
+        return false;
+      }
+      final IntStream indices = IntStream.range(0, accounts.size());
+      return (accounts.size() >= MIN_ACCOUNTS_TO_BUILD_IN_PARALLEL ? indices.parallel() : indices)
+          .allMatch(
+              i -> {
+                final AccountChanges account = accounts.get(i);
+                final AccountBuilder builder = accountChangesBuilders.get(account.address());
+                return builder != null
+                    && (i == 0
+                        || accounts
+                                .get(i - 1)
+                                .address()
+                                .getBytes()
+                                .compareTo(account.address().getBytes())
+                            < 0)
+                    && builder.hasSameChangesAs(account);
+              });
+    }
+
     public BlockAccessList build() {
       final Collection<AccountBuilder> accountBuilders = accountChangesBuilders.values();
       // Sorted on a copy of each address taken once: an address that wraps part of a larger
@@ -554,6 +588,67 @@ public final class BlockAccessList {
 
       void addCodeChange(final long txIndex, final Bytes code) {
         codes.add(new CodeChange(txIndex, code));
+      }
+
+      /**
+       * Whether {@link #build()} would return the same changes as {@code changes}, which match only
+       * in canonical order. The changes were added in transaction order, so a canonical account's
+       * lists match them as they are.
+       */
+      boolean hasSameChangesAs(final AccountChanges changes) {
+        return balances.equals(changes.balanceChanges())
+            && ascending(changes.balanceChanges(), BalanceChange::txIndex)
+            && nonces.equals(changes.nonceChanges())
+            && ascending(changes.nonceChanges(), NonceChange::txIndex)
+            && codes.equals(changes.codeChanges())
+            && ascending(changes.codeChanges(), CodeChange::txIndex)
+            && hasSameSlotWrites(changes.storageChanges())
+            && hasSameSlotReads(changes.storageReads());
+      }
+
+      private boolean hasSameSlotWrites(final List<SlotChanges> slotChanges) {
+        if (slotChanges.size() != slotWrites.size()) {
+          return false;
+        }
+        UInt256 previous = null;
+        for (final SlotChanges slot : slotChanges) {
+          final UInt256 key = slot.slot().getSlotKey().orElse(null);
+          if (key == null || (previous != null && previous.compareTo(key) >= 0)) {
+            return false;
+          }
+          previous = key;
+          if (!slot.changes().equals(slotWrites.get(slot.slot()))
+              || !ascending(slot.changes(), StorageChange::txIndex)) {
+            return false;
+          }
+        }
+        return true;
+      }
+
+      private boolean hasSameSlotReads(final List<SlotRead> reads) {
+        if (reads.size() != slotReads.size()) {
+          return false;
+        }
+        UInt256 previous = null;
+        for (final SlotRead read : reads) {
+          final UInt256 key = read.slot().getSlotKey().orElse(null);
+          if (key == null
+              || (previous != null && previous.compareTo(key) >= 0)
+              || !slotReads.contains(read.slot())) {
+            return false;
+          }
+          previous = key;
+        }
+        return true;
+      }
+
+      private static <T> boolean ascending(final List<T> changes, final ToLongFunction<T> txIndex) {
+        for (int i = 1; i < changes.size(); i++) {
+          if (txIndex.applyAsLong(changes.get(i - 1)) >= txIndex.applyAsLong(changes.get(i))) {
+            return false;
+          }
+        }
+        return true;
       }
 
       AccountChanges build() {

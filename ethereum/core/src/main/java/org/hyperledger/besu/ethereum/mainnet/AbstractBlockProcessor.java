@@ -485,7 +485,10 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
       final Optional<BlockAccessList> maybeBlockAccessList;
       try {
         if (blockAccessListBuilder.isPresent()) {
-          final BlockAccessList bal = blockAccessListBuilder.get().build();
+          final BlockAccessListBuilder builder = blockAccessListBuilder.get();
+          // a block's list that matches its execution is used as it is rather than built again
+          final BlockAccessList bal =
+              blockAccessList.filter(builder::hasSameChangesAs).orElseGet(builder::build);
           final Optional<BlockAccessListValidationError> constructedBalError =
               protocolSpec
                   .getBlockAccessListValidator()
