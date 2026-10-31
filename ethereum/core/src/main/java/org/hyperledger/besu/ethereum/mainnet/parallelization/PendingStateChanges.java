@@ -41,8 +41,6 @@ final class PendingStateChanges {
   // transactions finish, on the thread that waits for them, rather than when they are imported.
   private final List<Map<Address, List<PartialBlockAccessView.AccountChanges>>> groups;
 
-  private int transactionCount;
-
   PendingStateChanges(final int groupCount) {
     groups = new ArrayList<>(groupCount);
     for (int i = 0; i < groupCount; i++) {
@@ -60,12 +58,6 @@ final class PendingStateChanges {
           .computeIfAbsent(address, __ -> new ArrayList<>(1))
           .add(accountChanges);
     }
-    transactionCount++;
-  }
-
-  /** The number of transactions whose changes were added since the last import. */
-  int transactionCount() {
-    return transactionCount;
   }
 
   /**
@@ -98,7 +90,6 @@ final class PendingStateChanges {
       throw e;
     } finally {
       groups.forEach(Map::clear);
-      transactionCount = 0;
     }
   }
 }
