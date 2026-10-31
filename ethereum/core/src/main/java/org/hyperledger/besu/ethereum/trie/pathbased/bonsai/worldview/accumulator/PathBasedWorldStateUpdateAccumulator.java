@@ -251,7 +251,10 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
       if (change.getNewCode().isPresent()) {
         newCode = change.getNewCode();
       }
-      storageChanges.addAll(change.getStorageChanges());
+      // a hot account, like the coinbase, has a change from every transaction, mostly without slots
+      if (!change.getStorageChanges().isEmpty()) {
+        storageChanges.addAll(change.getStorageChanges());
+      }
     }
     return new PartialBlockAccessView.AccountChanges(
         address, postBalance, nonceChange, newCode, List.of(), storageChanges);
