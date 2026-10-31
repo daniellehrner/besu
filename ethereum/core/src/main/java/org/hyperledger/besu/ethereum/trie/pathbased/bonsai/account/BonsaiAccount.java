@@ -169,7 +169,11 @@ public class BonsaiAccount implements MutableAccount, TrieAccountValue {
     final StorageRootStrategy storageRootStrategy =
         new MptStorageRootStrategy(Hash.EMPTY_TRIE_HASH);
     storageRootStrategy.readStorageRoot(in);
-    final Hash codeHash = Hash.wrap(in.readBytes32());
+    final Bytes32 encodedCodeHash = in.readBytes32();
+    // Most accounts hold no code. Their code hash is checked against the empty one many times, and
+    // comparing with the constant itself is an identity check rather than a copy of this slice.
+    final Hash codeHash =
+        encodedCodeHash.equals(Hash.EMPTY.getBytes()) ? Hash.EMPTY : Hash.wrap(encodedCodeHash);
 
     in.leaveList();
 
