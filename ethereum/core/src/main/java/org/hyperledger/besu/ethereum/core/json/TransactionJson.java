@@ -30,7 +30,6 @@ import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
 import com.fasterxml.jackson.databind.ser.std.StdSerializer;
-import org.apache.tuweni.bytes.Bytes;
 
 public final class TransactionJson {
 
@@ -97,6 +96,6 @@ public final class TransactionJson {
 
   private static Transaction decode(final String encoded) {
     return TransactionDecoder.decodeOpaqueBytes(
-        Bytes.fromHexString(encoded), EncodingContext.BLOCK_BODY);
+        HexUtils.fromHexString(encoded), EncodingContext.BLOCK_BODY);
   }
 }
