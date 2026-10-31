@@ -139,6 +139,46 @@ class BonsaiWorldStateUpdateAccumulatorTest {
   }
 
   @Test
+  void importAndCommitAccountChanges_inBatchesLeavesTheStateOfImportingTogether() {
+    final List<PartialBlockAccessView> transactions =
+        List.of(
+            partialView(
+                1,
+                view -> {
+                  view.getOrCreateAccountBuilder(ACCOUNT)
+                      .withPostBalance(Wei.of(5))
+                      .withNonceChange(1L)
+                      .addStorageChange(SLOT, V0, V1);
+                  view.getOrCreateAccountBuilder(CREATED).withPostBalance(Wei.of(10));
+                }),
+            partialView(
+                2,
+                view -> {
+                  view.getOrCreateAccountBuilder(ACCOUNT)
+                      .withPostBalance(Wei.of(7))
+                      .addStorageChange(SLOT, V1, V2);
+                  view.getOrCreateAccountBuilder(CREATED).withNonceChange(3L);
+                }),
+            partialView(
+                3, view -> view.getOrCreateAccountBuilder(ABSENT).withPostBalance(Wei.of(4))));
+
+    final TrieLogLayer inBatches;
+    try (BonsaiWorldState worldState = newEmptyWorldState()) {
+      final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
+      for (final List<PartialBlockAccessView> batch :
+          List.of(transactions.subList(0, 1), transactions.subList(1, 3))) {
+        accumulator.importAndCommitAccountChanges(
+            byAccount(batch.stream().flatMap(t -> t.accountChanges().stream()).toList()),
+            true,
+            BlockAccessListAccountLookup.of(new BlockAccessList(List.of())));
+      }
+      inBatches = trieLog(accumulator);
+    }
+
+    assertThat(inBatches.dump()).isEqualTo(trieLogOfImportingTogether(transactions).dump());
+  }
+
+  @Test
   void importAndCommitAccountChanges_keepsTheStorageOfAnAccountDeletedAndCreatedAgainCleared() {
     // the account has neither nonce nor code, so a zero balance empties it and deletes its slot
     final List<PartialBlockAccessView> transactions =

@@ -47,6 +47,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,6 +57,12 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
 
   private static final Logger LOG =
       LoggerFactory.getLogger(BalConcurrentTransactionProcessor.class);
+
+  /**
+   * The changes are imported whenever this many transactions have added theirs, while the others
+   * still run, so that less is left to import once they are all done.
+   */
+  private static final int IMPORT_BATCH_TRANSACTIONS = 1024;
 
   private final MainnetTransactionProcessor transactionProcessor;
   private final BlockAccessListAccountLookup blockAccessListAccountLookup;
@@ -276,6 +283,10 @@ public class BalConcurrentTransactionProcessor extends ParallelBlockTransactionP
       }
 
       pendingStateChanges.add(maybePartialBlockAccessView.get());
+      if (pendingStateChanges.transactionCount() >= IMPORT_BATCH_TRANSACTIONS) {
+        // the transactions keep the block's pool busy, so the batch is imported on the common one
+        importPendingStateChanges(worldState, ForkJoinPool.commonPool());
+      }
 
       confirmedParallelizedTransactionCounter.ifPresent(Counter::inc);
       result.setIsProcessedInParallel(Optional.of(Boolean.TRUE));
