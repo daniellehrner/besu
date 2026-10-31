@@ -40,6 +40,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiPredicate;
+import java.util.function.IntPredicate;
 import java.util.function.ToLongFunction;
 import java.util.stream.IntStream;
 
@@ -596,12 +597,9 @@ public final class BlockAccessList {
        * lists match them as they are.
        */
       boolean hasSameChangesAs(final AccountChanges changes) {
-        return balances.equals(changes.balanceChanges())
-            && ascending(changes.balanceChanges(), BalanceChange::txIndex)
-            && nonces.equals(changes.nonceChanges())
-            && ascending(changes.nonceChanges(), NonceChange::txIndex)
-            && codes.equals(changes.codeChanges())
-            && ascending(changes.codeChanges(), CodeChange::txIndex)
+        return sameChangesInOrder(balances, changes.balanceChanges(), BalanceChange::txIndex)
+            && sameChangesInOrder(nonces, changes.nonceChanges(), NonceChange::txIndex)
+            && sameChangesInOrder(codes, changes.codeChanges(), CodeChange::txIndex)
             && hasSameSlotWrites(changes.storageChanges())
             && hasSameSlotReads(changes.storageReads());
       }
@@ -617,8 +615,8 @@ public final class BlockAccessList {
             return false;
           }
           previous = key;
-          if (!slot.changes().equals(slotWrites.get(slot.slot()))
-              || !ascending(slot.changes(), StorageChange::txIndex)) {
+          if (!sameChangesInOrder(
+              slotWrites.get(slot.slot()), slot.changes(), StorageChange::txIndex)) {
             return false;
           }
         }
@@ -642,9 +640,27 @@ public final class BlockAccessList {
         return true;
       }
 
-      private static <T> boolean ascending(final List<T> changes, final ToLongFunction<T> txIndex) {
-        for (int i = 1; i < changes.size(); i++) {
-          if (txIndex.applyAsLong(changes.get(i - 1)) >= txIndex.applyAsLong(changes.get(i))) {
+      /**
+       * Whether the changes added equal {@code changes} and those are in ascending order of
+       * transaction index, as {@link #build()} sorts them. A long list, like the coinbase's with a
+       * change per transaction, is compared in parallel.
+       */
+      private static <T> boolean sameChangesInOrder(
+          final List<T> added, final List<T> changes, final ToLongFunction<T> txIndex) {
+        if (added == null || added.size() != changes.size()) {
+          return false;
+        }
+        final IntPredicate same =
+            i ->
+                changes.get(i).equals(added.get(i))
+                    && (i == 0
+                        || txIndex.applyAsLong(changes.get(i - 1))
+                            < txIndex.applyAsLong(changes.get(i)));
+        if (changes.size() >= MIN_ENTRIES_TO_COMPARE_IN_PARALLEL) {
+          return IntStream.range(0, changes.size()).parallel().allMatch(same);
+        }
+        for (int i = 0; i < changes.size(); i++) {
+          if (!same.test(i)) {
             return false;
           }
         }
