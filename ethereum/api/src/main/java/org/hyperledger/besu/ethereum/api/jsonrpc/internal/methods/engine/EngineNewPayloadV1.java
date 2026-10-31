@@ -59,8 +59,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Executor;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Supplier;
 
 import com.fasterxml.jackson.databind.JsonMappingException;
 import org.jspecify.annotations.NonNull;
@@ -82,15 +80,6 @@ public sealed class EngineNewPayloadV1<
   private static final Logger LOG = LoggerFactory.getLogger(EngineNewPayloadV1.class);
   private static final Hash OMMERS_HASH_CONSTANT = Hash.EMPTY_LIST_HASH;
   private static final BlockHeaderFunctions HEADER_FUNCTIONS = new MainnetBlockHeaderFunctions();
-
-  /**
-   * Senders are recovered on half the processors. The transactions run on all of them meanwhile,
-   * and recovering a signature gains little from a core's second hardware thread, so more threads
-   * recovering only take the processors from the transactions.
-   */
-  private static final int SENDER_RECOVERY_TASKS =
-      Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
-
   private final EthPeers ethPeers;
   private long lastExecutionTimeInNs = 0L;
   private long lastInvalidWarn = 0L;
@@ -355,31 +344,21 @@ public sealed class EngineNewPayloadV1<
   private void asyncPrecomputeSenders(final List<Transaction> transactions) {
     // The parallel execution recovers senders from the first transaction on; starting from the
     // last keeps the two from contending for the same transactions.
-    final AtomicInteger next = new AtomicInteger(transactions.size());
-    final Supplier<Void> recoverSenders =
-        () -> {
-          int i;
-          while ((i = next.decrementAndGet()) >= 0) {
-            final Transaction transaction = transactions.get(i);
-            try {
-              final var sender = transaction.getSender();
-              logger()
-                  .atTrace()
-                  .setMessage("The sender for transaction {} is calculated : {}")
-                  .addArgument(transaction::getHash)
-                  .addArgument(sender)
-                  .log();
-            } catch (final RuntimeException e) {
-              // an invalid signature is reported when the block is validated
-            }
-          }
-          return null;
-        };
-    for (int task = 0; task < Math.min(SENDER_RECOVERY_TASKS, transactions.size()); task++) {
-      mergeCoordinator.getEthScheduler().scheduleComputationTask(recoverSenders);
-    }
     for (int i = transactions.size() - 1; i >= 0; i--) {
       final Transaction transaction = transactions.get(i);
+      mergeCoordinator
+          .getEthScheduler()
+          .scheduleComputationTask(
+              () -> {
+                final var sender = transaction.getSender();
+                logger()
+                    .atTrace()
+                    .setMessage("The sender for transaction {} is calculated : {}")
+                    .addArgument(transaction::getHash)
+                    .addArgument(sender)
+                    .log();
+                return sender;
+              });
       if (transaction.getType().supportsDelegateCode()) {
         asyncPrecomputeAuthorities(transaction);
       }
