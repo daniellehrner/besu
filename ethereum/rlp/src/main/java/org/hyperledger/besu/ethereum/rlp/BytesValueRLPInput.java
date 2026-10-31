@@ -401,17 +401,20 @@ public class BytesValueRLPInput implements RLPInput {
     return UInt64.fromBytes(readBytes8Scalar());
   }
 
-  private Bytes32 readBytes32Scalar() {
-    checkScalar("32-bytes scalar", 32);
-    final MutableBytes32 res = MutableBytes32.create();
-    payloadSlice().copyTo(res, res.size() - currentPayloadSize);
-    setTo(nextItem());
-    return res;
-  }
-
   @Override
   public UInt256 readUInt256Scalar() {
-    return UInt256.fromBytes(readBytes32Scalar());
+    checkScalar("32-bytes scalar", 32);
+    final UInt256 res;
+    if (currentPayloadSize < Long.BYTES) {
+      // most amounts fit a long, which saves copying them to a 32-byte array first
+      res = UInt256.valueOf(readGenericLongScalar());
+    } else {
+      final MutableBytes32 bytes = MutableBytes32.create();
+      payloadSlice().copyTo(bytes, bytes.size() - currentPayloadSize);
+      res = UInt256.fromBytes(bytes);
+    }
+    setTo(nextItem());
+    return res;
   }
 
   @Override
