@@ -41,6 +41,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.bigints.UInt256;
@@ -228,6 +229,64 @@ class SyncAttemptTest {
         .withThrowableThat()
         .havingRootCause()
         .isInstanceOf(CancellationException.class);
+    verify(node.storage, never()).saveWorldState(any(), any());
+  }
+
+  @Test
+  void buildsTheTriesOnceTheStorageIsReadyForIt() {
+    chain.extend(10);
+    final SyncAttempt attempt = attempt(6);
+    final AtomicReference<CompletableFuture<Void>> prepared = new AtomicReference<>();
+    doAnswer(
+            invocation -> {
+              prepared.set(new CompletableFuture<>());
+              return prepared.get();
+            })
+        .when(node.storage)
+        .prepareTrieBuild();
+    final CompletableFuture<BlockHeader> synced = attempt.start();
+
+    node.runUntil(() -> prepared.get() != null);
+    for (int rounds = 0; rounds < 10; rounds++) {
+      node.round();
+    }
+    assertThat(attempt.trieBuilder()).isEmpty();
+    assertThat(synced).isNotDone();
+
+    prepared.get().complete(null);
+    node.runUntil(synced::isDone);
+
+    assertThat(synced).isCompleted();
+    verify(node.storage).saveWorldState(any(), any());
+  }
+
+  @Test
+  void stopsWaitingForTheStorageWhenCancelled() throws InterruptedException {
+    chain.extend(10);
+    final SyncAttempt attempt = attempt(6);
+    final AtomicReference<CompletableFuture<Void>> prepared = new AtomicReference<>();
+    doAnswer(
+            invocation -> {
+              prepared.set(new CompletableFuture<>());
+              return prepared.get();
+            })
+        .when(node.storage)
+        .prepareTrieBuild();
+    final CompletableFuture<BlockHeader> synced = attempt.start();
+    node.runUntil(() -> prepared.get() != null);
+
+    attempt.cancel();
+    attempt.awaitStop();
+    node.runUntil(synced::isDone);
+
+    assertThat(prepared.get()).isCancelled();
+    assertThat(synced)
+        .failsWithin(Duration.ZERO)
+        .withThrowableThat()
+        .havingRootCause()
+        .isInstanceOf(CancellationException.class);
+    assertThat(attempt.trieBuilder()).isEmpty();
+    verify(node.storage, never()).partitionTrieWriter();
     verify(node.storage, never()).saveWorldState(any(), any());
   }
 

@@ -22,6 +22,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -29,6 +33,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -37,6 +42,7 @@ import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.CompactionOptions;
 import org.rocksdb.LevelMetaData;
 import org.rocksdb.MutableColumnFamilyOptions;
+import org.rocksdb.MutableDBOptions;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.SstFileMetaData;
 import org.slf4j.Logger;
@@ -56,7 +62,11 @@ import org.slf4j.LoggerFactory;
  * limits on level 0 and on the bytes waiting to be compacted lifted until level 0 is merged down,
  * in the background. Nothing is compacted by hand: a manual compaction of a whole column family
  * merges every level into the next and so rewrites the bottom level, which holds nearly all of the
- * load, for the sake of the few files above it.
+ * load, for the sake of the few files above it. While level 0 is merged down the compactions read
+ * ahead less: such a merge reads every file of level 0 at once, each with a buffer of its own.
+ *
+ * <p>A column family can be let go before the others, when it is read much before the load ends and
+ * its regular writes piled up in level 0, where a read checks every file.
  *
  * <p>Only the small files of the bottom level are merged, in the background once level 0 of their
  * column family is merged down. RocksDB never rewrites a file there on its own, and a load that
@@ -79,6 +89,8 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
   // the most target sizes of small files merged in one go
   private static final int MAX_MERGE_TARGETS = 8;
   private static final int MERGE_THREADS = 4;
+  // the buffers of a thousand files in level 0 then take 256 MB, against 2 GB at RocksDB's default
+  private static final long DRAIN_READAHEAD_BYTES = 256 * 1024;
 
   private final RocksDBColumnarKeyValueStorage storage;
   private final List<SegmentIdentifier> segments;
@@ -87,6 +99,9 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
   private final List<Draining> draining = new ArrayList<>();
   // the segments whose small files are merged once their level 0 is merged down
   private final List<SegmentIdentifier> toMerge = new ArrayList<>();
+  // the segments let go before the load was closed
+  private final Set<SegmentIdentifier> ended = ConcurrentHashMap.newKeySet();
+  private final AtomicInteger drainsRunning = new AtomicInteger();
   private final CountDownLatch done = new CountDownLatch(1);
   // set once the storage starts closing
   private volatile boolean stopping;
@@ -113,7 +128,7 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
   }
 
   @Override
-  public void close() {
+  public synchronized void close() {
     if (!closed.compareAndSet(false, true)) {
       return;
     }
@@ -122,8 +137,11 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
         // the column families come back with automatic compaction on when the database is opened
         return;
       }
+      if (ended.contains(segment)) {
+        continue;
+      }
       try {
-        resumeCompaction(segment);
+        resumeCompaction(segment).ifPresent(draining::add);
         toMerge.add(segment);
       } catch (final RuntimeException e) {
         if (storage.isClosed()) {
@@ -139,7 +157,76 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
     startBackgroundWork();
   }
 
-  private void resumeCompaction(final SegmentIdentifier segment) {
+  /**
+   * Lets one segment go before the load is closed, in the way {@link #close()} does.
+   *
+   * <p>The merge of its level 0 that follows is not stopped by cancelling the returned future, and
+   * the limits it lifted are put back once it is done whatever happened to the future.
+   */
+  @Override
+  public synchronized CompletableFuture<Void> end(final SegmentIdentifier segment) {
+    if (closed.get() || !segments.contains(segment) || !ended.add(segment)) {
+      return CompletableFuture.completedFuture(null);
+    }
+    final Optional<Draining> drain;
+    try {
+      drain = resumeCompaction(segment);
+    } catch (final RuntimeException e) {
+      return CompletableFuture.failedFuture(e);
+    }
+    if (drain.isEmpty()) {
+      return CompletableFuture.completedFuture(null);
+    }
+    final CompletableFuture<Void> drained = new CompletableFuture<>();
+    final CountDownLatch watched = new CountDownLatch(1);
+    storage.onClose(
+        () -> {
+          stopping = true;
+          awaitQuietly(watched);
+        });
+    Thread.ofPlatform()
+        .daemon()
+        .name("rocksdb-bulk-load-end")
+        .start(() -> watchLevel0(drain.get(), drained, watched));
+    return drained;
+  }
+
+  private void watchLevel0(
+      final Draining segment, final CompletableFuture<Void> drained, final CountDownLatch watched) {
+    try {
+      while (!stopping && !storage.isClosed()) {
+        if (restoreIfDrained(segment)) {
+          drained.complete(null);
+          return;
+        }
+        Thread.sleep(LEVEL0_POLL_MILLIS);
+      }
+      drained.completeExceptionally(new StorageException("storage closed"));
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+      drained.completeExceptionally(e);
+    } catch (final RuntimeException e) {
+      if (!storage.isClosed()) {
+        LOG.warn("Watching level 0 after the bulk load failed, its limits stay lifted", e);
+      }
+      drained.completeExceptionally(e);
+    } finally {
+      watched.countDown();
+    }
+  }
+
+  private static void awaitQuietly(final CountDownLatch latch) {
+    try {
+      if (!latch.await(1, TimeUnit.MINUTES)) {
+        LOG.warn("Bulk load work still running a minute after the storage started closing");
+      }
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
+  }
+
+  // the segment to watch until its level 0 is merged down, if it is not already
+  private Optional<Draining> resumeCompaction(final SegmentIdentifier segment) {
     final ColumnFamilyOptions configured = storage.columnFamilyOptions(segment);
     final int slowdownTrigger = configured.level0SlowdownWritesTrigger();
     final int stopTrigger = configured.level0StopWritesTrigger();
@@ -148,8 +235,10 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
     LOG.info("Bulk load of the {} segment ended with {}", segment.getName(), levels(segment));
     if (isDrained(segment, slowdownTrigger, softPendingLimit)) {
       setOptions(segment, MutableColumnFamilyOptions.builder().setDisableAutoCompactions(false));
-      return;
+      return Optional.empty();
     }
+    // before the merge starts, which takes the readahead it finds
+    drainStarted();
     // RocksDB does not hold back writes for the files in level 0 while automatic compaction is
     // off, but does so the moment it is switched on: with this many files, or this many bytes
     // waiting to be compacted, it would slow down or stop every write to the database, not only
@@ -163,7 +252,7 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
             .setSoftPendingCompactionBytesLimit(NO_PENDING_COMPACTION_LIMIT)
             .setHardPendingCompactionBytesLimit(NO_PENDING_COMPACTION_LIMIT)
             .setDisableAutoCompactions(false));
-    draining.add(
+    return Optional.of(
         new Draining(
             segment,
             slowdownTrigger,
@@ -171,6 +260,29 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
             softPendingLimit,
             hardPendingLimit,
             System.nanoTime()));
+  }
+
+  private void drainStarted() {
+    if (drainsRunning.getAndIncrement() == 0) {
+      setCompactionReadahead(DRAIN_READAHEAD_BYTES);
+    }
+  }
+
+  private void drainEnded() {
+    if (drainsRunning.decrementAndGet() == 0) {
+      setCompactionReadahead(storage.options.compactionReadaheadSize());
+    }
+  }
+
+  // best effort: the merge works with any readahead
+  private void setCompactionReadahead(final long bytes) {
+    try {
+      storage
+          .getDB()
+          .setDBOptions(MutableDBOptions.builder().setCompactionReadaheadSize(bytes).build());
+    } catch (final RocksDBException e) {
+      LOG.warn("Could not set the compaction readahead to {} bytes", bytes, e);
+    }
   }
 
   private boolean isDrained(
@@ -244,6 +356,7 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
             .setLevel0StopWritesTrigger(segment.stopTrigger())
             .setSoftPendingCompactionBytesLimit(segment.softPendingLimit())
             .setHardPendingCompactionBytesLimit(segment.hardPendingLimit()));
+    drainEnded();
     LOG.info(
         "Level 0 of the {} segment was merged down {} s after its bulk load",
         segment.segment().getName(),

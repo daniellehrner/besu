@@ -14,11 +14,26 @@
  */
 package org.hyperledger.besu.plugin.services.storage;
 
+import java.util.concurrent.CompletableFuture;
+
 /**
  * A bulk load of one or more segments in progress, see {@link
  * SegmentedKeyValueStorage#startBulkLoad}.
  */
 public interface SegmentBulkLoad extends AutoCloseable {
+
+  /**
+   * Ends the load of one of the segments before the others, as {@link #close()} does for all. Reads
+   * of a segment that took in much through regular writes during the load are slow until the
+   * storage has caught up on it. The default implementation does nothing.
+   *
+   * @param segment the segment
+   * @return completes once the storage has caught up on the segment; cancelling it only stops the
+   *     wait
+   */
+  default CompletableFuture<Void> end(final SegmentIdentifier segment) {
+    return CompletableFuture.completedFuture(null);
+  }
 
   /**
    * Ends the bulk load. The storage catches up on the reorganisation of the segments it held back,

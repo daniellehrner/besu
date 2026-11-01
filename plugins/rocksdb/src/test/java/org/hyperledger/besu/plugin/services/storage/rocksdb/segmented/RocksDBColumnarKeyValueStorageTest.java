@@ -987,6 +987,66 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
   }
 
   @Test
+  public void bulkLoadLetsOneSegmentGoBeforeTheOthers() throws Exception {
+    final RocksDBColumnarKeyValueStorage store =
+        (RocksDBColumnarKeyValueStorage) createSegmentedStore();
+    final int overlappingFiles = 50;
+    final long readahead = store.getDB().getDBOptions().compactionReadaheadSize();
+    final SegmentBulkLoad bulkLoad = store.startBulkLoad(List.of(TestSegment.FOO, TestSegment.BAR));
+
+    try (bulkLoad) {
+      for (int i = 0; i < overlappingFiles; i++) {
+        final SortedWriter writer = store.startSortedWriter(TestSegment.FOO);
+        writer.put(bytesOf(1), bytesOf(i));
+        writer.put(bytesOf(100), bytesOf(i));
+        writer.commit();
+      }
+      assertThat(filesAtLevel(store, TestSegment.FOO, 0)).isEqualTo(overlappingFiles - 1);
+
+      assertThat(bulkLoad.end(TestSegment.FOO)).succeedsWithin(Duration.ofSeconds(30));
+
+      assertThat(filesAtLevel(store, TestSegment.FOO, 0)).isLessThan(LEVEL0_SLOWDOWN_TRIGGER);
+      assertThat(isAutoCompactionDisabled(store, TestSegment.FOO)).isFalse();
+      assertThat(level0SlowdownTrigger(store, TestSegment.FOO)).isEqualTo(LEVEL0_SLOWDOWN_TRIGGER);
+      assertThat(level0StopTrigger(store, TestSegment.FOO)).isEqualTo(LEVEL0_STOP_TRIGGER);
+      assertThat(softPendingCompactionLimit(store, TestSegment.FOO))
+          .isEqualTo(SOFT_PENDING_COMPACTION_LIMIT);
+      assertThat(store.getDB().getDBOptions().compactionReadaheadSize()).isEqualTo(readahead);
+      assertThat(isAutoCompactionDisabled(store, TestSegment.BAR)).isTrue();
+      // a second end finds nothing to do
+      assertThat(bulkLoad.end(TestSegment.FOO)).isCompleted();
+    }
+
+    assertThat(isAutoCompactionDisabled(store, TestSegment.BAR)).isFalse();
+    assertThat(store.get(TestSegment.FOO, bytesOf(1))).contains(bytesOf(overlappingFiles - 1));
+    assertThat(store.get(TestSegment.FOO, bytesOf(100))).contains(bytesOf(overlappingFiles - 1));
+
+    store.close();
+  }
+
+  @Test
+  public void bulkLoadLetsASegmentWithFewFilesGoAtOnce() throws Exception {
+    final RocksDBColumnarKeyValueStorage store =
+        (RocksDBColumnarKeyValueStorage) createSegmentedStore();
+    final SegmentBulkLoad bulkLoad = store.startBulkLoad(List.of(TestSegment.FOO));
+
+    try (bulkLoad) {
+      final SegmentedKeyValueStorageTransaction tx = store.startTransaction();
+      tx.put(TestSegment.FOO, bytesOf(1), bytesOf(1));
+      tx.commit();
+
+      assertThat(bulkLoad.end(TestSegment.FOO)).isCompleted();
+      assertThat(isAutoCompactionDisabled(store, TestSegment.FOO)).isFalse();
+      // not part of the load
+      assertThat(bulkLoad.end(TestSegment.BAR)).isCompleted();
+      assertThat(isAutoCompactionDisabled(store, TestSegment.BAR)).isFalse();
+    }
+    assertThat(store.get(TestSegment.FOO, bytesOf(1))).contains(bytesOf(1));
+
+    store.close();
+  }
+
+  @Test
   public void bulkLoadLeavesTheFilesAboveTheBottomLevelWhenClosed() throws Exception {
     final RocksDBColumnarKeyValueStorage store =
         (RocksDBColumnarKeyValueStorage) createSegmentedStore();

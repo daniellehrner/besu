@@ -35,6 +35,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.bytes.Bytes;
@@ -385,6 +386,24 @@ public final class BonsaiSyncStateStorage extends AbstractSyncStateStorage {
                   ? List.of(ACCOUNT_INFO_STATE, ACCOUNT_STORAGE_STORAGE, TRIE_BRANCH_STORAGE)
                   : List.of(ACCOUNT_INFO_STATE, ACCOUNT_STORAGE_STORAGE));
     }
+  }
+
+  @Override
+  public CompletableFuture<Void> prepareTrieBuild() {
+    final SegmentBulkLoad load = bulkLoad;
+    if (load == null) {
+      return CompletableFuture.completedFuture(null);
+    }
+    // the slots written outside the sorted files are all in level 0, which every iterator of the
+    // build's scan opens, one per account
+    LOG.info("SNAP2 merging the slots written while downloading before the trie build");
+    return load.end(ACCOUNT_STORAGE_STORAGE)
+        .exceptionally(
+            error -> {
+              // slower, not wrong
+              LOG.warn("SNAP2 trie build starts before the slots are merged", error);
+              return null;
+            });
   }
 
   @Override
