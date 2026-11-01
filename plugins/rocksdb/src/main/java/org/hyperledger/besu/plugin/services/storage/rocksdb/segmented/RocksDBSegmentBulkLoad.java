@@ -63,7 +63,8 @@ import org.slf4j.LoggerFactory;
  * in the background. Nothing is compacted by hand: a manual compaction of a whole column family
  * merges every level into the next and so rewrites the bottom level, which holds nearly all of the
  * load, for the sake of the few files above it. While level 0 is merged down the compactions read
- * ahead less: such a merge reads every file of level 0 at once, each with a buffer of its own.
+ * ahead less: such a merge reads every file of level 0 at once, each with a buffer of its own. They
+ * also get more threads, as the merge holds one for as long as it runs.
  *
  * <p>A column family can be let go before the others, when it is read much before the load ends and
  * its regular writes piled up in level 0, where a read checks every file.
@@ -91,6 +92,10 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
   private static final int MERGE_THREADS = 4;
   // the buffers of a thousand files in level 0 then take 256 MB, against 2 GB at RocksDB's default
   private static final long DRAIN_READAHEAD_BYTES = 256 * 1024;
+  // the merge of a level 0 is one compaction that keeps its thread until it is done, which can take
+  // most of an hour; without more threads the other column families stop compacting meanwhile and
+  // their writes slow down once their own level 0 fills up
+  private static final int DRAIN_EXTRA_BACKGROUND_JOBS = 2;
 
   private final RocksDBColumnarKeyValueStorage storage;
   private final List<SegmentIdentifier> segments;
@@ -264,24 +269,34 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
 
   private void drainStarted() {
     if (drainsRunning.getAndIncrement() == 0) {
-      setCompactionReadahead(DRAIN_READAHEAD_BYTES);
+      setDrainOptions(
+          DRAIN_READAHEAD_BYTES, storage.options.maxBackgroundJobs() + DRAIN_EXTRA_BACKGROUND_JOBS);
     }
   }
 
   private void drainEnded() {
     if (drainsRunning.decrementAndGet() == 0) {
-      setCompactionReadahead(storage.options.compactionReadaheadSize());
+      setDrainOptions(
+          storage.options.compactionReadaheadSize(), storage.options.maxBackgroundJobs());
     }
   }
 
-  // best effort: the merge works with any readahead
-  private void setCompactionReadahead(final long bytes) {
+  // best effort: the merge works with any readahead and any number of threads
+  private void setDrainOptions(final long readaheadBytes, final int backgroundJobs) {
     try {
       storage
           .getDB()
-          .setDBOptions(MutableDBOptions.builder().setCompactionReadaheadSize(bytes).build());
+          .setDBOptions(
+              MutableDBOptions.builder()
+                  .setCompactionReadaheadSize(readaheadBytes)
+                  .setMaxBackgroundJobs(backgroundJobs)
+                  .build());
     } catch (final RocksDBException e) {
-      LOG.warn("Could not set the compaction readahead to {} bytes", bytes, e);
+      LOG.warn(
+          "Could not set the compaction readahead to {} bytes and the background jobs to {}",
+          readaheadBytes,
+          backgroundJobs,
+          e);
     }
   }
 

@@ -992,6 +992,7 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
         (RocksDBColumnarKeyValueStorage) createSegmentedStore();
     final int overlappingFiles = 50;
     final long readahead = store.getDB().getDBOptions().compactionReadaheadSize();
+    final int backgroundJobs = store.getDB().getDBOptions().maxBackgroundJobs();
     final SegmentBulkLoad bulkLoad = store.startBulkLoad(List.of(TestSegment.FOO, TestSegment.BAR));
 
     try (bulkLoad) {
@@ -1012,6 +1013,7 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
       assertThat(softPendingCompactionLimit(store, TestSegment.FOO))
           .isEqualTo(SOFT_PENDING_COMPACTION_LIMIT);
       assertThat(store.getDB().getDBOptions().compactionReadaheadSize()).isEqualTo(readahead);
+      assertThat(store.getDB().getDBOptions().maxBackgroundJobs()).isEqualTo(backgroundJobs);
       assertThat(isAutoCompactionDisabled(store, TestSegment.BAR)).isTrue();
       // a second end finds nothing to do
       assertThat(bulkLoad.end(TestSegment.FOO)).isCompleted();
