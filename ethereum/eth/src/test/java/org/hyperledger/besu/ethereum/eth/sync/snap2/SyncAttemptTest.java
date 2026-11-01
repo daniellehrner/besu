@@ -17,6 +17,7 @@ package org.hyperledger.besu.ethereum.eth.sync.snap2;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hyperledger.besu.ethereum.eth.sync.snap2.SyncFixture.WINDOW;
 import static org.hyperledger.besu.ethereum.eth.sync.snap2.SyncFixture.checkpoint;
+import static org.hyperledger.besu.ethereum.storage.keyvalue.KeyValueSegmentIdentifier.ACCOUNT_STORAGE_STORAGE;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
@@ -28,8 +29,11 @@ import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.BlockHeaderTestFixture;
 import org.hyperledger.besu.ethereum.core.Difficulty;
 import org.hyperledger.besu.ethereum.eth.sync.common.WrongChainException;
+import org.hyperledger.besu.ethereum.eth.sync.snap2.storage.SyncStorageFixture.Format;
 import org.hyperledger.besu.ethereum.eth.sync.snap2.trie.WorldStateTrieBuilder;
+import org.hyperledger.besu.ethereum.rlp.RLP;
 import org.hyperledger.besu.plugin.services.exception.StorageException;
+import org.hyperledger.besu.plugin.services.storage.SegmentedKeyValueStorage;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -38,6 +42,8 @@ import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 
+import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.Test;
 
 class SyncAttemptTest {
@@ -70,6 +76,40 @@ class SyncAttemptTest {
       assertThat(node.blockchain.getBlockBody(chain.header(number).getHash()).isPresent())
           .isEqualTo(number > 12 - WINDOW);
     }
+  }
+
+  // the moves patch the state held in sorted files, which the final build then reads
+  @Test
+  void syncsIntoSortedFilesWhileTheHeadMoves() {
+    final SyncFixture sorted = new SyncFixture(23, Format.BONSAI_SORTED);
+    sorted.chain.extend(12);
+    final SyncAttempt attempt =
+        new SyncAttempt(sorted.context(Optional.empty()), sorted.chain.header(8));
+    final CompletableFuture<BlockHeader> synced = attempt.start();
+    sorted.stateRound();
+    sorted.chain.extend(4);
+
+    attempt.maybeMove();
+    sorted.runUntil(synced::isDone);
+
+    assertThat(synced).isCompletedWithValue(sorted.chain.header(12));
+    assertThat(attempt.pivotMoves()).isOne();
+    final TestWorld world = sorted.chain.world(12);
+    assertThat(sorted.bonsai.getWorldStateRootHash()).contains(world.root());
+    // the root check reads the kept storage tries, not the flat slots
+    final SegmentedKeyValueStorage flat = sorted.bonsai.getComposedWorldStateStorage();
+    world
+        .storageLeaves()
+        .forEach(
+            (account, slots) ->
+                slots.forEach(
+                    (slot, leaf) ->
+                        assertThat(
+                                flat.get(
+                                        ACCOUNT_STORAGE_STORAGE,
+                                        Bytes.concatenate(account, slot).toArrayUnsafe())
+                                    .map(value -> UInt256.fromBytes(Bytes.wrap(value))))
+                            .contains(UInt256.fromBytes(RLP.decodeOne(leaf)))));
   }
 
   @Test
