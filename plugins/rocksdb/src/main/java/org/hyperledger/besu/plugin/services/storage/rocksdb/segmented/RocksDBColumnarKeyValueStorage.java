@@ -112,6 +112,9 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
   /** Number of threads used to parallelize table cache warm-up seeks */
   private static final int TABLE_CACHE_WARMUP_THREAD_COUNT = 8;
 
+  /** Values from this size on go to blob files, in the column families that use them */
+  static final long MIN_BLOB_SIZE = 100;
+
   static {
     RocksDbUtil.loadNativeLibrary();
   }
@@ -257,6 +260,9 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         new ColumnFamilyOptions()
             .setTtl(0)
             .setCompressionType(CompressionType.LZ4_COMPRESSION)
+            // for a bulk load that switches blob files on: RocksJava cannot set it on an open
+            // database
+            .setBlobCompressionType(CompressionType.LZ4_COMPRESSION)
             .setTableFormatConfig(basedTableConfig)
             .setLevelCompactionDynamicLevelBytes(dynamicLevelBytes);
     columnFamilyOptionsList.add(cfOptions);
@@ -275,7 +281,7 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
         .setEnableBlobFiles(true)
         .setEnableBlobGarbageCollection(
             isStaticDataGarbageCollectionEnabled(segment, configuration))
-        .setMinBlobSize(100)
+        .setMinBlobSize(MIN_BLOB_SIZE)
         .setBlobCompressionType(CompressionType.LZ4_COMPRESSION);
     if (configuration.getBlobGarbageCollectionAgeCutoff().isPresent()) {
       // fraction of file age to be considered eligible for GC;
@@ -763,8 +769,15 @@ public abstract class RocksDBColumnarKeyValueStorage implements SegmentedKeyValu
 
   @Override
   public SegmentBulkLoad startBulkLoad(final List<SegmentIdentifier> segmentIdentifiers) {
+    return startBulkLoad(segmentIdentifiers, List.of());
+  }
+
+  @Override
+  public SegmentBulkLoad startBulkLoad(
+      final List<SegmentIdentifier> segmentIdentifiers,
+      final List<SegmentIdentifier> separateValueSegments) {
     throwIfClosed();
-    return new RocksDBSegmentBulkLoad(this, segmentIdentifiers);
+    return new RocksDBSegmentBulkLoad(this, segmentIdentifiers, separateValueSegments);
   }
 
   @Override

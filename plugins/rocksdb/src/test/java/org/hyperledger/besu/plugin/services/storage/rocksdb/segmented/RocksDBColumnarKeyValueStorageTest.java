@@ -63,6 +63,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.rocksdb.ColumnFamilyHandle;
+import org.rocksdb.FlushOptions;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.SstFileMetaData;
 
@@ -1282,6 +1283,71 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
   }
 
   @Test
+  public void bulkLoadKeepsLargeValuesInBlobFilesUntilItIsClosed() throws Exception {
+    final RocksDBColumnarKeyValueStorage store =
+        (RocksDBColumnarKeyValueStorage) createSegmentedStore();
+    final byte[] large = new byte[1024];
+    Arrays.fill(large, (byte) 7);
+    final SegmentBulkLoad bulkLoad =
+        store.startBulkLoad(List.of(TestSegment.FOO), List.of(TestSegment.BAR));
+
+    try (bulkLoad) {
+      assertThat(blobFilesEnabled(store, TestSegment.BAR)).isTrue();
+      assertThat(blobFilesEnabled(store, TestSegment.FOO)).isFalse();
+      // only held back segments stop compacting
+      assertThat(isAutoCompactionDisabled(store, TestSegment.BAR)).isFalse();
+      final SegmentedKeyValueStorageTransaction tx = store.startTransaction();
+      tx.put(TestSegment.BAR, bytesOf(1), large);
+      tx.commit();
+      flush(store, TestSegment.BAR);
+      assertThat(blobFiles(store, TestSegment.BAR)).isEqualTo(1);
+      // compressed
+      assertThat(blobFileBytes(store, TestSegment.BAR)).isLessThan(large.length);
+    }
+
+    assertThat(blobFilesEnabled(store, TestSegment.BAR)).isFalse();
+    final SegmentedKeyValueStorageTransaction tx = store.startTransaction();
+    tx.put(TestSegment.BAR, bytesOf(2), large);
+    tx.commit();
+    flush(store, TestSegment.BAR);
+    assertThat(blobFiles(store, TestSegment.BAR)).isEqualTo(1);
+    assertThat(store.get(TestSegment.BAR, bytesOf(1))).contains(large);
+    assertThat(store.get(TestSegment.BAR, bytesOf(2))).contains(large);
+
+    store.close();
+  }
+
+  @Test
+  public void bulkLoadLetsASegmentWithSeparateValuesGoBeforeTheOthers() throws Exception {
+    final RocksDBColumnarKeyValueStorage store =
+        (RocksDBColumnarKeyValueStorage) createSegmentedStore();
+    final SegmentBulkLoad bulkLoad =
+        store.startBulkLoad(List.of(TestSegment.FOO), List.of(TestSegment.BAR));
+
+    try (bulkLoad) {
+      assertThat(bulkLoad.end(TestSegment.BAR)).isCompleted();
+
+      assertThat(blobFilesEnabled(store, TestSegment.BAR)).isFalse();
+      assertThat(isAutoCompactionDisabled(store, TestSegment.FOO)).isTrue();
+    }
+
+    store.close();
+  }
+
+  @Test
+  public void bulkLoadRefusesASegmentBothHeldBackAndWithSeparateValues() throws Exception {
+    final RocksDBColumnarKeyValueStorage store =
+        (RocksDBColumnarKeyValueStorage) createSegmentedStore();
+
+    assertThatThrownBy(
+            () -> store.startBulkLoad(List.of(TestSegment.FOO), List.of(TestSegment.FOO)))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThat(isAutoCompactionDisabled(store, TestSegment.FOO)).isFalse();
+
+    store.close();
+  }
+
+  @Test
   public void bulkLoadClosedAfterTheStorageDoesNothing() throws Exception {
     final RocksDBColumnarKeyValueStorage store =
         (RocksDBColumnarKeyValueStorage) createSegmentedStore();
@@ -1312,6 +1378,34 @@ public abstract class RocksDBColumnarKeyValueStorageTest extends AbstractKeyValu
       final RocksDBColumnarKeyValueStorage store, final SegmentIdentifier segment)
       throws RocksDBException {
     return store.getDB().getOptions(store.safeColumnHandle(segment)).disableAutoCompactions();
+  }
+
+  private static boolean blobFilesEnabled(
+      final RocksDBColumnarKeyValueStorage store, final SegmentIdentifier segment)
+      throws RocksDBException {
+    return store.getDB().getOptions(store.safeColumnHandle(segment)).enableBlobFiles();
+  }
+
+  private static long blobFiles(
+      final RocksDBColumnarKeyValueStorage store, final SegmentIdentifier segment)
+      throws RocksDBException {
+    return Long.parseLong(
+        store.getDB().getProperty(store.safeColumnHandle(segment), "rocksdb.num-blob-files"));
+  }
+
+  private static long blobFileBytes(
+      final RocksDBColumnarKeyValueStorage store, final SegmentIdentifier segment)
+      throws RocksDBException {
+    return Long.parseLong(
+        store.getDB().getProperty(store.safeColumnHandle(segment), "rocksdb.total-blob-file-size"));
+  }
+
+  private static void flush(
+      final RocksDBColumnarKeyValueStorage store, final SegmentIdentifier segment)
+      throws RocksDBException {
+    try (final FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+      store.getDB().flush(options, store.safeColumnHandle(segment));
+    }
   }
 
   private static int level0SlowdownTrigger(

@@ -379,12 +379,14 @@ public final class BonsaiSyncStateStorage extends AbstractSyncStateStorage {
     if (sortedFlatState) {
       stats = new SortedIngestStats();
       ingest = new SortedStateIngest(flat, ACCOUNT_INFO_STATE, ACCOUNT_STORAGE_STORAGE, stats);
-      // the compactions of the state segments wait, so that the files stay where they are put
+      // the compactions of the state segments wait, so that the files stay where they are put; the
+      // bytecodes come in no key order, and each compaction on their way down would rewrite them
       bulkLoad =
           flat.startBulkLoad(
               trieHeldBack
                   ? List.of(ACCOUNT_INFO_STATE, ACCOUNT_STORAGE_STORAGE, TRIE_BRANCH_STORAGE)
-                  : List.of(ACCOUNT_INFO_STATE, ACCOUNT_STORAGE_STORAGE));
+                  : List.of(ACCOUNT_INFO_STATE, ACCOUNT_STORAGE_STORAGE),
+              List.of(CODE_STORAGE));
     }
   }
 

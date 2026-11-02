@@ -74,6 +74,11 @@ import org.slf4j.LoggerFactory;
  * ends many files early leaves thousands of them, which a regular write of the same entries would
  * not have. A small file that has no small neighbour is merged with the smaller of its neighbours,
  * so that no file of less than a quarter of the target size stays behind.
+ *
+ * <p>The column families of large values written in no particular key order keep compacting, but
+ * put their values in blob files until the load is closed. Each compaction on the way to the bottom
+ * level would otherwise rewrite the values along with their keys. Their compaction is not held back
+ * instead: a lookup checks every file of level 0, and such keys overlap every file there.
  */
 final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
 
@@ -99,6 +104,8 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
 
   private final RocksDBColumnarKeyValueStorage storage;
   private final List<SegmentIdentifier> segments;
+  // the segments whose values go to blob files during the load
+  private final List<SegmentIdentifier> separateValues;
   private final AtomicBoolean closed = new AtomicBoolean(false);
   // the segments whose level 0 is still merged down with its limits lifted
   private final List<Draining> draining = new ArrayList<>();
@@ -124,11 +131,25 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
   record Merge(List<SstFileMetaData> files, long outputFileBytes) {}
 
   RocksDBSegmentBulkLoad(
-      final RocksDBColumnarKeyValueStorage storage, final List<SegmentIdentifier> segments) {
+      final RocksDBColumnarKeyValueStorage storage,
+      final List<SegmentIdentifier> segments,
+      final List<SegmentIdentifier> separateValues) {
+    if (segments.stream().anyMatch(separateValues::contains)) {
+      throw new IllegalArgumentException("A segment is either held back or has separate values");
+    }
     this.storage = storage;
     this.segments = List.copyOf(segments);
+    this.separateValues = List.copyOf(separateValues);
     for (final SegmentIdentifier segment : this.segments) {
       setOptions(segment, MutableColumnFamilyOptions.builder().setDisableAutoCompactions(true));
+    }
+    // the blob files are compressed as the column family is configured when the database opens
+    for (final SegmentIdentifier segment : this.separateValues) {
+      setOptions(
+          segment,
+          MutableColumnFamilyOptions.builder()
+              .setEnableBlobFiles(true)
+              .setMinBlobSize(RocksDBColumnarKeyValueStorage.MIN_BLOB_SIZE));
     }
   }
 
@@ -136,6 +157,14 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
   public synchronized void close() {
     if (!closed.compareAndSet(false, true)) {
       return;
+    }
+    for (final SegmentIdentifier segment : separateValues) {
+      if (storage.isClosed()) {
+        return;
+      }
+      if (!ended.contains(segment)) {
+        restoreValues(segment);
+      }
     }
     for (final SegmentIdentifier segment : segments) {
       if (storage.isClosed()) {
@@ -170,6 +199,12 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
    */
   @Override
   public synchronized CompletableFuture<Void> end(final SegmentIdentifier segment) {
+    if (separateValues.contains(segment)) {
+      if (!closed.get() && ended.add(segment)) {
+        restoreValues(segment);
+      }
+      return CompletableFuture.completedFuture(null);
+    }
     if (closed.get() || !segments.contains(segment) || !ended.add(segment)) {
       return CompletableFuture.completedFuture(null);
     }
@@ -227,6 +262,25 @@ final class RocksDBSegmentBulkLoad implements SegmentBulkLoad {
       }
     } catch (final InterruptedException e) {
       Thread.currentThread().interrupt();
+    }
+  }
+
+  // the values written so far stay in their blob files, which reads find as they find the others
+  private void restoreValues(final SegmentIdentifier segment) {
+    final ColumnFamilyOptions configured = storage.columnFamilyOptions(segment);
+    try {
+      setOptions(
+          segment,
+          MutableColumnFamilyOptions.builder()
+              .setEnableBlobFiles(configured.enableBlobFiles())
+              .setMinBlobSize(configured.minBlobSize()));
+    } catch (final RuntimeException e) {
+      if (!storage.isClosed()) {
+        LOG.warn(
+            "The {} segment keeps writing its values to blob files after its bulk load, until the database is opened again",
+            segment.getName(),
+            e);
+      }
     }
   }
 

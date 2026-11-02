@@ -162,6 +162,24 @@ public interface SegmentedKeyValueStorage extends Closeable {
   }
 
   /**
+   * Starts a bulk load as {@link #startBulkLoad(List)} does, which also takes in large values
+   * through regular writes in no particular key order, each written once. Until the load is closed
+   * the storage may keep those values apart from their keys, so that reorganising their segments
+   * moves the keys only. The values written meanwhile stay apart. The default implementation does
+   * not.
+   *
+   * @param segmentIdentifiers the segments that are loaded
+   * @param separateValueSegments the segments of large values written in no particular key order,
+   *     none of them also in {@code segmentIdentifiers}
+   * @return the bulk load, which has to be closed when the data is in
+   */
+  default SegmentBulkLoad startBulkLoad(
+      final List<SegmentIdentifier> segmentIdentifiers,
+      final List<SegmentIdentifier> separateValueSegments) {
+    return startBulkLoad(segmentIdentifiers);
+  }
+
+  /**
    * Starts adding entries to a segment in increasing key order, written to a file then added to the
    * segment at once, without going through the memtable and its compactions. Storage that cannot
    * add files falls back to a batch transaction.
