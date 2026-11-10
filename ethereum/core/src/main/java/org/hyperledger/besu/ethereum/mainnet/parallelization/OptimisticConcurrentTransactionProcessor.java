@@ -42,10 +42,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -95,6 +98,12 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
           .isAllowFutureNonce(true)
           .allowUnderpricedGas(true)
           .build();
+
+  /**
+   * Set once the parallel result of a heavy transaction could not be used: the next heavy ones
+   * likely touch the same state, so waiting for them would only delay executing them again.
+   */
+  private boolean heavyTransactionReplayed;
 
   /**
    * Constructs a PreloadConcurrentTransactionProcessor with a specified transaction processor. This
@@ -177,8 +186,11 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
     // the other runs, as chaining the unknown senders waits for every recovery.
     final int recoverAt = Math.min(runsAheadOfRecovery, transactions.size());
     CompletableFuture<Void> recovered = null;
-    for (int i = 0; i < transactions.size(); i++) {
-      if (i == recoverAt) {
+    final AtomicIntegerArray started = new AtomicIntegerArray(transactions.size());
+    inFlight = started;
+    int submitted = 0;
+    for (final int i : computeExecutionOrder(transactions)) {
+      if (submitted++ == recoverAt) {
         recovered = recoverSenders(transactions, unknownSenders, executor);
       }
       final Transaction transaction = transactions.get(i);
@@ -187,20 +199,23 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         final int txIndex = i;
         futures[i] =
             CompletableFuture.supplyAsync(
-                () ->
-                    serialLoopHasPassed(txIndex)
-                        ? null
-                        : runTransaction(
-                            protocolContext,
-                            blockHeader,
-                            txIndex,
-                            transaction,
-                            miningBeneficiary,
-                            blockHashLookup,
-                            blobGasPrice,
-                            blockAccessListBuilder,
-                            maybeParentHeader,
-                            null),
+                () -> {
+                  if (serialLoopHasPassed(txIndex)) {
+                    return null;
+                  }
+                  started.set(txIndex, 1);
+                  return runTransaction(
+                      protocolContext,
+                      blockHeader,
+                      txIndex,
+                      transaction,
+                      miningBeneficiary,
+                      blockHashLookup,
+                      blobGasPrice,
+                      blockAccessListBuilder,
+                      maybeParentHeader,
+                      null);
+                },
                 executor);
       } else if (chain.get(0) == i) {
         final List<CompletableFuture<ParallelizedTransactionContext>> chainFutures =
@@ -738,71 +753,96 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       // nothing else holds the run it replaces, which abort() would otherwise miss
       aloneOrChained.cancel(true);
     }
-
-    if (future != null && future.state() == Future.State.FAILED) {
-      LOG.debug(
-          "Parallel execution of transaction {} failed, executing it sequentially",
-          transaction.getHash(),
-          future.exceptionNow());
+    if (future == null) {
+      return Optional.empty();
     }
-    if (future != null && future.state() == Future.State.SUCCESS) {
-      final ParallelizedTransactionContext parallelizedTransactionContext = future.resultNow();
-      if (parallelizedTransactionContext == null) {
+
+    final ParallelizedTransactionContext parallelizedTransactionContext;
+    final Future.State state = future.state();
+    if (state == Future.State.SUCCESS) {
+      parallelizedTransactionContext = future.resultNow();
+    } else if (state == Future.State.RUNNING
+        && isHeavy(transaction)
+        && !heavyTransactionReplayed
+        && isInFlight(transactionLocation)) {
+      // A worker is already executing this heavy transaction: waiting for it to finish is faster
+      // than cancelling it and executing the whole transaction again from scratch.
+      try {
+        parallelizedTransactionContext = future.get();
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return Optional.empty();
+      } catch (final ExecutionException | CancellationException e) {
+        LOG.debug(
+            "Parallel execution of transaction {} failed, executing it sequentially",
+            transaction.getHash(),
+            e);
         return Optional.empty();
       }
-
-      final PathBasedWorldState pathBasedWorldState = (PathBasedWorldState) worldState;
-      final PathBasedWorldStateUpdateAccumulator blockAccumulator =
-          (PathBasedWorldStateUpdateAccumulator) pathBasedWorldState.updater();
-      final PathBasedWorldStateUpdateAccumulator<?> transactionAccumulator =
-          parallelizedTransactionContext.transactionAccumulator();
-      final TransactionProcessingResult transactionProcessingResult =
-          parallelizedTransactionContext.transactionProcessingResult();
-      // a reverted or halted execution is as repeatable as a successful one when nothing it read
-      // changed; an invalid result is replayed anyway, and its sender may not even be recoverable
-      if (!transactionProcessingResult.isInvalid()
-          && !transactionCollisionDetector.hasCollision(
-              transaction, miningBeneficiary, parallelizedTransactionContext, blockAccumulator)) {
-        final Wei reward = parallelizedTransactionContext.miningBeneficiaryReward();
-        if (!reward.isZero() || !transactionProcessor.getClearEmptyAccounts()) {
-          final MutableAccount miningBeneficiaryAccount =
-              blockAccumulator.getOrCreate(miningBeneficiary);
-          miningBeneficiaryAccount.incrementBalance(reward);
-
-          if (!reward.isZero()) {
-            final Wei miningBeneficiaryPostBalance = miningBeneficiaryAccount.getBalance();
-            transactionProcessingResult
-                .getPartialBlockAccessView()
-                .ifPresent(
-                    partialBlockAccessView ->
-                        partialBlockAccessView.accountChanges().stream()
-                            .filter(
-                                accountChanges ->
-                                    accountChanges.getAddress().equals(miningBeneficiary))
-                            .findFirst()
-                            .ifPresent(
-                                accountChanges ->
-                                    accountChanges.setPostBalance(miningBeneficiaryPostBalance)));
-          }
-        }
-
-        blockAccumulator.importStateChangesFromSource(transactionAccumulator);
-
-        confirmedParallelizedTransactionCounter.ifPresent(Counter::inc);
-        transactionProcessingResult.setIsProcessedInParallel(Optional.of(Boolean.TRUE));
-        return Optional.of(transactionProcessingResult);
+    } else {
+      if (state == Future.State.FAILED) {
+        LOG.debug(
+            "Parallel execution of transaction {} failed, executing it sequentially",
+            transaction.getHash(),
+            future.exceptionNow());
       } else {
-        blockAccumulator.importPriorStateFromSource(transactionAccumulator);
-        if (conflictingButCachedTransactionCounter.isPresent())
-          conflictingButCachedTransactionCounter.get().inc();
-        // If there is a conflict, we return an empty result to signal the block processor to
-        // re-execute the transaction.
-        return Optional.empty();
+        future.cancel(true);
       }
+      return Optional.empty();
     }
-    if (future != null) {
-      future.cancel(true);
+
+    if (parallelizedTransactionContext == null) {
+      return Optional.empty();
     }
-    return Optional.empty();
+
+    final PathBasedWorldState pathBasedWorldState = (PathBasedWorldState) worldState;
+    final PathBasedWorldStateUpdateAccumulator blockAccumulator =
+        (PathBasedWorldStateUpdateAccumulator) pathBasedWorldState.updater();
+    final PathBasedWorldStateUpdateAccumulator<?> transactionAccumulator =
+        parallelizedTransactionContext.transactionAccumulator();
+    final TransactionProcessingResult transactionProcessingResult =
+        parallelizedTransactionContext.transactionProcessingResult();
+    // a reverted or halted execution is as repeatable as a successful one when nothing it read
+    // changed; an invalid result is replayed anyway, and its sender may not even be recoverable
+    if (!transactionProcessingResult.isInvalid()
+        && !transactionCollisionDetector.hasCollision(
+            transaction, miningBeneficiary, parallelizedTransactionContext, blockAccumulator)) {
+      final Wei reward = parallelizedTransactionContext.miningBeneficiaryReward();
+      if (!reward.isZero() || !transactionProcessor.getClearEmptyAccounts()) {
+        final MutableAccount miningBeneficiaryAccount =
+            blockAccumulator.getOrCreate(miningBeneficiary);
+        miningBeneficiaryAccount.incrementBalance(reward);
+
+        if (!reward.isZero()) {
+          final Wei miningBeneficiaryPostBalance = miningBeneficiaryAccount.getBalance();
+          transactionProcessingResult
+              .getPartialBlockAccessView()
+              .ifPresent(
+                  partialBlockAccessView ->
+                      partialBlockAccessView.accountChanges().stream()
+                          .filter(
+                              accountChanges ->
+                                  accountChanges.getAddress().equals(miningBeneficiary))
+                          .findFirst()
+                          .ifPresent(
+                              accountChanges ->
+                                  accountChanges.setPostBalance(miningBeneficiaryPostBalance)));
+        }
+      }
+
+      blockAccumulator.importStateChangesFromSource(transactionAccumulator);
+
+      confirmedParallelizedTransactionCounter.ifPresent(Counter::inc);
+      transactionProcessingResult.setIsProcessedInParallel(Optional.of(Boolean.TRUE));
+      return Optional.of(transactionProcessingResult);
+    } else {
+      blockAccumulator.importPriorStateFromSource(transactionAccumulator);
+      heavyTransactionReplayed |= isHeavy(transaction);
+      if (conflictingButCachedTransactionCounter.isPresent())
+        conflictingButCachedTransactionCounter.get().inc();
+      // If there is a conflict, we return an empty result to signal the block processor to
+      // re-execute the transaction.
+      return Optional.empty();
+    }
   }
 }
