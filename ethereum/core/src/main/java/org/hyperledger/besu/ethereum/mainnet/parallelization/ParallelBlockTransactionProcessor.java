@@ -28,6 +28,7 @@ import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -46,7 +47,11 @@ public abstract class ParallelBlockTransactionProcessor {
    * optimistic processor waits for one that a worker is already executing instead of executing it
    * again.
    */
-  static final long HEAVY_TRANSACTION_GAS_THRESHOLD = 4_000_000L;
+  static final long HEAVY_TRANSACTION_GAS_THRESHOLD = Long.getLong("besu.t14.heavyGas", 4_000_000L);
+
+  // off: workers start the transactions in block order, heavy or not
+  private static final boolean HEAVY_FIRST =
+      Boolean.parseBoolean(System.getProperty("besu.t14.heavyFirst", "true"));
 
   static boolean isHeavy(final Transaction transaction) {
     return transaction.getGasLimit() > HEAVY_TRANSACTION_GAS_THRESHOLD;
@@ -118,6 +123,10 @@ public abstract class ParallelBlockTransactionProcessor {
   static int[] computeExecutionOrder(final List<Transaction> transactions) {
     final int size = transactions.size();
     final int[] order = new int[size];
+    if (!HEAVY_FIRST) {
+      Arrays.setAll(order, i -> i);
+      return order;
+    }
     final int[] light = new int[size];
     int heavyCount = 0;
     int lightCount = 0;
