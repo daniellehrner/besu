@@ -15,6 +15,7 @@
 package org.hyperledger.besu.ethereum.mainnet.parallelization;
 
 import org.hyperledger.besu.datatypes.Address;
+import org.hyperledger.besu.datatypes.StorageSlotKey;
 import org.hyperledger.besu.datatypes.Wei;
 import org.hyperledger.besu.ethereum.ProtocolContext;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
@@ -24,9 +25,12 @@ import org.hyperledger.besu.ethereum.mainnet.MainnetTransactionProcessor;
 import org.hyperledger.besu.ethereum.mainnet.TransactionValidationParams;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.AccessLocationTracker;
 import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList.BlockAccessListBuilder;
+import org.hyperledger.besu.ethereum.mainnet.parallelization.prefetch.RunaheadPrefetcher;
 import org.hyperledger.besu.ethereum.processing.TransactionProcessingResult;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.account.BonsaiAccount;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.PathBasedWorldState;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
@@ -42,11 +46,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeSet;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReferenceArray;
@@ -79,6 +86,16 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
   // Index the serial loop has reached. A speculative run for that index or an earlier one can no
   // longer be used, so workers skip it instead of competing with the import for cores.
   private final AtomicInteger serialLoopPosition = new AtomicInteger(-1);
+
+  // which transactions a worker has started, and which run in a chain
+  private volatile AtomicIntegerArray started = new AtomicIntegerArray(0);
+  private volatile AtomicIntegerArray inChain = new AtomicIntegerArray(0);
+  private volatile long[] gasLimits = new long[0];
+  // the first pass of each transaction's run ahead, which a worker may wait for before its run
+  private volatile CompletableFuture<?>[] runaheads = new CompletableFuture<?>[0];
+  // transactions a worker has run or the serial loop has taken, whose run ahead can stop
+  private volatile AtomicIntegerArray finished = new AtomicIntegerArray(0);
+  private static final long RUNAHEAD_WAIT_MS = Long.getLong("besu.t14.runaheadWaitMs", 0L);
   // chained runs of transactions whose sender was recovered only after they ran alone
   private volatile AtomicReferenceArray<CompletableFuture<ParallelizedTransactionContext>>
       lateChainFutures = new AtomicReferenceArray<>(0);
@@ -88,6 +105,39 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
   // checks and merges again, so a chain costs the square of its length. Members past the cap run
   // alone.
   @VisibleForTesting static final int MAX_CHAIN_LENGTH = 64;
+
+  // none: the serial loop runs a transaction whose run has not finished itself; chained: it waits
+  // for a running chain member; heavy: also for a running transaction with a large gas limit;
+  // all: it waits for any running transaction
+  private static final String WAIT_RUNNING = System.getProperty("besu.t14.waitRunning", "none");
+  private static final long WAIT_HEAVY_GAS = Long.getLong("besu.t14.waitHeavyGas", 2_000_000L);
+  private static final long WAIT_RUNNING_MS = Long.getLong("besu.t14.waitRunningMs", 500L);
+
+  // transactions at or above this gas limit are run ahead to load their slots, 0 turns it off
+  private static final long RUNAHEAD_GAS = Long.getLong("besu.t14.runaheadGas", 0L);
+
+  // experiment: a transaction whose run touched what the run of an earlier one changed runs again
+  // on
+  // a worker on top of that one's result, so that the serial loop finds a result it can take
+  // instead of running the transaction itself
+  private static final boolean RERUN_DEPENDENCIES =
+      Boolean.getBoolean("besu.t14.rerunDependencies");
+  // a transaction runs again at most this often, as each later writer it touched can start a run
+  private static final int MAX_RERUNS = Integer.getInteger("besu.t14.maxReruns", 3);
+  private volatile Dependencies dependencies;
+
+  // replay benchmarks: log each worker execution's time
+  private static final boolean LOG_TX_TIMES = Boolean.getBoolean("besu.bench.logTxTimes");
+  // replay benchmarks: log why a worker result could not be taken
+  private static final boolean LOG_CONFLICTS = Boolean.getBoolean("besu.bench.logConflicts");
+
+  // workers warm the trie paths of what they touch, so the state root finds them loaded
+  private static final boolean WORKER_PRELOAD = Boolean.getBoolean("besu.t14.workerPreload");
+
+  // a result whose transaction did not depend on a balance the block changed carries its balance
+  // change over instead of conflicting (#11809); false turns it off for comparisons
+  private static final boolean CARRY_OVER =
+      Boolean.parseBoolean(System.getProperty("besu.t14.carryOver", "true"));
 
   // A warm-up runs before the member's predecessors, which may pay its nonce and gas. Every other
   // check of a block stays, so that the transaction gas cap bounds a warm-up in an invalid block.
@@ -167,6 +217,32 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       final Optional<BlockAccessListBuilder> blockAccessListBuilder,
       final Optional<BlockHeader> maybeParentHeader) {
 
+    final CompletableFuture<?>[] runaheadFirstPasses =
+        new CompletableFuture<?>[transactions.size()];
+    runaheads = runaheadFirstPasses;
+    final AtomicIntegerArray finishedRuns = new AtomicIntegerArray(transactions.size());
+    finished = finishedRuns;
+    if (RUNAHEAD_GAS > 0 && maybeParentHeader.isPresent()) {
+      for (int i = 0; i < transactions.size(); i++) {
+        final Transaction transaction = transactions.get(i);
+        if (transaction.getGasLimit() >= RUNAHEAD_GAS) {
+          final int location = i;
+          runaheadFirstPasses[i] =
+              RunaheadPrefetcher.runAhead(
+                  transactionProcessor,
+                  protocolContext,
+                  maybeParentHeader.get(),
+                  blockHeader,
+                  transaction,
+                  miningBeneficiary,
+                  blockHashLookup,
+                  blobGasPrice,
+                  WARM_UP_VALIDATION,
+                  () -> finishedRuns.get(location) == 1);
+        }
+      }
+    }
+
     // looked up once, as the transaction pool may recover a sender while the runs are set up
     final Address[] senders = new Address[transactions.size()];
     final Map<Address, List<Integer>> bySender = new HashMap<>();
@@ -186,8 +262,28 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
     // the other runs, as chaining the unknown senders waits for every recovery.
     final int recoverAt = Math.min(runsAheadOfRecovery, transactions.size());
     CompletableFuture<Void> recovered = null;
+    // a local, so that a late run of an earlier block cannot mark this block's array
     final AtomicIntegerArray started = new AtomicIntegerArray(transactions.size());
+    this.started = started;
     inFlight = started;
+    inChain = new AtomicIntegerArray(transactions.size());
+    gasLimits = new long[transactions.size()];
+    for (int i = 0; i < transactions.size(); i++) {
+      gasLimits[i] = transactions.get(i).getGasLimit();
+    }
+    dependencies =
+        RERUN_DEPENDENCIES
+            ? new Dependencies(
+                protocolContext,
+                blockHeader,
+                transactions,
+                miningBeneficiary,
+                blockHashLookup,
+                blobGasPrice,
+                executor,
+                blockAccessListBuilder,
+                maybeParentHeader)
+            : null;
     int submitted = 0;
     for (final int i : computeExecutionOrder(transactions)) {
       if (submitted++ == recoverAt) {
@@ -223,6 +319,7 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         for (final int member : chain) {
           futures[member] = new CompletableFuture<>();
           chainFutures.add(futures[member]);
+          inChain.set(member, 1);
         }
         executor.execute(
             () ->
@@ -277,6 +374,22 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
           blockAccessListBuilder,
           maybeParentHeader);
     }
+  }
+
+  /** Whether the serial loop waits for the run of the transaction rather than running it itself. */
+  private boolean shouldWaitFor(final int transactionLocation) {
+    if (transactionLocation >= started.length() || started.get(transactionLocation) == 0) {
+      return false;
+    }
+    return switch (WAIT_RUNNING) {
+      case "all" -> true;
+      case "chained" -> inChain.get(transactionLocation) == 1;
+      case "heavy" ->
+          inChain.get(transactionLocation) == 1
+              || (transactionLocation < gasLimits.length
+                  && gasLimits[transactionLocation] >= WAIT_HEAVY_GAS);
+      default -> false;
+    };
   }
 
   /** Recovers the unknown senders on the block's workers, a batch per task. */
@@ -362,6 +475,7 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
                   new CompletableFuture<>();
               lateChainFutures.set(chain.get(k), future);
               chainFutures.add(future);
+              inChain.set(chain.get(k), 1);
             }
             chainFutures
                 .get(0)
@@ -560,6 +674,276 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
     return txIndex <= serialLoopPosition.get();
   }
 
+  private record SlotKey(Address address, StorageSlotKey slot) {}
+
+  /**
+   * What the runs of a block's transactions touched and changed. A transaction that touched what
+   * earlier ones changed runs again on top of the latest of them, if that one's result includes the
+   * others, as the serial loop would otherwise find the transaction's result colliding and run it
+   * itself. A run on top of another is checked like a chained run: it holds if the block reaches it
+   * with the values it started from.
+   */
+  private final class Dependencies {
+    // marks the runs of this class, whose results it records itself
+    private static final ThreadLocal<Boolean> RERUNNING = ThreadLocal.withInitial(() -> false);
+
+    private final ProtocolContext protocolContext;
+    private final BlockHeader blockHeader;
+    private final List<Transaction> transactions;
+    private final Address miningBeneficiary;
+    private final BlockHashLookup blockHashLookup;
+    private final Wei blobGasPrice;
+    private final Executor executor;
+    private final Optional<BlockAccessListBuilder> blockAccessListBuilder;
+    private final Optional<BlockHeader> maybeParentHeader;
+    // guarded by this
+    private final Map<Object, TreeSet<Integer>> writers = new HashMap<>();
+    private final Map<Object, TreeSet<Integer>> readers = new HashMap<>();
+    private final ParallelizedTransactionContext[] results;
+    private final List<?>[] touchedKeys;
+    // the transactions whose changes each latest result includes
+    private final java.util.BitSet[] ancestry;
+    // how often each transaction got a new result, and which result of its base its re-run used
+    private final int[] resultVersion;
+    private final int[] predecessor;
+    private final int[] baseVersion;
+    private final int[] reruns;
+    // the latest re-run of each transaction, and whether it started
+    private final AtomicReferenceArray<CompletableFuture<ParallelizedTransactionContext>>
+        rerunFutures;
+    private final AtomicIntegerArray rerunStarted;
+
+    Dependencies(
+        final ProtocolContext protocolContext,
+        final BlockHeader blockHeader,
+        final List<Transaction> transactions,
+        final Address miningBeneficiary,
+        final BlockHashLookup blockHashLookup,
+        final Wei blobGasPrice,
+        final Executor executor,
+        final Optional<BlockAccessListBuilder> blockAccessListBuilder,
+        final Optional<BlockHeader> maybeParentHeader) {
+      this.protocolContext = protocolContext;
+      this.blockHeader = blockHeader;
+      this.transactions = transactions;
+      this.miningBeneficiary = miningBeneficiary;
+      this.blockHashLookup = blockHashLookup;
+      this.blobGasPrice = blobGasPrice;
+      this.executor = executor;
+      this.blockAccessListBuilder = blockAccessListBuilder;
+      this.maybeParentHeader = maybeParentHeader;
+      final int n = transactions.size();
+      this.results = new ParallelizedTransactionContext[n];
+      this.touchedKeys = new List<?>[n];
+      this.ancestry = new java.util.BitSet[n];
+      this.resultVersion = new int[n];
+      this.predecessor = new int[n];
+      java.util.Arrays.fill(predecessor, -1);
+      this.baseVersion = new int[n];
+      this.reruns = new int[n];
+      this.rerunFutures = new AtomicReferenceArray<>(n);
+      this.rerunStarted = new AtomicIntegerArray(n);
+    }
+
+    /** The re-run the serial loop takes: one that finished or started, else none. */
+    CompletableFuture<ParallelizedTransactionContext> rerunToTake(final int index) {
+      if (index >= rerunFutures.length()) {
+        return null;
+      }
+      final CompletableFuture<ParallelizedTransactionContext> rerun = rerunFutures.get(index);
+      if (rerun == null || (!rerun.isDone() && rerunStarted.get(index) == 0)) {
+        return null;
+      }
+      return rerun;
+    }
+
+    /** Records the result of a run other than a re-run of this class. */
+    void finished(final int index, final ParallelizedTransactionContext context) {
+      if (RERUNNING.get()) {
+        return;
+      }
+      final java.util.BitSet itself = new java.util.BitSet();
+      itself.set(index);
+      record(index, context, itself);
+    }
+
+    private synchronized void record(
+        final int index,
+        final ParallelizedTransactionContext context,
+        final java.util.BitSet includes) {
+      if (index >= results.length
+          || context == null
+          || context.transactionProcessingResult().isInvalid()) {
+        return;
+      }
+      results[index] = context;
+      ancestry[index] = includes;
+      resultVersion[index]++;
+      final List<Object> changed = new ArrayList<>();
+      final List<Object> touched = new ArrayList<>();
+      collect(context.transactionAccumulator(), changed, touched);
+      touchedKeys[index] = touched;
+      for (final Object key : touched) {
+        readers.computeIfAbsent(key, k -> new TreeSet<>()).add(index);
+      }
+      // the later transactions that touched what this one changed may run again on top of it
+      final java.util.BitSet later = new java.util.BitSet();
+      for (final Object key : changed) {
+        writers.computeIfAbsent(key, k -> new TreeSet<>()).add(index);
+        final TreeSet<Integer> keyReaders = readers.get(key);
+        if (keyReaders != null) {
+          for (final int reader : keyReaders.tailSet(index, false)) {
+            later.set(reader);
+          }
+        }
+      }
+      consider(index);
+      for (int reader = later.nextSetBit(0); reader >= 0; reader = later.nextSetBit(reader + 1)) {
+        consider(reader);
+      }
+    }
+
+    /** Runs the transaction again on top of the latest earlier writer, if its result can hold. */
+    private void consider(final int index) {
+      final List<?> touched = touchedKeys[index];
+      if (touched == null) {
+        return;
+      }
+      final java.util.BitSet earlierWriters = new java.util.BitSet();
+      for (final Object key : touched) {
+        final TreeSet<Integer> keyWriters = writers.get(key);
+        if (keyWriters != null) {
+          for (final int writer : keyWriters.headSet(index, false)) {
+            earlierWriters.set(writer);
+          }
+        }
+      }
+      if (earlierWriters.isEmpty()) {
+        return;
+      }
+      final int latest = earlierWriters.previousSetBit(index - 1);
+      if (ancestry[latest] == null) {
+        return;
+      }
+      // on top of the latest writer only, the changes of another earlier writer would be missing
+      earlierWriters.andNot(ancestry[latest]);
+      if (earlierWriters.isEmpty()) {
+        rerunOnTop(index, latest);
+      }
+    }
+
+    private void collect(
+        final PathBasedWorldStateUpdateAccumulator<?> accumulator,
+        final List<Object> changed,
+        final List<Object> touched) {
+      for (final var account : accumulator.getAccountsToUpdate().entrySet()) {
+        final Address address = account.getKey();
+        if (address.equals(miningBeneficiary)) {
+          continue;
+        }
+        touched.add(address);
+        final BonsaiAccount prior = account.getValue().getPrior();
+        final BonsaiAccount updated = account.getValue().getUpdated();
+        if (!sameDetails(prior, updated)) {
+          changed.add(address);
+        }
+      }
+      changed.addAll(accumulator.getStorageToClear());
+      for (final var storage : accumulator.getStorageToUpdate().entrySet()) {
+        final Address address = storage.getKey();
+        if (address.equals(miningBeneficiary)) {
+          continue;
+        }
+        for (final var slot : storage.getValue().entrySet()) {
+          final SlotKey key = new SlotKey(address, slot.getKey());
+          touched.add(key);
+          if (slot.getValue().isChanged()) {
+            changed.add(key);
+          }
+        }
+      }
+    }
+
+    private static boolean sameDetails(final BonsaiAccount prior, final BonsaiAccount updated) {
+      return (prior == null && updated == null)
+          || (prior != null
+              && updated != null
+              && prior.getNonce() == updated.getNonce()
+              && prior.getBalance().equals(updated.getBalance())
+              && prior.getCodeHash().equals(updated.getCodeHash()));
+    }
+
+    /** Runs the transaction again on top of the result of an earlier one it depends on. */
+    private void rerunOnTop(final int index, final int earlier) {
+      if (earlier < predecessor[index]
+          || (earlier == predecessor[index] && resultVersion[earlier] == baseVersion[index])
+          || reruns[index] >= MAX_RERUNS
+          || inChain.get(index) == 1
+          || serialLoopHasPassed(index)
+          || results[earlier] == null) {
+        return;
+      }
+      final Transaction transaction = transactions.get(index);
+      final PathBasedWorldStateUpdateAccumulator<?> onTopOf =
+          results[earlier].transactionAccumulator();
+      final java.util.BitSet includes = (java.util.BitSet) ancestry[earlier].clone();
+      includes.set(index);
+      predecessor[index] = earlier;
+      baseVersion[index] = resultVersion[earlier];
+      final int run = ++reruns[index];
+      if (LOG_TX_TIMES) {
+        LOG.info(
+            "Bench rerun block {} idx {} after {} rerun {}",
+            blockHeader.getNumber(),
+            index,
+            earlier,
+            run);
+      }
+      final CompletableFuture<ParallelizedTransactionContext> rerun = new CompletableFuture<>();
+      rerunFutures.set(index, rerun);
+      try {
+        executor.execute(
+            () -> {
+              if (serialLoopHasPassed(index)) {
+                rerun.complete(null);
+                return;
+              }
+              rerunStarted.set(index, 1);
+              final ParallelizedTransactionContext context;
+              RERUNNING.set(true);
+              try {
+                context =
+                    runTransaction(
+                        protocolContext,
+                        blockHeader,
+                        index,
+                        transaction,
+                        miningBeneficiary,
+                        blockHashLookup,
+                        blobGasPrice,
+                        blockAccessListBuilder,
+                        maybeParentHeader,
+                        onTopOf);
+              } catch (final Throwable t) {
+                rerun.completeExceptionally(t);
+                return;
+              } finally {
+                RERUNNING.set(false);
+              }
+              rerun.complete(context);
+              synchronized (this) {
+                // a later re-run of the transaction replaces this one
+                if (reruns[index] == run) {
+                  record(index, context, includes);
+                }
+              }
+            });
+      } catch (final java.util.concurrent.RejectedExecutionException e) {
+        rerun.complete(null);
+      }
+    }
+  }
+
   /**
    * Also stops what the futures of the block do not cover: the late chains and the chains and
    * warm-ups not started yet skip every transaction once the block is done with.
@@ -610,6 +994,26 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
     if (maybeParentHeader.isEmpty()) {
       return null;
     }
+    final AtomicIntegerArray startedRuns = started;
+    if (transactionLocation < startedRuns.length()) {
+      startedRuns.set(transactionLocation, 1);
+    }
+    final AtomicIntegerArray finishedRuns = finished;
+    final Dependencies blockDependencies = dependencies;
+    final CompletableFuture<?>[] firstPasses = runaheads;
+    if (RUNAHEAD_WAIT_MS > 0
+        && previousInChain == null
+        && transactionLocation < firstPasses.length
+        && firstPasses[transactionLocation] != null) {
+      // a run that starts once the run ahead loaded what it reads waits for memory, not the disk
+      try {
+        firstPasses[transactionLocation].get(RUNAHEAD_WAIT_MS, TimeUnit.MILLISECONDS);
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+      } catch (final ExecutionException | TimeoutException | CancellationException e) {
+        // runs anyway
+      }
+    }
     // on the block's transaction, whose lock the background recovery takes too, so that the copy
     // executed below carries the sender instead of recovering it a second time
     recoverSender(transaction);
@@ -620,11 +1024,16 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
     }
 
     try {
-      ws.disableCacheMerkleTrieLoader();
+      if (!WORKER_PRELOAD) {
+        ws.disableCacheMerkleTrieLoader();
+      }
       final ParallelizedTransactionContext.Builder contextBuilder =
           new ParallelizedTransactionContext.Builder();
       final PathBasedWorldStateUpdateAccumulator<?> roundWorldStateUpdater =
           (PathBasedWorldStateUpdateAccumulator<?>) ws.updater();
+      if (CARRY_OVER) {
+        roundWorldStateUpdater.recordBalanceObservations();
+      }
       if (previousInChain != null) {
         ((PathBasedWorldStateUpdateAccumulator) roundWorldStateUpdater)
             .importStateChangesFromSource(previousInChain);
@@ -636,6 +1045,7 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
               b ->
                   BlockAccessListBuilder.createTransactionAccessLocationTracker(
                       transactionLocation));
+      final long benchStart = LOG_TX_TIMES ? System.nanoTime() : 0L;
       final TransactionProcessingResult result =
           transactionProcessor.processTransaction(
               transactionUpdater,
@@ -676,6 +1086,17 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
               blobGasPrice,
               transactionLocationTracker);
 
+      if (LOG_TX_TIMES) {
+        LOG.info(
+            "Bench tx par block {} idx {} hash {} to {} gas {} us {} chained {}",
+            blockHeader.getNumber(),
+            transactionLocation,
+            transaction.getHash().toHexString(),
+            transaction.getTo().map(a -> a.toHexString()).orElse("create"),
+            transaction.getGasLimit() - result.getGasRemaining(),
+            (System.nanoTime() - benchStart) / 1000,
+            previousInChain != null);
+      }
       // commit the accumulator in order to apply all the modifications
       transactionUpdater.commit();
       roundWorldStateUpdater.commit();
@@ -698,12 +1119,20 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         roundWorldStateUpdater.getStorageToUpdate().remove(miningBeneficiary);
         roundWorldStateUpdater.getStorageToClear().remove(miningBeneficiary);
       }
-      return precomputeLogsBloom(parallelizedTransactionContext);
+      final ParallelizedTransactionContext finishedContext =
+          precomputeLogsBloom(parallelizedTransactionContext);
+      if (blockDependencies != null) {
+        blockDependencies.finished(transactionLocation, finishedContext);
+      }
+      return finishedContext;
     } catch (Exception ex) {
       // no op as failing to get worldstate
       return null;
     } finally {
       if (ws != null) ws.close();
+      if (transactionLocation < finishedRuns.length()) {
+        finishedRuns.set(transactionLocation, 1);
+      }
     }
   }
 
@@ -747,11 +1176,37 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         transactionLocation < lateChainFutures.length()
             ? lateChainFutures.getAndSet(transactionLocation, null)
             : null;
+    final Dependencies blockDependencies = dependencies;
+    final CompletableFuture<ParallelizedTransactionContext> rerun =
+        blockDependencies == null ? null : blockDependencies.rerunToTake(transactionLocation);
     final CompletableFuture<ParallelizedTransactionContext> future =
-        lateChained != null ? lateChained : aloneOrChained;
+        rerun != null ? rerun : lateChained != null ? lateChained : aloneOrChained;
     if (lateChained != null && aloneOrChained != null) {
       // nothing else holds the run it replaces, which abort() would otherwise miss
       aloneOrChained.cancel(true);
+    }
+    if (rerun != null && !rerun.isDone()) {
+      // a re-run that started runs a transaction whose earlier result does not hold
+      try {
+        rerun.get(WAIT_RUNNING_MS, TimeUnit.MILLISECONDS);
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+      } catch (final ExecutionException | TimeoutException | CancellationException e) {
+        // handled below as a run that did not finish
+      }
+    } else if (future != null && !future.isDone() && shouldWaitFor(transactionLocation)) {
+      try {
+        future.get(WAIT_RUNNING_MS, TimeUnit.MILLISECONDS);
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+      } catch (final ExecutionException | TimeoutException | CancellationException e) {
+        // handled below as a run that did not finish
+      }
+    }
+
+    final AtomicIntegerArray finishedRuns = finished;
+    if (transactionLocation < finishedRuns.length()) {
+      finishedRuns.set(transactionLocation, 1);
     }
     if (future == null) {
       return Optional.empty();
@@ -802,13 +1257,20 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         parallelizedTransactionContext.transactionAccumulator();
     final TransactionProcessingResult transactionProcessingResult =
         parallelizedTransactionContext.transactionProcessingResult();
+    final List<Address> balancesCarried = CARRY_OVER ? new ArrayList<>(0) : null;
     // a reverted or halted execution is as repeatable as a successful one when nothing it read
     // changed; an invalid result is replayed anyway, and its sender may not even be recoverable
     if (!transactionProcessingResult.isInvalid()
         && !transactionCollisionDetector.hasCollision(
-            transaction, miningBeneficiary, parallelizedTransactionContext, blockAccumulator)) {
+            transaction,
+            miningBeneficiary,
+            parallelizedTransactionContext,
+            blockAccumulator,
+            balancesCarried)) {
       final Wei reward = parallelizedTransactionContext.miningBeneficiaryReward();
-      if (!reward.isZero() || !transactionProcessor.getClearEmptyAccounts()) {
+      // a result that touched the beneficiary before its reward already holds the reward
+      if (!parallelizedTransactionContext.isMiningBeneficiaryTouchedPreRewardByTransaction()
+          && (!reward.isZero() || !transactionProcessor.getClearEmptyAccounts())) {
         final MutableAccount miningBeneficiaryAccount =
             blockAccumulator.getOrCreate(miningBeneficiary);
         miningBeneficiaryAccount.incrementBalance(reward);
@@ -830,12 +1292,33 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         }
       }
 
-      blockAccumulator.importStateChangesFromSource(transactionAccumulator);
+      if (balancesCarried == null || balancesCarried.isEmpty()) {
+        blockAccumulator.importStateChangesFromSource(transactionAccumulator);
+      } else {
+        importCarryingBalances(
+            blockAccumulator, transactionAccumulator, balancesCarried, transactionProcessingResult);
+      }
 
       confirmedParallelizedTransactionCounter.ifPresent(Counter::inc);
       transactionProcessingResult.setIsProcessedInParallel(Optional.of(Boolean.TRUE));
       return Optional.of(transactionProcessingResult);
     } else {
+      if (LOG_CONFLICTS) {
+        LOG.info(
+            "Bench conflict idx {} hash {} to {} gas {} reason {}",
+            transactionLocation,
+            transaction.getHash().toHexString(),
+            transaction.getTo().map(a -> a.toHexString()).orElse("create"),
+            transaction.getGasLimit() - transactionProcessingResult.getGasRemaining(),
+            transactionProcessingResult.isInvalid()
+                ? "invalid"
+                : transactionCollisionDetector.collisionReason(
+                    transaction,
+                    miningBeneficiary,
+                    parallelizedTransactionContext,
+                    blockAccumulator,
+                    CARRY_OVER));
+      }
       blockAccumulator.importPriorStateFromSource(transactionAccumulator);
       heavyTransactionReplayed |= isHeavy(transaction);
       if (conflictingButCachedTransactionCounter.isPresent())
@@ -843,6 +1326,55 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       // If there is a conflict, we return an empty result to signal the block processor to
       // re-execute the transaction.
       return Optional.empty();
+    }
+  }
+
+  /**
+   * Takes over a result whose transaction changed balances that earlier transactions of the block
+   * changed too, without depending on them: each such balance ends at the block's balance plus the
+   * transaction's own change, in the state and in the block access list.
+   */
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  private static void importCarryingBalances(
+      final PathBasedWorldStateUpdateAccumulator blockAccumulator,
+      final PathBasedWorldStateUpdateAccumulator<?> transactionAccumulator,
+      final List<Address> balancesCarried,
+      final TransactionProcessingResult transactionProcessingResult) {
+    final Wei[] carried = new Wei[balancesCarried.size()];
+    for (int i = 0; i < carried.length; i++) {
+      final Address address = balancesCarried.get(i);
+      final BonsaiValue<? extends BonsaiAccount> inTransaction =
+          transactionAccumulator.getAccountsToUpdate().get(address);
+      final Wei inBlock =
+          ((BonsaiValue<? extends BonsaiAccount>)
+                  blockAccumulator.getAccountsToUpdate().get(address))
+              .getUpdated()
+              .getBalance();
+      final Wei before = inTransaction.getPrior().getBalance();
+      final Wei after = inTransaction.getUpdated().getBalance();
+      carried[i] =
+          after.compareTo(before) >= 0
+              ? inBlock.add(after.subtract(before))
+              : inBlock.subtract(before.subtract(after));
+    }
+    blockAccumulator.importStateChangesFromSource(transactionAccumulator);
+    for (int i = 0; i < carried.length; i++) {
+      final Address address = balancesCarried.get(i);
+      final Wei postBalance = carried[i];
+      ((BonsaiValue<? extends BonsaiAccount>) blockAccumulator.getAccountsToUpdate().get(address))
+          .getUpdated()
+          .setBalance(postBalance);
+      transactionProcessingResult
+          .getPartialBlockAccessView()
+          .ifPresent(
+              view ->
+                  view.accountChanges().stream()
+                      .filter(
+                          changes ->
+                              changes.getAddress().equals(address)
+                                  && changes.getPostBalance().isPresent())
+                      .findFirst()
+                      .ifPresent(changes -> changes.setPostBalance(postBalance)));
     }
   }
 }

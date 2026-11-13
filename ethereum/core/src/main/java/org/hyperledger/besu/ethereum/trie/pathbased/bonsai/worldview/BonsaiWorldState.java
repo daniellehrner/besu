@@ -243,6 +243,30 @@ public class BonsaiWorldState extends PathBasedWorldState {
     return this;
   }
 
+  /**
+   * Loads the trie nodes on the path of a storage slot into the trie node cache, on the calling
+   * thread.
+   *
+   * @param address the account
+   * @param storageSlotKey the slot
+   */
+  public void loadStorageTriePath(final Address address, final StorageSlotKey storageSlotKey) {
+    if (get(address) instanceof BonsaiAccount account) {
+      bonsaiCachedMerkleTrieLoader.cacheStorageNodes(
+          getWorldStateStorage(), address, account.getStorageRoot(), storageSlotKey);
+    }
+  }
+
+  /**
+   * Loads the account trie nodes on the path to an account, on the calling thread.
+   *
+   * @param address the account
+   */
+  public void loadAccountTriePath(final Address address) {
+    bonsaiCachedMerkleTrieLoader.cacheAccountNodes(
+        getWorldStateStorage(), worldStateRootHash, address);
+  }
+
   public void disableCacheMerkleTrieLoader() {
     this.bonsaiCachedMerkleTrieLoader = NoOpBonsaiCachedMerkleTrieLoader.INSTANCE;
   }

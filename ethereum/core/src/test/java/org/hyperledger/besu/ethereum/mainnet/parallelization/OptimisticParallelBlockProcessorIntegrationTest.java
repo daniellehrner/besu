@@ -23,25 +23,36 @@ import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBloc
 import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBlockProcessorTestSupport.ACCOUNT_GENESIS_2;
 import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBlockProcessorTestSupport.ACCOUNT_GENESIS_2_KEYPAIR;
 import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBlockProcessorTestSupport.CONTRACT_ADDRESS;
+import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBlockProcessorTestSupport.GENESIS_CONFIG;
+import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBlockProcessorTestSupport.MINING_BENEFICIARY;
 import static org.hyperledger.besu.ethereum.mainnet.parallelization.ParallelBlockProcessorTestSupport.PARALLEL_TEST_CONTRACT;
 
+import org.hyperledger.besu.config.GenesisConfig;
 import org.hyperledger.besu.crypto.KeyPair;
 import org.hyperledger.besu.crypto.SignatureAlgorithmFactory;
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.TransactionType;
 import org.hyperledger.besu.datatypes.Wei;
+import org.hyperledger.besu.ethereum.chain.BadBlockManager;
 import org.hyperledger.besu.ethereum.core.BlockHeader;
 import org.hyperledger.besu.ethereum.core.ExecutionContextTestFixture;
+import org.hyperledger.besu.ethereum.core.MiningConfiguration;
 import org.hyperledger.besu.ethereum.core.Transaction;
 import org.hyperledger.besu.ethereum.mainnet.BalConfiguration;
 import org.hyperledger.besu.ethereum.mainnet.ImmutableBalConfiguration;
 import org.hyperledger.besu.ethereum.mainnet.MainnetTransactionProcessor;
+import org.hyperledger.besu.ethereum.mainnet.ProtocolScheduleBuilder;
+import org.hyperledger.besu.ethereum.mainnet.ProtocolSpecAdapters;
 import org.hyperledger.besu.ethereum.processing.TransactionProcessingResult;
+import org.hyperledger.besu.evm.internal.EvmConfiguration;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
+import org.hyperledger.besu.metrics.noop.NoOpMetricsSystem;
+import org.hyperledger.besu.plugin.services.storage.DataStorageFormat;
 
 import java.math.BigInteger;
 import java.util.Optional;
+import java.util.function.Function;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.DisplayName;
@@ -234,6 +245,98 @@ class OptimisticParallelBlockProcessorIntegrationTest {
     }
 
     @Test
+    @DisplayName("Credits to an account whose balance changed earlier in the block are reused")
+    void creditsToTheSameAccountAreReused() {
+      final String recipient = "0xa4664C40AACeBD82A2Db79f0ea36C06Bc6A19Adb";
+      final ComparisonResult result =
+          executeAndCompare(
+              Wei.of(5),
+              transfer(0, recipient),
+              createTransferTransaction(
+                  0,
+                  2_000_000_000_000_000_000L,
+                  300_000L,
+                  0L,
+                  5L,
+                  recipient,
+                  ACCOUNT_GENESIS_2_KEYPAIR));
+
+      assertAccountsMatch(
+          result.seqWorldState(), result.parWorldState(), Address.fromHexString(recipient));
+      assertThat(result.parResult().getNbParallelizedTransactions()).contains(2);
+    }
+
+    @Test
+    @DisplayName("A credit to an account whose balance the transaction reads is executed again")
+    void creditToAnAccountWhoseBalanceIsReadIsExecutedAgain() {
+      // the contract self-destructs to itself, which reads its balance
+      final String recipient = "0x0000000000000000000000000000000000007701";
+      final ComparisonResult result =
+          executeAndCompare(
+              Wei.of(5),
+              transfer(0, recipient),
+              createTransferTransaction(
+                  0,
+                  2_000_000_000_000_000_000L,
+                  300_000L,
+                  0L,
+                  5L,
+                  recipient,
+                  ACCOUNT_GENESIS_2_KEYPAIR));
+
+      assertAccountsMatch(
+          result.seqWorldState(), result.parWorldState(), Address.fromHexString(recipient));
+      assertThat(result.parResult().getNbParallelizedTransactions()).contains(1);
+    }
+
+    @Test
+    @DisplayName("Spending from an account whose balance changed earlier in the block is reused")
+    void spendingFromAnAccountWhoseBalanceChangedIsReused() {
+      // the contract pays 1 wei from its own balance on every call, without reading the balance
+      final String payer = "0x0000000000000000000000000000000000007720";
+      final ComparisonResult result =
+          executeAndCompare(
+              Wei.of(5),
+              transfer(0, payer),
+              createTransferTransaction(0, 0L, 300_000L, 0L, 5L, payer, ACCOUNT_GENESIS_2_KEYPAIR));
+
+      assertAccountsMatch(
+          result.seqWorldState(), result.parWorldState(), Address.fromHexString(payer));
+      assertAccountsMatch(
+          result.seqWorldState(),
+          result.parWorldState(),
+          Address.fromHexString("0xa4664C40AACeBD82A2Db79f0ea36C06Bc6A19Adb"));
+      assertThat(result.parResult().getNbParallelizedTransactions()).contains(2);
+    }
+
+    @Test
+    @DisplayName("A payment to the mining beneficiary after paid priority fees is reused")
+    void paymentToTheMiningBeneficiaryIsReused() {
+      final ComparisonResult result =
+          executeAndCompare(
+              Wei.of(1),
+              createTransferTransaction(
+                  0,
+                  1_000_000_000_000_000_000L,
+                  300_000L,
+                  2L,
+                  10L,
+                  ACCOUNT_4,
+                  ACCOUNT_GENESIS_1_KEYPAIR),
+              createTransferTransaction(
+                  0,
+                  2_000_000_000_000_000_000L,
+                  300_000L,
+                  3L,
+                  10L,
+                  MINING_BENEFICIARY.toHexString(),
+                  ACCOUNT_GENESIS_2_KEYPAIR));
+
+      assertAccountsMatch(result.seqWorldState(), result.parWorldState(), MINING_BENEFICIARY);
+      assertThat(result.parResult().getNbParallelizedTransactions()).contains(2);
+    }
+
+    @Test
     @DisplayName("A reverted transaction keeps its speculative result")
     void revertedTransactionIsReused() {
       final Address contract = Address.fromHexStringStrict(CONTRACT_ADDRESS);
@@ -336,6 +439,35 @@ class OptimisticParallelBlockProcessorIntegrationTest {
           .payload(payload)
           .chainId(BigInteger.valueOf(42))
           .signAndBuild(keyPair);
+    }
+  }
+
+  @Nested
+  @DisplayName("Reuse of Speculative Results on EVM v2")
+  class SpeculativeResultReuseOnEvmV2 extends SpeculativeResultReuse {
+
+    // EVM v2 runs a transaction's frames on one journal, which must pass on what the transaction
+    // observes of balances like the stacked updaters do
+    @Override
+    protected ExecutionContextTestFixture createFreshContext() {
+      final GenesisConfig genesisConfig = GenesisConfig.fromResource(GENESIS_CONFIG);
+      return ExecutionContextTestFixture.builder(genesisConfig)
+          .dataStorageFormat(DataStorageFormat.BONSAI)
+          .protocolSchedule(
+              new ProtocolScheduleBuilder(
+                      genesisConfig.getConfigOptions(),
+                      Optional.of(BigInteger.valueOf(42)),
+                      ProtocolSpecAdapters.create(0, Function.identity()),
+                      false,
+                      new EvmConfiguration(
+                          32_000L, EvmConfiguration.WorldUpdaterMode.STACKED, true, true),
+                      MiningConfiguration.MINING_DISABLED,
+                      new BadBlockManager(),
+                      false,
+                      ImmutableBalConfiguration.builder().build(),
+                      new NoOpMetricsSystem())
+                  .createProtocolSchedule())
+          .build();
     }
   }
 }
