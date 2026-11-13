@@ -58,6 +58,10 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
 
   private static final Executor cpuExecutor = BlockProcessingExecutors.cpuExecutor();
 
+  // EVM v2 blocks without a block access list hand speculative results over as Nethermind does
+  private static final boolean HANDOFF =
+      Boolean.parseBoolean(System.getProperty("besu.t20.handoff", "true"));
+
   private final Executor executor;
   private final Optional<Counter> confirmedParallelizedTransactionCounter;
   private final Optional<Counter> conflictingButCachedTransactionCounter;
@@ -177,6 +181,10 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
       parallelProcessor =
           new BalConcurrentTransactionProcessor(
               transactionProcessor, blockAccessListAccountLookup.get(), balConfiguration);
+    } else if (HANDOFF
+        && blockAccessListBuilder.isEmpty()
+        && transactionProcessor.getMessageCallProcessor().runsOnEvmV2()) {
+      parallelProcessor = new HandoffTransactionProcessor(transactionProcessor);
     } else {
       parallelProcessor = new OptimisticConcurrentTransactionProcessor(transactionProcessor);
     }
@@ -206,8 +214,8 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
       final int location,
       final BlockHashLookup blockHashLookup,
       final Optional<AccessLocationTracker> accessLocationTracker) {
-    return parallelProcessor
-        .flatMap(
+    final Optional<TransactionProcessingResult> parallelResult =
+        parallelProcessor.flatMap(
             processor ->
                 processor.getProcessingResult(
                     blockProcessingContext.getWorldState(),
@@ -215,19 +223,24 @@ public class MainnetParallelBlockProcessor extends MainnetBlockProcessor {
                     transaction,
                     location,
                     confirmedParallelizedTransactionCounter,
-                    conflictingButCachedTransactionCounter))
-        // No usable parallel result (a conflict, or nothing ran in parallel): process it
-        // sequentially.
-        .orElseGet(
-            () ->
-                processTransactionSequentially(
-                    blockProcessingContext,
-                    transactionUpdater,
-                    blobGasPrice,
-                    miningBeneficiary,
-                    transaction,
-                    blockHashLookup,
-                    accessLocationTracker));
+                    conflictingButCachedTransactionCounter));
+    if (parallelResult.isPresent()) {
+      return parallelResult.get();
+    }
+    // No usable parallel result (a conflict, or nothing ran in parallel): process it
+    // sequentially.
+    final TransactionProcessingResult result =
+        processTransactionSequentially(
+            blockProcessingContext,
+            transactionUpdater,
+            blobGasPrice,
+            miningBeneficiary,
+            transaction,
+            blockHashLookup,
+            accessLocationTracker);
+    parallelProcessor.ifPresent(
+        processor -> processor.onExecutedSequentially(location, transactionUpdater));
+    return result;
   }
 
   public static class ParallelBlockProcessorBuilder

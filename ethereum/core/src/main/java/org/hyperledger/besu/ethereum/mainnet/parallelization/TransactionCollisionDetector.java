@@ -101,11 +101,21 @@ public class TransactionCollisionDetector {
       return hasCollisionWithChainedState(
           transactionAccumulator, chainPredecessor, blockAccumulator);
     }
+    final Map<Address, Map<StorageSlotKey, UInt256>> seeds = parallelizedTransactionContext.seeds();
+    // a cleared storage is not visible slot by slot, so a seeded run that cleared one is not taken
+    if (seeds != null && !transactionAccumulator.getStorageToClear().isEmpty()) {
+      return true;
+    }
     // an executed transaction loaded its sender and recipient, and the commit added the accounts
     // it deleted
     for (final Address address : transactionAccumulator.getAccountsToUpdate().keySet()) {
       if (hasCollision(
-          transaction, address, transactionAccumulator, blockAccumulator, balancesCarried)) {
+          transaction,
+          address,
+          transactionAccumulator,
+          blockAccumulator,
+          balancesCarried,
+          seeds == null ? null : seeds.get(address))) {
         return true;
       }
     }
@@ -207,11 +217,15 @@ public class TransactionCollisionDetector {
       final Address address,
       final PathBasedWorldStateUpdateAccumulator<?> transactionAccumulator,
       final PathBasedWorldStateUpdateAccumulator<? extends BonsaiAccount> blockAccumulator,
-      final @Nullable List<Address> balancesCarried) {
+      final @Nullable List<Address> balancesCarried,
+      final @Nullable Map<StorageSlotKey, UInt256> seeded) {
     final BonsaiValue<? extends BonsaiAccount> inBlock =
         blockAccumulator.getAccountsToUpdate().get(address);
     if (inBlock == null) {
-      return false;
+      // the block left the account as the parent has it, so a seeded slot must hold the parent's
+      return seeded != null
+          && seededSlotMoved(
+              seeded, null, transactionAccumulator.getStorageToUpdate().get(address));
     }
     if (!areAccountDetailsEqualExcludingStorage(inBlock.getPrior(), inBlock.getUpdated())) {
       if (balancesCarried == null
@@ -232,11 +246,65 @@ public class TransactionCollisionDetector {
     }
     final Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> blockSlots =
         blockAccumulator.getStorageToUpdate().get(address);
+    if (seeded != null) {
+      return seededSlotMoved(seeded, blockSlots, slots)
+          || unseededSlotChanged(seeded, blockSlots, slots);
+    }
     if (blockSlots == null) {
       return false;
     }
     // the block may have changed many slots of a popular contract, the transaction few
     for (final StorageSlotKey slot : slots.keySet()) {
+      final BonsaiValue<UInt256> inBlockSlot = blockSlots.get(slot);
+      if (inBlockSlot != null && inBlockSlot.isChanged()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the block now holds a value other than its seed in a slot a refreshed run started from
+   * the seed. A slot the block has no entry for is at the parent's value, which is the prior of the
+   * run's entry: seeding wrote the seed over the slot the run loaded from the parent.
+   */
+  private static boolean seededSlotMoved(
+      final Map<StorageSlotKey, UInt256> seeded,
+      final @Nullable Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> blockSlots,
+      final @Nullable Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> runSlots) {
+    for (final Map.Entry<StorageSlotKey, UInt256> seed : seeded.entrySet()) {
+      final BonsaiValue<UInt256> inBlock =
+          blockSlots == null ? null : blockSlots.get(seed.getKey());
+      final UInt256 current;
+      if (inBlock != null) {
+        current = inBlock.getUpdated();
+      } else {
+        final BonsaiValue<UInt256> inRun = runSlots == null ? null : runSlots.get(seed.getKey());
+        if (inRun == null) {
+          // the seed of a slot the run has no entry for was not applied
+          return true;
+        }
+        current = inRun.getPrior();
+      }
+      if (!areSlotValuesEqual(current, seed.getValue())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether the block changed a slot that a refreshed run read at the parent's value. */
+  private static boolean unseededSlotChanged(
+      final Map<StorageSlotKey, UInt256> seeded,
+      final @Nullable Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> blockSlots,
+      final Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> runSlots) {
+    if (blockSlots == null) {
+      return false;
+    }
+    for (final StorageSlotKey slot : runSlots.keySet()) {
+      if (seeded.containsKey(slot)) {
+        continue;
+      }
       final BonsaiValue<UInt256> inBlockSlot = blockSlots.get(slot);
       if (inBlockSlot != null && inBlockSlot.isChanged()) {
         return true;

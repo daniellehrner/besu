@@ -25,6 +25,7 @@ import org.hyperledger.besu.ethereum.processing.TransactionProcessingResult;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.worldstate.WorldStateQueryParams;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
+import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
 
@@ -195,6 +196,14 @@ public abstract class ParallelBlockTransactionProcessor {
     transaction.getCodeDelegationList().ifPresent(list -> list.forEach(CodeDelegation::authorizer));
     return transaction.detachedCopy();
   }
+
+  /**
+   * Called once the transaction at {@code location} was executed in the block's order, because no
+   * speculative result of it could be taken, with the updater that holds its changes before they
+   * are committed. Does nothing by default.
+   */
+  @SuppressWarnings("unused") // used by subclasses
+  public void onExecutedSequentially(final int location, final WorldUpdater transactionUpdater) {}
 
   protected abstract ParallelizedTransactionContext runTransaction(
       ProtocolContext protocolContext,

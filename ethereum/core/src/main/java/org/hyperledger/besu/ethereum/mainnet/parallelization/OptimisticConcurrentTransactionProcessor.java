@@ -59,6 +59,8 @@ import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
 import com.google.common.annotations.VisibleForTesting;
+import org.apache.tuweni.units.bigints.UInt256;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -310,6 +312,7 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
                       blobGasPrice,
                       blockAccessListBuilder,
                       maybeParentHeader,
+                      null,
                       null);
                 },
                 executor);
@@ -645,7 +648,8 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
                 blobGasPrice,
                 blockAccessListBuilder,
                 maybeParentHeader,
-                state);
+                state,
+                null);
       } catch (final Throwable t) {
         // completed with the error so that the serial loop reports it, as for a run alone
         future.completeExceptionally(t);
@@ -672,6 +676,36 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
 
   private boolean serialLoopHasPassed(final int txIndex) {
     return txIndex <= serialLoopPosition.get();
+  }
+
+  /**
+   * Records that the serial loop reached the transaction without taking a result of the runs this
+   * class started for it, and stops those runs: a run ahead of it, a run still queued or running.
+   */
+  protected void reachedWithoutRuns(final int transactionLocation) {
+    serialLoopPosition.set(transactionLocation);
+    final CompletableFuture<ParallelizedTransactionContext> aloneOrChained =
+        removeFuture(transactionLocation);
+    if (aloneOrChained != null) {
+      aloneOrChained.cancel(true);
+    }
+    final CompletableFuture<ParallelizedTransactionContext> lateChained =
+        transactionLocation < lateChainFutures.length()
+            ? lateChainFutures.getAndSet(transactionLocation, null)
+            : null;
+    if (lateChained != null) {
+      lateChained.cancel(true);
+    }
+    final AtomicIntegerArray finishedRuns = finished;
+    if (transactionLocation < finishedRuns.length()) {
+      finishedRuns.set(transactionLocation, 1);
+    }
+  }
+
+  /** Whether the transaction runs in a chain of its sender's transactions. */
+  protected boolean isChainMember(final int transactionLocation) {
+    final AtomicIntegerArray chained = inChain;
+    return transactionLocation < chained.length() && chained.get(transactionLocation) == 1;
   }
 
   private record SlotKey(Address address, StorageSlotKey slot) {}
@@ -923,7 +957,8 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
                         blobGasPrice,
                         blockAccessListBuilder,
                         maybeParentHeader,
-                        onTopOf);
+                        onTopOf,
+                        null);
               } catch (final Throwable t) {
                 rerun.completeExceptionally(t);
                 return;
@@ -976,8 +1011,49 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         blobGasPrice,
         blockAccessListBuilder,
         maybeParentHeader,
+        null,
         null);
   }
+
+  /**
+   * Runs a transaction on the parent state with the given slots set first, as the transactions
+   * before it are expected to leave them. Only the seeds of accounts the parent state has, and of
+   * slots whose key is known, are set; the result holds the ones that were.
+   */
+  protected ParallelizedTransactionContext runSeeded(
+      final ProtocolContext protocolContext,
+      final BlockHeader blockHeader,
+      final int transactionLocation,
+      final Transaction transaction,
+      final Address miningBeneficiary,
+      final BlockHashLookup blockHashLookup,
+      final Wei blobGasPrice,
+      final Optional<BlockAccessListBuilder> blockAccessListBuilder,
+      final Optional<BlockHeader> maybeParentHeader,
+      final Map<Address, Map<StorageSlotKey, UInt256>> seeds) {
+    return runTransaction(
+        protocolContext,
+        blockHeader,
+        transactionLocation,
+        transaction,
+        miningBeneficiary,
+        blockHashLookup,
+        blobGasPrice,
+        blockAccessListBuilder,
+        maybeParentHeader,
+        null,
+        seeds);
+  }
+
+  /**
+   * Called on the worker once a run of the transaction has finished, with its result; a seeded run
+   * comes with the seeds it was given. Does nothing by default.
+   */
+  @SuppressWarnings("unused") // used by subclasses
+  protected void onRunFinished(
+      final int transactionLocation,
+      final ParallelizedTransactionContext context,
+      final @Nullable Map<Address, Map<StorageSlotKey, UInt256>> seeds) {}
 
   private ParallelizedTransactionContext runTransaction(
       final ProtocolContext protocolContext,
@@ -989,7 +1065,8 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       final Wei blobGasPrice,
       final Optional<BlockAccessListBuilder> blockAccessListBuilder,
       final Optional<BlockHeader> maybeParentHeader,
-      final PathBasedWorldStateUpdateAccumulator<?> previousInChain) {
+      final PathBasedWorldStateUpdateAccumulator<?> previousInChain,
+      final @Nullable Map<Address, Map<StorageSlotKey, UInt256>> seeds) {
 
     if (maybeParentHeader.isEmpty()) {
       return null;
@@ -1035,6 +1112,9 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         ((PathBasedWorldStateUpdateAccumulator) roundWorldStateUpdater)
             .importStateChangesFromSource(previousInChain);
         contextBuilder.chainPredecessorAccumulator(previousInChain);
+      }
+      if (seeds != null) {
+        contextBuilder.seeds(applySeeds(roundWorldStateUpdater, seeds));
       }
       final WorldUpdater transactionUpdater = roundWorldStateUpdater.updater();
       final Optional<AccessLocationTracker> transactionLocationTracker =
@@ -1121,6 +1201,7 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       if (blockDependencies != null) {
         blockDependencies.finished(transactionLocation, finishedContext);
       }
+      onRunFinished(transactionLocation, finishedContext, seeds);
       return finishedContext;
     } catch (Exception ex) {
       // no op as failing to get worldstate
@@ -1131,6 +1212,39 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         finishedRuns.set(transactionLocation, 1);
       }
     }
+  }
+
+  /**
+   * Sets the seeded slots on the run's state and commits them, so that the transaction reads them
+   * and, as the next transaction of a block would, starts from them as its original values.
+   *
+   * @return the seeds that were set
+   */
+  private static Map<Address, Map<StorageSlotKey, UInt256>> applySeeds(
+      final PathBasedWorldStateUpdateAccumulator<?> accumulator,
+      final Map<Address, Map<StorageSlotKey, UInt256>> seeds) {
+    final Map<Address, Map<StorageSlotKey, UInt256>> applied = new HashMap<>();
+    for (final Map.Entry<Address, Map<StorageSlotKey, UInt256>> account : seeds.entrySet()) {
+      final MutableAccount mutable = accumulator.getAccount(account.getKey());
+      // a seed of an account the parent state lacks has nothing to belong to
+      if (mutable == null) {
+        continue;
+      }
+      final Map<StorageSlotKey, UInt256> set = new HashMap<>();
+      for (final Map.Entry<StorageSlotKey, UInt256> slot : account.getValue().entrySet()) {
+        final Optional<UInt256> key = slot.getKey().getSlotKey();
+        if (key.isPresent()) {
+          mutable.setStorageValue(key.get(), slot.getValue());
+          set.put(slot.getKey(), slot.getValue());
+        }
+      }
+      if (!set.isEmpty()) {
+        applied.put(account.getKey(), set);
+      }
+    }
+    accumulator.commit();
+    accumulator.markTransactionBoundary();
+    return applied;
   }
 
   /**
@@ -1243,6 +1357,30 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       return Optional.empty();
     }
 
+    return takeOrReject(
+        worldState,
+        miningBeneficiary,
+        transaction,
+        transactionLocation,
+        parallelizedTransactionContext,
+        confirmedParallelizedTransactionCounter,
+        conflictingButCachedTransactionCounter);
+  }
+
+  /**
+   * Takes over a finished speculative result if it holds on the block's state, or else imports what
+   * it read so that executing the transaction finds it in memory.
+   *
+   * @return the result if it was taken over, empty if the transaction must be executed
+   */
+  protected Optional<TransactionProcessingResult> takeOrReject(
+      final MutableWorldState worldState,
+      final Address miningBeneficiary,
+      final Transaction transaction,
+      final int transactionLocation,
+      final @Nullable ParallelizedTransactionContext parallelizedTransactionContext,
+      final Optional<Counter> confirmedParallelizedTransactionCounter,
+      final Optional<Counter> conflictingButCachedTransactionCounter) {
     if (parallelizedTransactionContext == null) {
       return Optional.empty();
     }
