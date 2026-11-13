@@ -349,6 +349,31 @@ class HandoffParallelBlockProcessorIntegrationTest {
       assertThat(result.parResult().getNbParallelizedTransactions()).hasValue(3);
     }
 
+    @Test
+    @DisplayName("A sender whose balance an earlier transaction only raised keeps its result")
+    void senderWhoseBalanceWasRaisedKeepsItsResult() {
+      final Address second = Util.publicKeyToAddress(SENDERS.get(1).getPublicKey());
+      final Address recipient = Util.publicKeyToAddress(SENDERS.get(2).getPublicKey());
+      final Transaction raise =
+          createTransferTransaction(
+              0, 1_000_000_000_000_000_000L, 21_000L, 0L, 5L, second.toHexString(), SENDERS.get(0));
+      final Transaction spend =
+          createTransferTransaction(
+              0,
+              2_000_000_000_000_000_000L,
+              21_000L,
+              0L,
+              5L,
+              recipient.toHexString(),
+              SENDERS.get(1));
+
+      final ComparisonResult result = executeAndCompare(Wei.of(5), raise, spend);
+
+      assertAccountsMatch(result.seqWorldState(), result.parWorldState(), second);
+      assertAccountsMatch(result.seqWorldState(), result.parWorldState(), recipient);
+      assertThat(result.parResult().getNbParallelizedTransactions()).hasValue(2);
+    }
+
     private Transaction withoutKnownSender(final Transaction transaction) {
       return Transaction.readFrom(transaction.encoded());
     }

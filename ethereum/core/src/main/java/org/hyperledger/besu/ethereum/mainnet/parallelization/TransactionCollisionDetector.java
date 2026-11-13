@@ -35,6 +35,24 @@ import org.jspecify.annotations.Nullable;
 
 public class TransactionCollisionDetector {
 
+  private final boolean carrySenderBalance;
+
+  /** A detector that never carries the sender's balance over. */
+  public TransactionCollisionDetector() {
+    this(false);
+  }
+
+  /**
+   * A detector that, with {@code carrySenderBalance}, also carries the sender's balance over when
+   * earlier transactions only raised it: it still pays the transaction's upfront cost, which is the
+   * only place the transaction depends on it unless it read it.
+   *
+   * @param carrySenderBalance whether the sender's balance may be carried over
+   */
+  public TransactionCollisionDetector(final boolean carrySenderBalance) {
+    this.carrySenderBalance = carrySenderBalance;
+  }
+
   /**
    * Checks whether the block changed state that the transaction read or wrote while it executed
    * speculatively against the parent state.
@@ -242,7 +260,8 @@ public class TransactionCollisionDetector {
     }
     if (!areAccountDetailsEqualExcludingStorage(inBlock.getPrior(), inBlock.getUpdated())) {
       if (balancesCarried == null
-          || !isBalanceChangeCarried(transaction, transactionAccumulator, address, inBlock)) {
+          || !isBalanceChangeCarried(
+              transaction, transactionAccumulator, address, inBlock, carrySenderBalance)) {
         return true;
       }
       balancesCarried.add(address);
@@ -337,12 +356,14 @@ public class TransactionCollisionDetector {
       final Transaction transaction,
       final PathBasedWorldStateUpdateAccumulator<?> transactionAccumulator,
       final Address address,
-      final BonsaiValue<? extends BonsaiAccount> inBlock) {
+      final BonsaiValue<? extends BonsaiAccount> inBlock,
+      final boolean carrySender) {
     final Set<Address> observedBalances = transactionAccumulator.getObservedBalances();
+    final boolean isSender = address.equals(transaction.getSender());
     // the sender's balance pays for the gas
     if (observedBalances == null
         || observedBalances.contains(address)
-        || address.equals(transaction.getSender())) {
+        || (isSender && !carrySender)) {
       return false;
     }
     final BonsaiValue<? extends BonsaiAccount> inTransaction =
@@ -361,6 +382,10 @@ public class TransactionCollisionDetector {
         || inTransaction.getPrior().isEmpty()
         || inTransaction.getUpdated().isEmpty()) {
       return false;
+    }
+    if (isSender) {
+      // the upfront cost was paid from the parent's balance, which the block only raised since
+      return blockUpdated.getBalance().compareTo(blockPrior.getBalance()) >= 0;
     }
     final Wei startingBalance = inTransaction.getPrior().getBalance();
     final Optional<Wei> margin = transactionAccumulator.getBalanceMargin(address);
@@ -464,7 +489,7 @@ public class TransactionCollisionDetector {
     return null;
   }
 
-  private static @Nullable String accountChangeKind(
+  private @Nullable String accountChangeKind(
       final Transaction transaction,
       final PathBasedWorldStateUpdateAccumulator<?> transactionAccumulator,
       final Address address,
@@ -482,7 +507,8 @@ public class TransactionCollisionDetector {
     if (!carryBalances) {
       return address.equals(transaction.getSender()) ? "sender-balance" : "balance";
     }
-    if (isBalanceChangeCarried(transaction, transactionAccumulator, address, inBlock)) {
+    if (isBalanceChangeCarried(
+        transaction, transactionAccumulator, address, inBlock, carrySenderBalance)) {
       return null;
     }
     if (address.equals(transaction.getSender())) {

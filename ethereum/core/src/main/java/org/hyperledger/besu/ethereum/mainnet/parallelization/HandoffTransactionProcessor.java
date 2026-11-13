@@ -131,8 +131,17 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   private int takenOther;
   private int executedReported;
 
+  // the sender's balance is carried over when earlier transactions only raised it, as Nethermind
+  // replays a balance as a change on a minimum
+  private static final boolean CARRY_SENDER =
+      Boolean.parseBoolean(System.getProperty("besu.t20.carrySender", "true"));
+
   public HandoffTransactionProcessor(final MainnetTransactionProcessor transactionProcessor) {
-    super(transactionProcessor);
+    super(
+        transactionProcessor,
+        new TransactionCollisionDetector(CARRY_SENDER),
+        BlockProcessingExecutors.ioExecutor(),
+        2 * BlockProcessingExecutors.cpuThreads());
   }
 
   @Override
