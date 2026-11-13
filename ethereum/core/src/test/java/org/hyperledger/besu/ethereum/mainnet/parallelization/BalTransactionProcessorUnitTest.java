@@ -214,7 +214,9 @@ class BalTransactionProcessorUnitTest {
       stubSuccessfulTransaction();
 
       new BalConcurrentTransactionProcessor(
-              transactionProcessor, mockEmptyBlockAccessList(), BalConfiguration.DEFAULT)
+              transactionProcessor,
+              BlockAccessListAccountLookup.of(mockEmptyBlockAccessList()),
+              BalConfiguration.DEFAULT)
           .runAsyncBlock(
               env.protocolContext(),
               env.blockHeader(),
@@ -887,7 +889,9 @@ class BalTransactionProcessorUnitTest {
       stubSuccessfulTransaction();
       final BalConcurrentTransactionProcessor processor =
           new BalConcurrentTransactionProcessor(
-              transactionProcessor, blockAccessList, BalConfiguration.DEFAULT);
+              transactionProcessor,
+              BlockAccessListAccountLookup.of(blockAccessList),
+              BalConfiguration.DEFAULT);
       final List<Runnable> queuedTasks = new ArrayList<>();
 
       processor.runAsyncBlock(
