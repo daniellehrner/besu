@@ -97,11 +97,11 @@ public class TransactionCollisionDetector {
             || !transactionAccumulator.getAccountsToUpdate().containsKey(miningBeneficiary))) {
       return true;
     }
+    final Map<Address, Map<StorageSlotKey, UInt256>> seeds = parallelizedTransactionContext.seeds();
     if (chainPredecessor != null) {
       return hasCollisionWithChainedState(
-          transactionAccumulator, chainPredecessor, blockAccumulator);
+          transactionAccumulator, chainPredecessor, blockAccumulator, seeds);
     }
-    final Map<Address, Map<StorageSlotKey, UInt256>> seeds = parallelizedTransactionContext.seeds();
     // a cleared storage is not visible slot by slot, so a seeded run that cleared one is not taken
     if (seeds != null && !transactionAccumulator.getStorageToClear().isEmpty()) {
       return true;
@@ -130,7 +130,8 @@ public class TransactionCollisionDetector {
   private boolean hasCollisionWithChainedState(
       final PathBasedWorldStateUpdateAccumulator<?> transactionAccumulator,
       final PathBasedWorldStateUpdateAccumulator<?> chainPredecessor,
-      final PathBasedWorldStateUpdateAccumulator<? extends BonsaiAccount> blockAccumulator) {
+      final PathBasedWorldStateUpdateAccumulator<? extends BonsaiAccount> blockAccumulator,
+      final @Nullable Map<Address, Map<StorageSlotKey, UInt256>> seeds) {
     // a cleared storage is not visible slot by slot
     if (!transactionAccumulator.getStorageToClear().isEmpty()) {
       return true;
@@ -153,7 +154,19 @@ public class TransactionCollisionDetector {
           blockAccumulator.getStorageToUpdate().get(address);
       final Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> predecessorSlots =
           chainPredecessor.getStorageToUpdate().get(address);
+      final Map<StorageSlotKey, UInt256> seeded = seeds == null ? null : seeds.get(address);
       for (final StorageSlotKey slot : slots.getValue().keySet()) {
+        if (seeded != null && seeded.containsKey(slot)) {
+          // a refreshed member started from the seed rather than its predecessor's value; the
+          // seed was written over the slot the run loaded from the parent, the entry's prior
+          final BonsaiValue<UInt256> inBlock = blockSlots == null ? null : blockSlots.get(slot);
+          final UInt256 current =
+              inBlock != null ? inBlock.getUpdated() : slots.getValue().get(slot).getPrior();
+          if (!areSlotValuesEqual(current, seeded.get(slot))) {
+            return true;
+          }
+          continue;
+        }
         if (!holdsStartingValue(
             blockSlots == null ? null : blockSlots.get(slot),
             predecessorSlots == null ? null : predecessorSlots.get(slot),
@@ -408,7 +421,10 @@ public class TransactionCollisionDetector {
     }
     if (chainPredecessor != null) {
       return hasCollisionWithChainedState(
-              transactionAccumulator, chainPredecessor, blockAccumulator)
+              transactionAccumulator,
+              chainPredecessor,
+              blockAccumulator,
+              parallelizedTransactionContext.seeds())
           ? "chained " + transaction.getSender()
           : null;
     }

@@ -27,6 +27,7 @@ import org.hyperledger.besu.ethereum.mainnet.parallelization.BlockFootprints.Raw
 import org.hyperledger.besu.ethereum.mainnet.parallelization.BlockFootprints.Seeding;
 import org.hyperledger.besu.ethereum.processing.TransactionProcessingResult;
 import org.hyperledger.besu.ethereum.transaction.TransactionInvalidReason;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
 import org.hyperledger.besu.evm.worldstate.UpdateTrackingAccount;
@@ -200,15 +201,29 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
     final boolean onDemand = ON_DEMAND.get();
     final Footprint footprint = Footprint.of(context, run.miningBeneficiary(), onDemand);
     // a run on top of its sender's previous transaction replaces the transaction's failed one
-    blockFootprints.store(transactionLocation, footprint, !onDemand);
-    if (sender.isPresent()) {
-      final SenderNonce key = new SenderNonce(sender.get(), transaction.getNonce());
-      resultsBySenderNonce.put(key, footprint);
-      final Integer next =
-          waitingForPrevious.remove(new SenderNonce(sender.get(), transaction.getNonce() + 1));
-      if (next != null) {
-        startOnTopOf(blockFootprints, run, next, footprint);
-      }
+    if (blockFootprints.store(transactionLocation, footprint, !onDemand)) {
+      registerResult(blockFootprints, run, transaction, footprint);
+    }
+  }
+
+  /**
+   * Records the latest result of a transaction by its sender's nonce, and starts the sender's next
+   * transaction on it if that one waits for it.
+   */
+  private void registerResult(
+      final BlockFootprints blockFootprints,
+      final BlockRun run,
+      final Transaction transaction,
+      final Footprint footprint) {
+    final Optional<Address> sender = transaction.getSenderIfKnown();
+    if (sender.isEmpty()) {
+      return;
+    }
+    resultsBySenderNonce.put(new SenderNonce(sender.get(), transaction.getNonce()), footprint);
+    final Integer next =
+        waitingForPrevious.remove(new SenderNonce(sender.get(), transaction.getNonce() + 1));
+    if (next != null) {
+      startOnTopOf(blockFootprints, run, next, footprint);
     }
   }
 
@@ -440,8 +455,22 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   private void refresh(
       final BlockFootprints blockFootprints, final BlockRun run, final int position) {
     final Footprint invalidated = blockFootprints.latest(position);
-    if (invalidated == null || !invalidated.refreshable || isChainMember(position)) {
+    if (invalidated == null || !invalidated.refreshable) {
       return;
+    }
+    final Transaction transaction = run.transactions().get(position);
+    // a member of its sender's chain runs again on the latest result of its predecessor
+    PathBasedWorldStateUpdateAccumulator<?> previous = null;
+    if (invalidated.context.chainPredecessorAccumulator() != null) {
+      final Optional<Address> sender = transaction.getSenderIfKnown();
+      final Footprint predecessor =
+          sender.isEmpty() || transaction.getNonce() == 0
+              ? null
+              : resultsBySenderNonce.get(new SenderNonce(sender.get(), transaction.getNonce() - 1));
+      if (predecessor == null) {
+        return;
+      }
+      previous = predecessor.context.transactionAccumulator();
     }
     final Seeding seeding = blockFootprints.seedsFor(position, invalidated);
     if (seeding == null || blockFootprints.mainThreadAt() >= position) {
@@ -450,17 +479,30 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
     final ParallelizedTransactionContext context;
     try {
       context =
-          runSeeded(
-              run.protocolContext(),
-              run.blockHeader(),
-              position,
-              run.transactions().get(position),
-              run.miningBeneficiary(),
-              run.blockHashLookup(),
-              run.blobGasPrice(),
-              run.blockAccessListBuilder(),
-              run.maybeParentHeader(),
-              seeding.seeds());
+          previous == null
+              ? runSeeded(
+                  run.protocolContext(),
+                  run.blockHeader(),
+                  position,
+                  transaction,
+                  run.miningBeneficiary(),
+                  run.blockHashLookup(),
+                  run.blobGasPrice(),
+                  run.blockAccessListBuilder(),
+                  run.maybeParentHeader(),
+                  seeding.seeds())
+              : runSeededOnTopOf(
+                  run.protocolContext(),
+                  run.blockHeader(),
+                  position,
+                  transaction,
+                  run.miningBeneficiary(),
+                  run.blockHashLookup(),
+                  run.blobGasPrice(),
+                  run.blockAccessListBuilder(),
+                  run.maybeParentHeader(),
+                  previous,
+                  seeding.seeds());
     } catch (final RuntimeException e) {
       LOG.debug("Error refreshing the footprint of transaction {}", position, e);
       return;
@@ -468,6 +510,9 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
     if (context == null || context.transactionProcessingResult().isInvalid()) {
       return;
     }
-    blockFootprints.store(position, Footprint.of(context, run.miningBeneficiary()), false);
+    final Footprint refreshed = Footprint.of(context, run.miningBeneficiary());
+    if (blockFootprints.store(position, refreshed, false)) {
+      registerResult(blockFootprints, run, transaction, refreshed);
+    }
   }
 }

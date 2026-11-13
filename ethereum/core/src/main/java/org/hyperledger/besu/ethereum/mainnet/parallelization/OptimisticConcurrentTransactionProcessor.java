@@ -1046,6 +1046,36 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
   }
 
   /**
+   * Runs a transaction on the state an earlier transaction of its sender left, with the given slots
+   * set on top as the transactions between them are expected to leave them.
+   */
+  protected ParallelizedTransactionContext runSeededOnTopOf(
+      final ProtocolContext protocolContext,
+      final BlockHeader blockHeader,
+      final int transactionLocation,
+      final Transaction transaction,
+      final Address miningBeneficiary,
+      final BlockHashLookup blockHashLookup,
+      final Wei blobGasPrice,
+      final Optional<BlockAccessListBuilder> blockAccessListBuilder,
+      final Optional<BlockHeader> maybeParentHeader,
+      final PathBasedWorldStateUpdateAccumulator<?> previousOfSender,
+      final Map<Address, Map<StorageSlotKey, UInt256>> seeds) {
+    return runTransaction(
+        protocolContext,
+        blockHeader,
+        transactionLocation,
+        transaction,
+        miningBeneficiary,
+        blockHashLookup,
+        blobGasPrice,
+        blockAccessListBuilder,
+        maybeParentHeader,
+        previousOfSender,
+        seeds);
+  }
+
+  /**
    * Runs a transaction on the state an earlier transaction of its sender left, as a member of a
    * chain does.
    */

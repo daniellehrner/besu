@@ -156,9 +156,7 @@ final class BlockFootprints {
           cleared,
           seeds != null,
           onDemand,
-          predecessor == null
-              && cleared.isEmpty()
-              && !context.transactionProcessingResult().isInvalid());
+          cleared.isEmpty() && !context.transactionProcessingResult().isInvalid());
     }
   }
 

@@ -330,6 +330,25 @@ class HandoffParallelBlockProcessorIntegrationTest {
       assertThat(result.parResult().getNbParallelizedTransactions()).hasValue(3);
     }
 
+    @Test
+    @DisplayName(
+        "A chained transaction another sender's write invalidates is refreshed on its chain")
+    void chainMemberIsRefreshedOnItsPredecessor() {
+      // the second transaction of the first sender runs chained on its first one and reads the
+      // counter it left, before the other sender's increment between them
+      final Transaction firstOfA = increment(SENDERS.get(0));
+      final Transaction ofB = increment(SENDERS.get(1));
+      final Transaction secondOfA =
+          createContractCallTransaction(
+              1, counter, "incrementSlot1", SENDERS.get(0), Optional.empty());
+
+      final ComparisonResult result = executeAndCompare(Wei.of(5), firstOfA, ofB, secondOfA);
+
+      assertContractStorageMatches(result.seqWorldState(), result.parWorldState(), counter, 0);
+      assertContractStorage(result.parWorldState(), counter, 0, 13);
+      assertThat(result.parResult().getNbParallelizedTransactions()).hasValue(3);
+    }
+
     private Transaction withoutKnownSender(final Transaction transaction) {
       return Transaction.readFrom(transaction.encoded());
     }
