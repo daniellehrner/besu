@@ -72,6 +72,7 @@ final class BlockFootprints {
     final Write[] writes;
     final Set<Address> cleared;
     final boolean refreshed;
+    final boolean onDemand;
     final boolean refreshable;
 
     private Footprint(
@@ -80,13 +81,20 @@ final class BlockFootprints {
         final Write[] writes,
         final Set<Address> cleared,
         final boolean refreshed,
+        final boolean onDemand,
         final boolean refreshable) {
       this.context = context;
       this.reads = reads;
       this.writes = writes;
       this.cleared = cleared;
       this.refreshed = refreshed;
+      this.onDemand = onDemand;
       this.refreshable = refreshable;
+    }
+
+    /** Whether block processing takes this footprint in place of the runs started for the block. */
+    boolean isHandedOver() {
+      return refreshed || onDemand;
     }
 
     /**
@@ -96,6 +104,17 @@ final class BlockFootprints {
      */
     static Footprint of(
         final ParallelizedTransactionContext context, final Address miningBeneficiary) {
+      return of(context, miningBeneficiary, false);
+    }
+
+    /**
+     * The footprint of a finished run; {@code onDemand} for a run started after the transaction's
+     * own run failed, on top of the result of its sender's previous transaction.
+     */
+    static Footprint of(
+        final ParallelizedTransactionContext context,
+        final Address miningBeneficiary,
+        final boolean onDemand) {
       final PathBasedWorldStateUpdateAccumulator<?> accumulator = context.transactionAccumulator();
       final Map<Address, Map<StorageSlotKey, UInt256>> seeds = context.seeds();
       final PathBasedWorldStateUpdateAccumulator<?> predecessor =
@@ -136,6 +155,7 @@ final class BlockFootprints {
           writes.toArray(Write[]::new),
           cleared,
           seeds != null,
+          onDemand,
           predecessor == null
               && cleared.isEmpty()
               && !context.transactionProcessingResult().isInvalid());

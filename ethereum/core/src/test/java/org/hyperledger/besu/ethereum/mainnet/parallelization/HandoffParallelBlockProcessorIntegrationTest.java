@@ -310,6 +310,31 @@ class HandoffParallelBlockProcessorIntegrationTest {
     }
 
     @Test
+    @DisplayName(
+        "A sender's next transaction whose sender was not known runs on the previous one's result")
+    void nextTransactionOfAnUnknownSenderRunsOnThePreviousResult() {
+      // decoded again, the transactions do not know their sender, as in a block from the network
+      // whose transactions the pool did not have: they are not chained before the block runs
+      final Transaction first = withoutKnownSender(increment(SENDERS.get(0)));
+      final Transaction second =
+          withoutKnownSender(
+              createContractCallTransaction(
+                  1, counter, "incrementSlot1", SENDERS.get(0), Optional.empty()));
+      final Transaction other = withoutKnownSender(increment(SENDERS.get(1)));
+
+      final ComparisonResult result = executeAndCompare(Wei.of(5), first, second, other);
+
+      assertContractStorageMatches(result.seqWorldState(), result.parWorldState(), counter, 0);
+      assertContractStorage(result.parWorldState(), counter, 0, 13);
+      // the first on its own run, the second on top of the first's result, the third refreshed
+      assertThat(result.parResult().getNbParallelizedTransactions()).hasValue(3);
+    }
+
+    private Transaction withoutKnownSender(final Transaction transaction) {
+      return Transaction.readFrom(transaction.encoded());
+    }
+
+    @Test
     @DisplayName("Interleaved slots refresh only the transactions that read a changed slot")
     void interleavedIncrementsMatchSequential() {
       final List<Transaction> txs = new ArrayList<>();
