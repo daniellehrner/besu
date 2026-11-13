@@ -1349,6 +1349,13 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       finishedRuns.set(transactionLocation, 1);
     }
     if (future == null) {
+      if (LOG_CONFLICTS) {
+        LOG.info(
+            "Bench conflict idx {} hash {} to {} gas - reason no-run",
+            transactionLocation,
+            transaction.getHash().toHexString(),
+            transaction.getTo().map(a -> a.toHexString()).orElse("create"));
+      }
       return Optional.empty();
     }
 
@@ -1375,6 +1382,16 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         return Optional.empty();
       }
     } else {
+      if (LOG_CONFLICTS) {
+        LOG.info(
+            "Bench conflict idx {} hash {} to {} gas - reason {}",
+            transactionLocation,
+            transaction.getHash().toHexString(),
+            transaction.getTo().map(a -> a.toHexString()).orElse("create"),
+            state == Future.State.FAILED
+                ? "failed"
+                : isInFlight(transactionLocation) ? "unfinished" : "not-started");
+      }
       if (state == Future.State.FAILED) {
         LOG.debug(
             "Parallel execution of transaction {} failed, executing it sequentially",
