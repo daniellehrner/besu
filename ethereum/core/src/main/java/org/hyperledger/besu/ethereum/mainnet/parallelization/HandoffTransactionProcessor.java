@@ -68,6 +68,10 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
 
   private static final boolean LOG_HANDOFF = Boolean.getBoolean("besu.bench.logHandoff");
 
+  // more than one refresh worker can run a refresh on writes another one is still replacing; the
+  // result is then invalidated again when it is stored
+  private static final int REFRESH_THREADS = Integer.getInteger("besu.t20.refreshThreads", 1);
+
   // tests: block processing runs the refreshes itself before each transaction, so that they happen
   // on the writes of the transactions before it rather than whenever a worker gets to them
   private static volatile boolean refreshSynchronously = false;
@@ -77,12 +81,13 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
     refreshSynchronously = synchronously;
   }
 
-  private static final AtomicInteger REFRESH_THREADS = new AtomicInteger();
+  private static final AtomicInteger REFRESH_THREAD_IDS = new AtomicInteger();
   private static final ExecutorService REFRESH_EXECUTOR =
       Executors.newCachedThreadPool(
           runnable -> {
             final Thread thread =
-                new Thread(runnable, "besu-footprint-refresh-" + REFRESH_THREADS.getAndIncrement());
+                new Thread(
+                    runnable, "besu-footprint-refresh-" + REFRESH_THREAD_IDS.getAndIncrement());
             thread.setDaemon(true);
             return thread;
           });
@@ -147,7 +152,9 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
         maybeParentHeader);
     if (maybeParentHeader.isPresent() && transactions.size() > 2 && !refreshSynchronously) {
       try {
-        REFRESH_EXECUTOR.execute(() -> refreshInvalidated(blockFootprints, run));
+        for (int i = 0; i < REFRESH_THREADS; i++) {
+          REFRESH_EXECUTOR.execute(() -> refreshInvalidated(blockFootprints, run));
+        }
       } catch (final RejectedExecutionException e) {
         LOG.debug("Could not start refreshing footprints", e);
       }
