@@ -32,6 +32,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.tuweni.units.bigints.UInt256;
 import org.jspecify.annotations.Nullable;
 
@@ -75,7 +76,8 @@ final class BlockFootprints {
     final boolean onDemand;
     final boolean refreshable;
 
-    private Footprint(
+    @VisibleForTesting
+    Footprint(
         final ParallelizedTransactionContext context,
         final Read[] reads,
         final Write[] writes,
