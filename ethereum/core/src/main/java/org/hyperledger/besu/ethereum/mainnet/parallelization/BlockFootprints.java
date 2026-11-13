@@ -189,6 +189,7 @@ final class BlockFootprints {
   private final ConcurrentLinkedQueue<Report> reported = new ConcurrentLinkedQueue<>();
   private final Semaphore changed = new Semaphore(0);
   private volatile int mainThreadAt = -1;
+  private volatile int refreshingAt = -1;
   private volatile boolean finished;
 
   // counters for the bench log, guarded by lock
@@ -217,6 +218,22 @@ final class BlockFootprints {
 
   int mainThreadAt() {
     return mainThreadAt;
+  }
+
+  /** The position the refresh worker is running, for the bench log. */
+  int refreshingAt() {
+    return refreshingAt;
+  }
+
+  void refreshingAt(final int position) {
+    refreshingAt = position;
+  }
+
+  /** Whether the position waits for a refresh, for the bench log. */
+  boolean isInvalidated(final int position) {
+    synchronized (lock) {
+      return invalidated.get(position);
+    }
   }
 
   void mainThreadAt(final int position) {

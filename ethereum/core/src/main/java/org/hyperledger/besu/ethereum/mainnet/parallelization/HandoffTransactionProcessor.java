@@ -123,6 +123,9 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   // counters for the bench log, written by block processing only
   private int takenRefreshed;
   private int takenOnDemand;
+  private int missedWhileRefreshing;
+  private int missedPendingRefresh;
+  private int missedNotInvalidated;
   private final AtomicInteger onDemandRuns = new AtomicInteger();
   private int rejectedRefreshed;
   private int takenOther;
@@ -365,6 +368,14 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
     if (result.isPresent()) {
       takenOther++;
       blockFootprints.reportTaken(transactionLocation);
+    } else if (LOG_HANDOFF) {
+      if (blockFootprints.refreshingAt() == transactionLocation) {
+        missedWhileRefreshing++;
+      } else if (blockFootprints.isInvalidated(transactionLocation)) {
+        missedPendingRefresh++;
+      } else {
+        missedNotInvalidated++;
+      }
     }
     return result;
   }
@@ -405,7 +416,8 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
         LOG.info(
             "Bench handoff block {} txs {} stored {} invalidations {} refreshes stored {} skipped {}"
                 + " taken refreshed {} rejected refreshed {} taken other {} executed {}"
-                + " on demand runs {} taken on demand {}",
+                + " on demand runs {} taken on demand {} missed refreshing {} missed pending {}"
+                + " missed not invalidated {}",
             run.blockHeader().getNumber(),
             blockFootprints.size(),
             blockFootprints.stored,
@@ -417,7 +429,10 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
             takenOther,
             executedReported,
             onDemandRuns.get(),
-            takenOnDemand);
+            takenOnDemand,
+            missedWhileRefreshing,
+            missedPendingRefresh,
+            missedNotInvalidated);
       }
     }
     footprints = null;
@@ -477,6 +492,7 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
       return;
     }
     final ParallelizedTransactionContext context;
+    blockFootprints.refreshingAt(position);
     try {
       context =
           previous == null
@@ -506,6 +522,8 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
     } catch (final RuntimeException e) {
       LOG.debug("Error refreshing the footprint of transaction {}", position, e);
       return;
+    } finally {
+      blockFootprints.refreshingAt(-1);
     }
     if (context == null || context.transactionProcessingResult().isInvalid()) {
       return;
