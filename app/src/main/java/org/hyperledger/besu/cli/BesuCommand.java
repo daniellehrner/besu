@@ -1133,6 +1133,16 @@ public class BesuCommand implements DefaultCommandValues, Runnable {
     besuPluginContext.afterExternalServicesMainLoop();
   }
 
+  /**
+   * Turns on caching precompile results when {@code --cache-precompiles} is set, as the node does
+   * before it runs; block import subcommands call it too.
+   */
+  public void configurePrecompileCachingIfEnabled() {
+    if (enablePrecompileCaching) {
+      configurePrecompileCaching();
+    }
+  }
+
   private void configurePrecompileCaching() {
     // enable precompile caching:
     AbstractPrecompiledContract.setPrecompileCaching(enablePrecompileCaching);

@@ -222,6 +222,7 @@ public class BlocksSubCommand implements Runnable {
       LOG.info("Import {} block data from {} files", format, blockImportFiles.size());
       final Optional<MetricsService> metricsService = initMetrics(parentCommand);
       KZGPointEvalPrecompiledContract.init();
+      parentCommand.parentCommand.configurePrecompileCachingIfEnabled();
 
       try (final BesuController controller = createController()) {
         for (final Path path : blockImportFiles) {
