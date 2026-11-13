@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -210,7 +211,8 @@ class OptimisticTransactionProcessorUnitTest {
           env.maybeParentHeader());
 
       final InOrder order = inOrder(transaction);
-      order.verify(transaction).getSender();
+      // the background recovery of an unknown sender may get there first
+      order.verify(transaction, atLeastOnce()).getSender();
       order.verify(transaction).detachedCopy();
     }
 
@@ -1225,12 +1227,14 @@ class OptimisticTransactionProcessorUnitTest {
               eq(lastChained),
               any(),
               argThat(context -> context.chainPredecessorAccumulator() != null),
+              any(),
               any());
       verify(collisionDetector)
           .hasCollision(
               eq(firstAlone),
               any(),
               argThat(context -> context.chainPredecessorAccumulator() == null),
+              any(),
               any());
     }
 
@@ -1672,7 +1676,7 @@ class OptimisticTransactionProcessorUnitTest {
       final Transaction heavy = mockTransactionWithGasLimit(HEAVY_GAS_LIMIT);
       final HeldExecution execution =
           stubExecutionHeldUntilReleased(HeavyTransactionSchedulingTests::successfulResult);
-      when(collisionDetector.hasCollision(any(), any(), any(), any())).thenReturn(false);
+      when(collisionDetector.hasCollision(any(), any(), any(), any(), any())).thenReturn(false);
       final ExecutorService worker = Executors.newSingleThreadExecutor();
       try {
         runAsyncBlock(heavy, worker);
@@ -1730,7 +1734,7 @@ class OptimisticTransactionProcessorUnitTest {
                 (heavy0.equals(invocation.getArgument(2)) ? release0 : release1).await();
                 return successfulResult();
               });
-      when(collisionDetector.hasCollision(any(), any(), any(), any())).thenReturn(true);
+      when(collisionDetector.hasCollision(any(), any(), any(), any(), any())).thenReturn(true);
       final ExecutorService workers = Executors.newFixedThreadPool(2);
       try {
         processor.runAsyncBlock(

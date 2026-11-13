@@ -1014,9 +1014,6 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         // runs anyway
       }
     }
-    // on the block's transaction, whose lock the background recovery takes too, so that the copy
-    // executed below carries the sender instead of recovering it a second time
-    recoverSender(transaction);
     final BonsaiWorldState ws =
         getWorldState(protocolContext, maybeParentHeader.get()).orElse(null);
     if (ws == null) {
