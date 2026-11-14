@@ -72,6 +72,9 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
 
   private static final boolean LOG_HANDOFF = Boolean.getBoolean("besu.bench.logHandoff");
 
+  // with the conflict log, marks the conflicts of handed-over results: the line after its reason
+  private static final boolean LOG_REJECTED = Boolean.getBoolean("besu.bench.logConflicts");
+
   // more than one refresh worker can run a refresh on writes another one is still replacing; the
   // result is then invalidated again when it is stored
   private static final int REFRESH_THREADS = Integer.getInteger("besu.t20.refreshThreads", 1);
@@ -382,6 +385,13 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
         blockFootprints.reportTaken(transactionLocation);
       } else {
         rejectedRefreshed++;
+        if (LOG_REJECTED) {
+          LOG.info(
+              "Bench handoff rejected idx {} refreshed {} waited {}",
+              transactionLocation,
+              latest.refreshed,
+              waited);
+        }
       }
       return result;
     }
