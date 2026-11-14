@@ -63,8 +63,16 @@ import org.slf4j.LoggerFactory;
  * read and wrote. A footprint whose reads an earlier transaction's writes invalidate is refreshed
  * by a refresh worker, nearest to block processing first: the transaction runs again on the slot
  * values the transactions before it leave. Block processing takes a refreshed result when the block
- * holds the values it started from, never waits for a refresh, and reports the writes of the
- * transactions it executes itself, which refreshes the footprints they invalidate.
+ * holds the values it started from, by default does not wait for a refresh, and reports the writes
+ * of the transactions it executes itself, which refreshes the footprints they invalidate.
+ *
+ * <p>Options, as system properties: {@code besu.t20.refreshThreads} (refresh workers, 1), {@code
+ * besu.t20.settledFirst} (refresh a footprint only once the writers it read from hold their
+ * values), {@code besu.t20.maxRefreshesPerTx} (refreshes of one transaction, 0 for no limit),
+ * {@code besu.t20.waitRefreshMs} (block processing waits that long for a running refresh, 0),
+ * {@code besu.t20.heavyThreads} (a pool of its own for heavy transactions' runs, 0 for none),
+ * {@code besu.t20.carrySender} and {@code besu.t20.carryNonce} (carried balance and nonce changes,
+ * on).
  */
 public class HandoffTransactionProcessor extends OptimisticConcurrentTransactionProcessor {
 
