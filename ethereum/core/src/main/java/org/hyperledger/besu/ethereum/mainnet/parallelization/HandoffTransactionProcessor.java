@@ -136,10 +136,14 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   private static final boolean CARRY_SENDER =
       Boolean.parseBoolean(System.getProperty("besu.t20.carrySender", "true"));
 
+  // a nonce earlier transactions changed is kept for an account the transaction only called or paid
+  private static final boolean CARRY_NONCE =
+      Boolean.parseBoolean(System.getProperty("besu.t20.carryNonce", "true"));
+
   public HandoffTransactionProcessor(final MainnetTransactionProcessor transactionProcessor) {
     super(
         transactionProcessor,
-        new TransactionCollisionDetector(CARRY_SENDER),
+        new TransactionCollisionDetector(CARRY_SENDER, CARRY_NONCE),
         BlockProcessingExecutors.ioExecutor(),
         2 * BlockProcessingExecutors.cpuThreads());
   }

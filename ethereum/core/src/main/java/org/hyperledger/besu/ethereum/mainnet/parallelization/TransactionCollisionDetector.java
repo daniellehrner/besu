@@ -36,21 +36,28 @@ import org.jspecify.annotations.Nullable;
 public class TransactionCollisionDetector {
 
   private final boolean carrySenderBalance;
+  private final boolean carryOthersNonce;
 
-  /** A detector that never carries the sender's balance over. */
+  /** A detector that never carries the sender's balance or another account's nonce over. */
   public TransactionCollisionDetector() {
-    this(false);
+    this(false, false);
   }
 
   /**
-   * A detector that, with {@code carrySenderBalance}, also carries the sender's balance over when
-   * earlier transactions only raised it: it still pays the transaction's upfront cost, which is the
-   * only place the transaction depends on it unless it read it.
+   * A detector that may carry more over than the default one.
    *
-   * @param carrySenderBalance whether the sender's balance may be carried over
+   * @param carrySenderBalance whether the sender's balance is carried over when earlier
+   *     transactions only raised it: it still pays the transaction's upfront cost, which is the
+   *     only place the transaction depends on it unless it read it
+   * @param carryOthersNonce whether a nonce earlier transactions changed is kept for an account
+   *     other than the sender whose nonce the transaction neither changed nor checked as an
+   *     EIP-7702 authority: executing calls to an account reads its code, balance and storage, not
+   *     its nonce
    */
-  public TransactionCollisionDetector(final boolean carrySenderBalance) {
+  public TransactionCollisionDetector(
+      final boolean carrySenderBalance, final boolean carryOthersNonce) {
     this.carrySenderBalance = carrySenderBalance;
+    this.carryOthersNonce = carryOthersNonce;
   }
 
   /**
@@ -261,7 +268,12 @@ public class TransactionCollisionDetector {
     if (!areAccountDetailsEqualExcludingStorage(inBlock.getPrior(), inBlock.getUpdated())) {
       if (balancesCarried == null
           || !isBalanceChangeCarried(
-              transaction, transactionAccumulator, address, inBlock, carrySenderBalance)) {
+              transaction,
+              transactionAccumulator,
+              address,
+              inBlock,
+              carrySenderBalance,
+              carryOthersNonce)) {
         return true;
       }
       balancesCarried.add(address);
@@ -357,7 +369,8 @@ public class TransactionCollisionDetector {
       final PathBasedWorldStateUpdateAccumulator<?> transactionAccumulator,
       final Address address,
       final BonsaiValue<? extends BonsaiAccount> inBlock,
-      final boolean carrySender) {
+      final boolean carrySender,
+      final boolean carryNonce) {
     final Set<Address> observedBalances = transactionAccumulator.getObservedBalances();
     final boolean isSender = address.equals(transaction.getSender());
     // the sender's balance pays for the gas
@@ -375,7 +388,11 @@ public class TransactionCollisionDetector {
         || inTransaction == null
         || inTransaction.getPrior() == null
         || inTransaction.getUpdated() == null
-        || blockPrior.getNonce() != blockUpdated.getNonce()
+        || (blockPrior.getNonce() != blockUpdated.getNonce()
+            && !(carryNonce
+                && !isSender
+                && inTransaction.getPrior().getNonce() == inTransaction.getUpdated().getNonce()
+                && !isAuthority(transaction, address)))
         || !blockPrior.getCodeHash().equals(blockUpdated.getCodeHash())
         || blockPrior.isEmpty()
         || blockUpdated.isEmpty()
@@ -397,6 +414,18 @@ public class TransactionCollisionDetector {
     // a spending can leave none, which must not empty the account
     return blockUpdated.getBalance().add(margin.get()).compareTo(startingBalance) >= 0
         && (blockUpdated.getNonce() > 0 || !blockUpdated.getCodeHash().equals(Hash.EMPTY));
+  }
+
+  /** Whether the transaction authorizes code for the address, which checks its nonce (EIP-7702). */
+  private static boolean isAuthority(final Transaction transaction, final Address address) {
+    return transaction
+        .getCodeDelegationList()
+        .map(
+            delegations ->
+                delegations.stream()
+                    .anyMatch(
+                        delegation -> delegation.authorizer().filter(address::equals).isPresent()))
+        .orElse(false);
   }
 
   /**
@@ -500,15 +529,29 @@ public class TransactionCollisionDetector {
     if (prior == null || updated == null) {
       return "created-or-deleted";
     }
-    if (prior.getNonce() != updated.getNonce()
-        || !prior.getCodeHash().equals(updated.getCodeHash())) {
+    if (!prior.getCodeHash().equals(updated.getCodeHash())
+        || (prior.getNonce() != updated.getNonce()
+            && !(carryBalances
+                && carryOthersNonce
+                && isBalanceChangeCarried(
+                    transaction,
+                    transactionAccumulator,
+                    address,
+                    inBlock,
+                    carrySenderBalance,
+                    true)))) {
       return address.equals(transaction.getSender()) ? "sender-nonce" : "nonce-or-code";
     }
     if (!carryBalances) {
       return address.equals(transaction.getSender()) ? "sender-balance" : "balance";
     }
     if (isBalanceChangeCarried(
-        transaction, transactionAccumulator, address, inBlock, carrySenderBalance)) {
+        transaction,
+        transactionAccumulator,
+        address,
+        inBlock,
+        carrySenderBalance,
+        carryOthersNonce)) {
       return null;
     }
     if (address.equals(transaction.getSender())) {

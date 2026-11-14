@@ -1552,15 +1552,20 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       final List<Address> balancesCarried,
       final TransactionProcessingResult transactionProcessingResult) {
     final Wei[] carried = new Wei[balancesCarried.size()];
+    // a nonce the block changed and the transaction did not is kept, as the import would undo it
+    final long[] blockNonces = new long[carried.length];
+    final boolean[] keepsNonce = new boolean[carried.length];
     for (int i = 0; i < carried.length; i++) {
       final Address address = balancesCarried.get(i);
       final BonsaiValue<? extends BonsaiAccount> inTransaction =
           transactionAccumulator.getAccountsToUpdate().get(address);
-      final Wei inBlock =
+      final BonsaiAccount inBlockAccount =
           ((BonsaiValue<? extends BonsaiAccount>)
                   blockAccumulator.getAccountsToUpdate().get(address))
-              .getUpdated()
-              .getBalance();
+              .getUpdated();
+      final Wei inBlock = inBlockAccount.getBalance();
+      blockNonces[i] = inBlockAccount.getNonce();
+      keepsNonce[i] = blockNonces[i] != inTransaction.getPrior().getNonce();
       final Wei before = inTransaction.getPrior().getBalance();
       final Wei after = inTransaction.getUpdated().getBalance();
       carried[i] =
@@ -1572,9 +1577,14 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
     for (int i = 0; i < carried.length; i++) {
       final Address address = balancesCarried.get(i);
       final Wei postBalance = carried[i];
-      ((BonsaiValue<? extends BonsaiAccount>) blockAccumulator.getAccountsToUpdate().get(address))
-          .getUpdated()
-          .setBalance(postBalance);
+      final BonsaiAccount imported =
+          ((BonsaiValue<? extends BonsaiAccount>)
+                  blockAccumulator.getAccountsToUpdate().get(address))
+              .getUpdated();
+      imported.setBalance(postBalance);
+      if (keepsNonce[i]) {
+        imported.setNonce(blockNonces[i]);
+      }
       transactionProcessingResult
           .getPartialBlockAccessView()
           .ifPresent(

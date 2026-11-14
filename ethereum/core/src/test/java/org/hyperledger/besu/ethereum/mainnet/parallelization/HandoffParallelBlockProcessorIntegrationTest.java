@@ -374,6 +374,33 @@ class HandoffParallelBlockProcessorIntegrationTest {
       assertThat(result.parResult().getNbParallelizedTransactions()).hasValue(2);
     }
 
+    @Test
+    @DisplayName("A payment to an account that sent a transaction before keeps that nonce")
+    void paymentToAnAccountWhoseNonceChangedKeepsItsNonce() {
+      final Address payee = Util.publicKeyToAddress(SENDERS.get(1).getPublicKey());
+      final Address recipient = Util.publicKeyToAddress(SENDERS.get(2).getPublicKey());
+      // the payee spends first, which moves its nonce and lowers its balance
+      final Transaction payeeSpends =
+          createTransferTransaction(
+              0,
+              1_000_000_000_000_000_000L,
+              21_000L,
+              0L,
+              5L,
+              recipient.toHexString(),
+              SENDERS.get(1));
+      final Transaction payment =
+          createTransferTransaction(
+              0, 3_000_000_000_000_000_000L, 21_000L, 0L, 5L, payee.toHexString(), SENDERS.get(0));
+
+      final ComparisonResult result = executeAndCompare(Wei.of(5), payeeSpends, payment);
+
+      assertAccountsMatch(result.seqWorldState(), result.parWorldState(), payee);
+      assertAccountsMatch(result.seqWorldState(), result.parWorldState(), recipient);
+      assertThat(result.parWorldState().get(payee).getNonce()).isEqualTo(1);
+      assertThat(result.parResult().getNbParallelizedTransactions()).hasValue(2);
+    }
+
     private Transaction withoutKnownSender(final Transaction transaction) {
       return Transaction.readFrom(transaction.encoded());
     }
