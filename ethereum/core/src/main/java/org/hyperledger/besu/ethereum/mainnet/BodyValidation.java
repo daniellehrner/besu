@@ -63,6 +63,14 @@ public final class BodyValidation {
    * @return the transaction root
    */
   public static Hash transactionsRoot(final List<Transaction> transactions) {
+    if (PARALLEL_RECEIPTS_ROOT && transactions.size() >= MIN_RECEIPTS_IN_PARALLEL) {
+      // newPayload computes it to check the block hash before the block is processed
+      return Util.getRootFromListOfBytes(
+          transactions.parallelStream()
+              .map(t -> TransactionEncoder.encodeOpaqueBytes(t, EncodingContext.BLOCK_BODY))
+              .toList(),
+          MIN_RECEIPTS_IN_PARALLEL);
+    }
     final ArrayList<Bytes> bytesList = new ArrayList<>(transactions.size());
     transactions.forEach(
         t -> bytesList.add(TransactionEncoder.encodeOpaqueBytes(t, EncodingContext.BLOCK_BODY)));
