@@ -56,6 +56,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
+import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -132,6 +133,11 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
   private static final boolean LOG_TX_TIMES = Boolean.getBoolean("besu.bench.logTxTimes");
   // replay benchmarks: log why a worker result could not be taken
   private static final boolean LOG_CONFLICTS = Boolean.getBoolean("besu.bench.logConflicts");
+
+  // bench: logs each wait of block processing for a running run, with when that run started
+  private static final boolean LOG_WAITS = Boolean.getBoolean("besu.bench.logWaits");
+  private volatile @Nullable AtomicLongArray runStarts;
+  private volatile long blockStartNanos;
 
   // workers warm the trie paths of what they touch, so the state root finds them loaded
   private static final boolean WORKER_PRELOAD = Boolean.getBoolean("besu.t14.workerPreload");
@@ -219,6 +225,10 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       final Optional<BlockAccessListBuilder> blockAccessListBuilder,
       final Optional<BlockHeader> maybeParentHeader) {
 
+    if (LOG_WAITS) {
+      blockStartNanos = System.nanoTime();
+      runStarts = new AtomicLongArray(transactions.size());
+    }
     final CompletableFuture<?>[] runaheadFirstPasses =
         new CompletableFuture<?>[transactions.size()];
     runaheads = runaheadFirstPasses;
@@ -380,6 +390,35 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
   }
 
   /** Whether the serial loop waits for the run of the transaction rather than running it itself. */
+  private void logWait(
+      final int transactionLocation,
+      final Transaction transaction,
+      final CompletableFuture<ParallelizedTransactionContext> future,
+      final long waitStart,
+      final boolean lateChained) {
+    final long now = System.nanoTime();
+    final AtomicLongArray starts = runStarts;
+    final long runStart =
+        starts == null || transactionLocation >= starts.length()
+            ? 0L
+            : starts.get(transactionLocation);
+    final ParallelizedTransactionContext context =
+        future.state() == Future.State.SUCCESS ? future.resultNow() : null;
+    LOG.info(
+        "Bench wait idx {} us {} arrived us {} run started us {} chained {} late {} gas limit {}"
+            + " used {}",
+        transactionLocation,
+        (now - waitStart) / 1000,
+        (waitStart - blockStartNanos) / 1000,
+        runStart == 0L ? -1 : (runStart - blockStartNanos) / 1000,
+        inChain.get(transactionLocation),
+        lateChained,
+        transaction.getGasLimit(),
+        context == null || context.transactionProcessingResult() == null
+            ? -1
+            : transaction.getGasLimit() - context.transactionProcessingResult().getGasRemaining());
+  }
+
   private boolean shouldWaitFor(final int transactionLocation) {
     if (transactionLocation >= started.length() || started.get(transactionLocation) == 0) {
       return false;
@@ -1134,6 +1173,10 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
     if (transactionLocation < startedRuns.length()) {
       startedRuns.set(transactionLocation, 1);
     }
+    final AtomicLongArray starts = runStarts;
+    if (LOG_WAITS && starts != null && transactionLocation < starts.length()) {
+      starts.compareAndSet(transactionLocation, 0L, System.nanoTime());
+    }
     final AtomicIntegerArray finishedRuns = finished;
     final Dependencies blockDependencies = dependencies;
     final CompletableFuture<?>[] firstPasses = runaheads;
@@ -1365,12 +1408,16 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         // handled below as a run that did not finish
       }
     } else if (future != null && !future.isDone() && shouldWaitFor(transactionLocation)) {
+      final long waitStart = LOG_WAITS ? System.nanoTime() : 0L;
       try {
         future.get(WAIT_RUNNING_MS, TimeUnit.MILLISECONDS);
       } catch (final InterruptedException e) {
         Thread.currentThread().interrupt();
       } catch (final ExecutionException | TimeoutException | CancellationException e) {
         // handled below as a run that did not finish
+      }
+      if (LOG_WAITS) {
+        logWait(transactionLocation, transaction, future, waitStart, lateChained != null);
       }
     }
 
