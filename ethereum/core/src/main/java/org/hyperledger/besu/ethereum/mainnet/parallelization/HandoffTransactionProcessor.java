@@ -41,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -74,6 +75,10 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   // more than one refresh worker can run a refresh on writes another one is still replacing; the
   // result is then invalidated again when it is stored
   private static final int REFRESH_THREADS = Integer.getInteger("besu.t20.refreshThreads", 1);
+
+  // block processing reaching a transaction whose refresh runs waits this long for it, as the
+  // refresh is ahead of executing the transaction from the start; 0 executes it at once
+  private static final long WAIT_REFRESH_MS = Long.getLong("besu.t20.waitRefreshMs", 0L);
 
   // tests: block processing runs the refreshes itself before each transaction, so that they happen
   // on the writes of the transactions before it rather than whenever a worker gets to them
@@ -130,6 +135,8 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   private int rejectedRefreshed;
   private int takenOther;
   private int executedReported;
+  private int waitedForRefresh;
+  private int takenAfterWait;
 
   // the sender's balance is carried over when earlier transactions only raised it, as Nethermind
   // replays a balance as a change on a minimum
@@ -345,6 +352,11 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
       }
     }
     blockFootprints.mainThreadAt(transactionLocation);
+    final boolean waited =
+        WAIT_REFRESH_MS > 0 && blockFootprints.awaitRefresh(transactionLocation, WAIT_REFRESH_MS);
+    if (waited) {
+      waitedForRefresh++;
+    }
     final Footprint latest = blockFootprints.latest(transactionLocation);
     if (latest != null && latest.isHandedOver()) {
       // a refreshed run started from later values than the runs this class started earlier
@@ -364,6 +376,9 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
         } else {
           takenOnDemand++;
         }
+        if (waited) {
+          takenAfterWait++;
+        }
         blockFootprints.reportTaken(transactionLocation);
       } else {
         rejectedRefreshed++;
@@ -382,7 +397,7 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
       takenOther++;
       blockFootprints.reportTaken(transactionLocation);
     } else if (LOG_HANDOFF) {
-      if (blockFootprints.refreshingAt() == transactionLocation) {
+      if (blockFootprints.isRefreshing(transactionLocation)) {
         missedWhileRefreshing++;
       } else if (blockFootprints.isInvalidated(transactionLocation)) {
         missedPendingRefresh++;
@@ -430,7 +445,7 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
             "Bench handoff block {} txs {} stored {} invalidations {} refreshes stored {} skipped {}"
                 + " taken refreshed {} rejected refreshed {} taken other {} executed {}"
                 + " on demand runs {} taken on demand {} missed refreshing {} missed pending {}"
-                + " missed not invalidated {}",
+                + " missed not invalidated {} waited for refresh {} taken after wait {}",
             run.blockHeader().getNumber(),
             blockFootprints.size(),
             blockFootprints.stored,
@@ -445,7 +460,9 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
             takenOnDemand,
             missedWhileRefreshing,
             missedPendingRefresh,
-            missedNotInvalidated);
+            missedNotInvalidated,
+            waitedForRefresh,
+            takenAfterWait);
       }
     }
     footprints = null;
@@ -501,13 +518,15 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
       previous = predecessor.context.transactionAccumulator();
     }
     final Seeding seeding = blockFootprints.seedsFor(position, invalidated);
-    if (seeding == null || blockFootprints.mainThreadAt() >= position) {
+    if (seeding == null) {
       return;
     }
-    final ParallelizedTransactionContext context;
-    blockFootprints.refreshingAt(position);
+    final CompletableFuture<Void> done = blockFootprints.refreshStarts(position);
     try {
-      context =
+      if (blockFootprints.mainThreadAt() >= position) {
+        return;
+      }
+      final ParallelizedTransactionContext context =
           previous == null
               ? runSeeded(
                   run.protocolContext(),
@@ -532,18 +551,18 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
                   run.maybeParentHeader(),
                   previous,
                   seeding.seeds());
+      if (context == null || context.transactionProcessingResult().isInvalid()) {
+        return;
+      }
+      final Footprint refreshed = Footprint.of(context, run.miningBeneficiary());
+      if (blockFootprints.store(position, refreshed, false)) {
+        registerResult(blockFootprints, run, transaction, refreshed);
+      }
     } catch (final RuntimeException e) {
       LOG.debug("Error refreshing the footprint of transaction {}", position, e);
-      return;
     } finally {
-      blockFootprints.refreshingAt(-1);
-    }
-    if (context == null || context.transactionProcessingResult().isInvalid()) {
-      return;
-    }
-    final Footprint refreshed = Footprint.of(context, run.miningBeneficiary());
-    if (blockFootprints.store(position, refreshed, false)) {
-      registerResult(blockFootprints, run, transaction, refreshed);
+      // after the store, so that block processing waiting for it finds the refreshed footprint
+      blockFootprints.refreshEnds(position, done);
     }
   }
 }

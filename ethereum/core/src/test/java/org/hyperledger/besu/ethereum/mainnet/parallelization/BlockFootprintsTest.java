@@ -27,6 +27,8 @@ import org.hyperledger.besu.ethereum.mainnet.parallelization.BlockFootprints.Wri
 
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.tuweni.units.bigints.UInt256;
 import org.junit.jupiter.api.Test;
@@ -245,5 +247,31 @@ class BlockFootprintsTest {
         false);
 
     assertThat(footprints.takeInvalidated(-1)).isEqualTo(2);
+  }
+
+  @Test
+  void blockProcessingWaitsForARunningRefreshUntilItEnds() {
+    final BlockFootprints footprints = new BlockFootprints(3);
+    assertThat(footprints.awaitRefresh(1, 10_000)).isFalse();
+
+    final CompletableFuture<Void> done = footprints.refreshStarts(1);
+    assertThat(footprints.isRefreshing(1)).isTrue();
+    CompletableFuture.runAsync(
+        () -> footprints.refreshEnds(1, done),
+        CompletableFuture.delayedExecutor(50, TimeUnit.MILLISECONDS));
+
+    assertThat(footprints.awaitRefresh(1, 10_000)).isTrue();
+    assertThat(done).isDone();
+    assertThat(footprints.isRefreshing(1)).isFalse();
+  }
+
+  @Test
+  void waitingForARefreshEndsAfterTheTimeout() {
+    final BlockFootprints footprints = new BlockFootprints(3);
+    final CompletableFuture<Void> done = footprints.refreshStarts(1);
+
+    assertThat(footprints.awaitRefresh(1, 1)).isTrue();
+    assertThat(done).isNotDone();
+    assertThat(footprints.isRefreshing(1)).isTrue();
   }
 }

@@ -27,9 +27,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -191,7 +195,8 @@ final class BlockFootprints {
   private final ConcurrentLinkedQueue<Report> reported = new ConcurrentLinkedQueue<>();
   private final Semaphore changed = new Semaphore(0);
   private volatile int mainThreadAt = -1;
-  private volatile int refreshingAt = -1;
+  // the refreshes running, by position, so that block processing can wait for one to end
+  private final Map<Integer, CompletableFuture<Void>> refreshing = new ConcurrentHashMap<>();
   private volatile boolean finished;
 
   // counters for the bench log, guarded by lock
@@ -222,13 +227,45 @@ final class BlockFootprints {
     return mainThreadAt;
   }
 
-  /** The position the refresh worker is running, for the bench log. */
-  int refreshingAt() {
-    return refreshingAt;
+  /**
+   * Registers a refresh of the position before the refresh worker checks where block processing is,
+   * so that block processing reaching the position either sees it or is seen.
+   */
+  CompletableFuture<Void> refreshStarts(final int position) {
+    final CompletableFuture<Void> done = new CompletableFuture<>();
+    refreshing.put(position, done);
+    return done;
   }
 
-  void refreshingAt(final int position) {
-    refreshingAt = position;
+  /** Ends a refresh, after its footprint was stored. */
+  void refreshEnds(final int position, final CompletableFuture<Void> done) {
+    refreshing.remove(position, done);
+    done.complete(null);
+  }
+
+  /** Whether a refresh of the position runs. */
+  boolean isRefreshing(final int position) {
+    return refreshing.containsKey(position);
+  }
+
+  /**
+   * Waits for the refresh of the position to end, if one runs, for at most the given time.
+   *
+   * @return whether a refresh ran
+   */
+  boolean awaitRefresh(final int position, final long timeoutMillis) {
+    final CompletableFuture<Void> done = refreshing.get(position);
+    if (done == null) {
+      return false;
+    }
+    try {
+      done.get(timeoutMillis, TimeUnit.MILLISECONDS);
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+    } catch (final ExecutionException | TimeoutException e) {
+      // block processing executes the transaction itself
+    }
+    return true;
   }
 
   /** Whether the position waits for a refresh, for the bench log. */
