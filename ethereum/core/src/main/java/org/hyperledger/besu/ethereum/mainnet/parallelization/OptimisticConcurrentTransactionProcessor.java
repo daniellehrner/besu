@@ -120,6 +120,10 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
   // transactions at or above this gas limit are run ahead to load their slots, 0 turns it off
   private static final long RUNAHEAD_GAS = Long.getLong("besu.t14.runaheadGas", 0L);
 
+  // the first transactions of a block run ahead whatever their gas: block processing reaches them
+  // at once, so a run that reads from the disk one slot after the other holds it up
+  private static final int RUNAHEAD_FIRST = Integer.getInteger("besu.t20.runaheadFirst", 0);
+
   // experiment: a transaction whose run touched what the run of an earlier one changed runs again
   // on
   // a worker on top of that one's result, so that the serial loop finds a result it can take
@@ -238,7 +242,7 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
     if (RUNAHEAD_GAS > 0 && maybeParentHeader.isPresent()) {
       for (int i = 0; i < transactions.size(); i++) {
         final Transaction transaction = transactions.get(i);
-        if (transaction.getGasLimit() >= RUNAHEAD_GAS) {
+        if (transaction.getGasLimit() >= RUNAHEAD_GAS || i < RUNAHEAD_FIRST) {
           final int location = i;
           runaheadFirstPasses[i] =
               RunaheadPrefetcher.runAhead(
