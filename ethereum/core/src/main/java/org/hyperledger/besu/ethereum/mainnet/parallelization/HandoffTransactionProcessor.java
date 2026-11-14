@@ -83,6 +83,9 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   // refresh is ahead of executing the transaction from the start; 0 executes it at once
   private static final long WAIT_REFRESH_MS = Long.getLong("besu.t20.waitRefreshMs", 0L);
 
+  // a refresh worker skips a footprint whose writers are refreshed themselves, until they are done
+  private static final boolean SETTLED_FIRST = Boolean.getBoolean("besu.t20.settledFirst");
+
   // tests: block processing runs the refreshes itself before each transaction, so that they happen
   // on the writes of the transactions before it rather than whenever a worker gets to them
   private static volatile boolean refreshSynchronously = false;
@@ -169,7 +172,7 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
       final Executor executor,
       final Optional<BlockAccessListBuilder> blockAccessListBuilder,
       final Optional<BlockHeader> maybeParentHeader) {
-    final BlockFootprints blockFootprints = new BlockFootprints(transactions.size());
+    final BlockFootprints blockFootprints = new BlockFootprints(transactions.size(), SETTLED_FIRST);
     final BlockRun run =
         new BlockRun(
             protocolContext,

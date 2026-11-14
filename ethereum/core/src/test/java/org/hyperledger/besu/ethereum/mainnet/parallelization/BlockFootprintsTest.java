@@ -274,4 +274,45 @@ class BlockFootprintsTest {
     assertThat(done).isNotDone();
     assertThat(footprints.isRefreshing(1)).isTrue();
   }
+
+  @Test
+  void settledFirstSkipsAReaderWhoseWriterWaitsForARefreshOrRunsOne() {
+    final BlockFootprints footprints = new BlockFootprints(4, true);
+    footprints.store(0, readWrite(10, 10, 11), true);
+    // read the parent's 10 where 0 leaves 11: invalidated, and writes 12
+    footprints.store(1, readWrite(10, 10, 12), true);
+    // read 11 where 1 leaves 12: invalidated, and its writer 1 is invalidated too
+    footprints.store(2, readWrite(10, 11, 13), true);
+
+    assertThat(footprints.takeInvalidated(-1)).isEqualTo(1);
+    final CompletableFuture<Void> done = footprints.refreshStarts(1);
+    assertThat(footprints.takeInvalidated(-1)).as("1 is refreshed").isEqualTo(-1);
+
+    footprints.refreshEnds(1, done);
+    assertThat(footprints.takeInvalidated(-1)).isEqualTo(2);
+  }
+
+  @Test
+  void withoutSettledFirstAReaderIsTakenWhileItsWriterIsRefreshed() {
+    final BlockFootprints footprints = new BlockFootprints(4);
+    footprints.store(0, readWrite(10, 10, 11), true);
+    footprints.store(1, readWrite(10, 10, 12), true);
+    footprints.store(2, readWrite(10, 11, 13), true);
+
+    assertThat(footprints.takeInvalidated(-1)).isEqualTo(1);
+    footprints.refreshStarts(1);
+    assertThat(footprints.takeInvalidated(-1)).isEqualTo(2);
+  }
+
+  @Test
+  void settledFirstIgnoresAWriterBlockProcessingReached() {
+    final BlockFootprints footprints = new BlockFootprints(4, true);
+    footprints.store(0, readWrite(10, 10, 11), true);
+    footprints.store(1, readWrite(10, 10, 12), true);
+    footprints.store(2, readWrite(10, 11, 13), true);
+    footprints.refreshStarts(1);
+
+    footprints.mainThreadAt(1);
+    assertThat(footprints.takeInvalidated(1)).isEqualTo(2);
+  }
 }

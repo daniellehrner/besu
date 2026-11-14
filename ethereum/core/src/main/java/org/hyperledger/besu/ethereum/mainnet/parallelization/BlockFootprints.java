@@ -180,6 +180,9 @@ final class BlockFootprints {
   }
 
   private final int size;
+  // refresh a position only once the latest writers of the slots it read hold their values: none
+  // of them waits for a refresh or runs one
+  private final boolean settledFirst;
   private final Object lock = new Object();
   private final AtomicReferenceArray<Footprint> latest;
   // guarded by lock
@@ -206,7 +209,12 @@ final class BlockFootprints {
   int refreshesSkipped;
 
   BlockFootprints(final int size) {
+    this(size, false);
+  }
+
+  BlockFootprints(final int size, final boolean settledFirst) {
     this.size = size;
+    this.settledFirst = settledFirst;
     this.latest = new AtomicReferenceArray<>(size);
     this.indexed = new Footprint[size];
     this.executedWrites = new Write[size][];
@@ -241,6 +249,10 @@ final class BlockFootprints {
   void refreshEnds(final int position, final CompletableFuture<Void> done) {
     refreshing.remove(position, done);
     done.complete(null);
+    if (settledFirst) {
+      // the readers of what it writes may be settled now
+      changed.release();
+    }
   }
 
   /** Whether a refresh of the position runs. */
@@ -387,13 +399,40 @@ final class BlockFootprints {
       if (after >= 0) {
         invalidated.clear(0, Math.min(size, after + 1));
       }
-      final int position = invalidated.nextSetBit(after + 1);
+      int position = invalidated.nextSetBit(after + 1);
+      while (settledFirst && position >= 0 && !isSettled(position)) {
+        position = invalidated.nextSetBit(position + 1);
+      }
       if (position < 0) {
         return -1;
       }
       invalidated.clear(position);
       return position;
     }
+  }
+
+  // Called under the lock. Whether the latest writer before the position of each slot its
+  // footprint read holds its value: a refresh seeded with the value of a writer that is refreshed
+  // itself would read a value that does not hold.
+  private boolean isSettled(final int position) {
+    final Footprint footprint = latest.get(position);
+    if (footprint == null) {
+      return true;
+    }
+    for (final Read read : footprint.reads) {
+      final Slot slot = slots.get(read.cell());
+      if (slot == null || slot.untracked) {
+        continue;
+      }
+      final Map.Entry<Integer, UInt256> writer = slot.writers.lowerEntry(position);
+      // block processing executes or takes a writer it reached, whatever its refresh leaves
+      if (writer != null
+          && writer.getKey() > mainThreadAt
+          && (invalidated.get(writer.getKey()) || refreshing.containsKey(writer.getKey()))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
