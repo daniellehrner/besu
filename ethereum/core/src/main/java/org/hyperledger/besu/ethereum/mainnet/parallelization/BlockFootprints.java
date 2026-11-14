@@ -184,6 +184,10 @@ final class BlockFootprints {
   // refresh a position only once the latest writers of the slots it read hold their values: none
   // of them waits for a refresh or runs one
   private final boolean settledFirst;
+  // refreshes one position may run, 0 for no limit: a footprint invalidated again after that many
+  // is left to block processing rather than taking refreshes from the others
+  private final int maxRefreshesPerPosition;
+  private final int[] refreshCount;
   private final Object lock = new Object();
   private final AtomicReferenceArray<Footprint> latest;
   // guarded by lock
@@ -210,14 +214,21 @@ final class BlockFootprints {
   int invalidations;
   int refreshesStored;
   int refreshesSkipped;
+  int refreshesCapped;
 
   BlockFootprints(final int size) {
     this(size, false);
   }
 
   BlockFootprints(final int size, final boolean settledFirst) {
+    this(size, settledFirst, 0);
+  }
+
+  BlockFootprints(final int size, final boolean settledFirst, final int maxRefreshesPerPosition) {
     this.size = size;
     this.settledFirst = settledFirst;
+    this.maxRefreshesPerPosition = maxRefreshesPerPosition;
+    this.refreshCount = new int[size];
     this.latest = new AtomicReferenceArray<>(size);
     this.indexed = new Footprint[size];
     this.executedWrites = new Write[size][];
@@ -416,7 +427,13 @@ final class BlockFootprints {
         invalidated.clear(0, Math.min(size, after + 1));
       }
       int position = invalidated.nextSetBit(after + 1);
-      while (settledFirst && position >= 0 && !isSettled(position)) {
+      while (position >= 0) {
+        if (maxRefreshesPerPosition > 0 && refreshCount[position] >= maxRefreshesPerPosition) {
+          invalidated.clear(position);
+          refreshesCapped++;
+        } else if (!settledFirst || isSettled(position)) {
+          break;
+        }
         position = invalidated.nextSetBit(position + 1);
       }
       if (position < 0) {
@@ -487,6 +504,7 @@ final class BlockFootprints {
         return null;
       }
       refreshesRun++;
+      refreshCount[position]++;
       return new Seeding(seeds, writesVersion);
     }
   }

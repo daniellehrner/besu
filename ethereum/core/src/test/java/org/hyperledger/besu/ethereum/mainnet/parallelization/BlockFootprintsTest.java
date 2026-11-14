@@ -343,4 +343,29 @@ class BlockFootprintsTest {
     footprints.refreshEnds(1, done);
     assertThat(footprints.takeInvalidated(-1)).isEqualTo(2);
   }
+
+  @Test
+  void aPositionRefreshedAsOftenAsAllowedIsLeftToBlockProcessing() {
+    final BlockFootprints footprints = new BlockFootprints(3, false, 1);
+    footprints.store(0, readWrite(10, 10, 11), true);
+    final Footprint reader = readWrite(10, 10, 12);
+    footprints.store(1, reader, true);
+
+    assertThat(footprints.takeInvalidated(-1)).isEqualTo(1);
+    assertThat(footprints.seedsFor(1, reader)).isNotNull();
+    // refreshed on 11, then its writer moves to 20
+    footprints.store(
+        1,
+        footprint(
+            new Read[] {new Read(SLOT, v(11), v(10))},
+            new Write[] {new Write(SLOT, v(12))},
+            Set.of(),
+            true),
+        false);
+    footprints.store(0, readWrite(10, 10, 20), false);
+
+    assertThat(footprints.isInvalidated(1)).isTrue();
+    assertThat(footprints.takeInvalidated(-1)).isEqualTo(-1);
+    assertThat(footprints.refreshesCapped).isEqualTo(1);
+  }
 }

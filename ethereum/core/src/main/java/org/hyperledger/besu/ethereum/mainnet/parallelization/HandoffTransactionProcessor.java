@@ -86,6 +86,11 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   // a refresh worker skips a footprint whose writers are refreshed themselves, until they are done
   private static final boolean SETTLED_FIRST = Boolean.getBoolean("besu.t20.settledFirst");
 
+  // refreshes of one transaction, 0 for no limit: one invalidated again and again is left to block
+  // processing
+  private static final int MAX_REFRESHES_PER_TX =
+      Integer.getInteger("besu.t20.maxRefreshesPerTx", 0);
+
   // tests: block processing runs the refreshes itself before each transaction, so that they happen
   // on the writes of the transactions before it rather than whenever a worker gets to them
   private static volatile boolean refreshSynchronously = false;
@@ -189,7 +194,8 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
       final Executor executor,
       final Optional<BlockAccessListBuilder> blockAccessListBuilder,
       final Optional<BlockHeader> maybeParentHeader) {
-    final BlockFootprints blockFootprints = new BlockFootprints(transactions.size(), SETTLED_FIRST);
+    final BlockFootprints blockFootprints =
+        new BlockFootprints(transactions.size(), SETTLED_FIRST, MAX_REFRESHES_PER_TX);
     final BlockRun run =
         new BlockRun(
             protocolContext,
@@ -490,7 +496,8 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
             "Bench handoff block {} txs {} stored {} invalidations {} refreshes stored {} skipped {}"
                 + " taken refreshed {} rejected refreshed {} taken other {} executed {}"
                 + " on demand runs {} taken on demand {} missed refreshing {} missed pending {}"
-                + " missed not invalidated {} waited for refresh {} taken after wait {}",
+                + " missed not invalidated {} waited for refresh {} taken after wait {}"
+                + " refreshes capped {}",
             run.blockHeader().getNumber(),
             blockFootprints.size(),
             blockFootprints.stored,
@@ -507,7 +514,8 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
             missedPendingRefresh,
             missedNotInvalidated,
             waitedForRefresh,
-            takenAfterWait);
+            takenAfterWait,
+            blockFootprints.refreshesCapped);
       }
     }
     footprints = null;
