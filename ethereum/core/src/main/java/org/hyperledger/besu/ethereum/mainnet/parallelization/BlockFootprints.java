@@ -285,11 +285,12 @@ final class BlockFootprints {
     return true;
   }
 
-  /** Whether the position waits for a refresh, for the bench log. */
+  /**
+   * Whether the position waits for a refresh, for the bench log. Read without the lock, which the
+   * refresh workers hold while they index: the bit set never grows, so a racy read is only stale.
+   */
   boolean isInvalidated(final int position) {
-    synchronized (lock) {
-      return invalidated.get(position);
-    }
+    return invalidated.get(position);
   }
 
   void mainThreadAt(final int position) {
