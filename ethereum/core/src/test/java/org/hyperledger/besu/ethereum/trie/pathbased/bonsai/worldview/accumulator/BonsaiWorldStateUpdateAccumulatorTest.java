@@ -101,6 +101,47 @@ class BonsaiWorldStateUpdateAccumulatorTest {
   }
 
   @Test
+  void seededLoad_startsFromTheSeedAndKeepsTheParentValueAsPriorAfterTheRunCloses() {
+    try (BonsaiWorldState worldState = newEmptyWorldState()) {
+      persistAccountWithSlot(worldState);
+      final BonsaiWorldState run = newWorldStateOnTheSameStorage(worldState);
+      final BonsaiWorldStateUpdateAccumulator accumulator =
+          (BonsaiWorldStateUpdateAccumulator) run.updater();
+      accumulator.setStorageLoadSeeder(
+          (address, slotKey) -> address.equals(ACCOUNT) && slotKey.equals(SLOT) ? V1 : null);
+
+      assertThat(accumulator.getStorageValueByStorageSlotKey(ACCOUNT, SLOT)).contains(V1);
+      assertThat(accumulator.getPriorStorageValue(ACCOUNT, SLOT.getSlotKey().orElseThrow()))
+          .isEqualTo(V1);
+      run.close();
+      // the storage moves on after the run: a prior loaded only now would read the new value
+      final BonsaiWorldStateUpdateAccumulator head =
+          (BonsaiWorldStateUpdateAccumulator) worldState.updater();
+      head.getAccount(ACCOUNT).setStorageValue(SLOT.getSlotKey().orElseThrow(), V2);
+      head.commit();
+      worldState.persist(null);
+
+      final BonsaiValue<UInt256> seeded = accumulator.getStorageToUpdate().get(ACCOUNT).get(SLOT);
+      assertThat(seeded.getPrior()).isEqualTo(V0);
+      assertThat(seeded.getUpdated()).isEqualTo(V1);
+    }
+  }
+
+  @Test
+  void seededLoad_ofASlotTheSeederLeavesLoadsTheParentValue() {
+    try (BonsaiWorldState worldState = newEmptyWorldState()) {
+      persistAccountWithSlot(worldState);
+      final BonsaiWorldState run = newWorldStateOnTheSameStorage(worldState);
+      final BonsaiWorldStateUpdateAccumulator accumulator =
+          (BonsaiWorldStateUpdateAccumulator) run.updater();
+      accumulator.setStorageLoadSeeder((address, slotKey) -> null);
+
+      assertThat(accumulator.getStorageValueByStorageSlotKey(ACCOUNT, SLOT)).contains(V0);
+      run.close();
+    }
+  }
+
+  @Test
   void rollForward_keepsTheStorageRootOfThePatriciaAccountValue() {
     final Hash storageRoot = Hash.hash(Bytes.of(1, 2, 3));
     final AccountValue accountValue =

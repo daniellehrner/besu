@@ -750,11 +750,13 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
                           .orElse(null));
       final StorageLoadSeeder seeder = storageLoadSeeder;
       final UInt256 seed = seeder == null ? null : seeder.seed(address, storageSlotKey);
-      // a seeded slot starts from the seed, over the parent's value it keeps as its prior
+      // a seeded slot starts from the seed, over the parent's value it keeps as its prior. The
+      // prior is loaded now: nothing reads it during the run, and the run's state is closed by the
+      // time the trie log or block processing does.
       final BonsaiValue<UInt256> storageValue =
           seed == null
               ? BonsaiValue.withLazy(loader, loader)
-              : BonsaiValue.withLazy(loader, () -> seed);
+              : new BonsaiValue<>(loader.get(), seed);
       onStorageValueLoaded(address, storageSlotKey, storageValue);
 
       storageToUpdate
