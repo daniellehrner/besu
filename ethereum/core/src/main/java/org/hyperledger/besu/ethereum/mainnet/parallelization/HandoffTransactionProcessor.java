@@ -28,6 +28,7 @@ import org.hyperledger.besu.ethereum.mainnet.parallelization.BlockFootprints.See
 import org.hyperledger.besu.ethereum.processing.TransactionProcessingResult;
 import org.hyperledger.besu.ethereum.transaction.TransactionInvalidReason;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator.StorageLoadSeeder;
 import org.hyperledger.besu.evm.account.Account;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
 import org.hyperledger.besu.evm.worldstate.UpdateTrackingAccount;
@@ -98,6 +99,10 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   // processing
   private static final int MAX_REFRESHES_PER_TX =
       Integer.getInteger("besu.t20.maxRefreshesPerTx", 0);
+
+  // a refresh that reads a slot beyond its seeds starts it from the value the footprints before it
+  // leave there, rather than from the parent's
+  private static final boolean SEED_ON_LOAD = Boolean.getBoolean("besu.t20.seedOnLoad");
 
   // tests: block processing runs the refreshes itself before each transaction, so that they happen
   // on the writes of the transactions before it rather than whenever a worker gets to them
@@ -237,6 +242,15 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
         LOG.debug("Could not start refreshing footprints", e);
       }
     }
+  }
+
+  @Override
+  protected @Nullable StorageLoadSeeder predictedValues(final int transactionLocation) {
+    final BlockFootprints blockFootprints = footprints;
+    if (!SEED_ON_LOAD || blockFootprints == null) {
+      return null;
+    }
+    return (address, slotKey) -> blockFootprints.predicted(transactionLocation, address, slotKey);
   }
 
   @Override

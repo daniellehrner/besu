@@ -32,6 +32,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorld
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.PathBasedWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.BonsaiValue;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator.StorageLoadSeeder;
 import org.hyperledger.besu.evm.account.MutableAccount;
 import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
 import org.hyperledger.besu.evm.tracing.OperationTracer;
@@ -417,6 +418,17 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         context == null || context.transactionProcessingResult() == null
             ? -1
             : transaction.getGasLimit() - context.transactionProcessingResult().getGasRemaining());
+  }
+
+  /**
+   * What the slots a refresh of the transaction reads beyond its seeds start from, or null for the
+   * parent's values, the default.
+   *
+   * @param transactionLocation the transaction's position in the block
+   * @return the seeder, or null
+   */
+  protected @Nullable StorageLoadSeeder predictedValues(final int transactionLocation) {
+    return null;
   }
 
   /**
@@ -1227,7 +1239,23 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         contextBuilder.chainPredecessorAccumulator(previousInChain);
       }
       if (seeds != null) {
-        contextBuilder.seeds(applySeeds(roundWorldStateUpdater, seeds));
+        final Map<Address, Map<StorageSlotKey, UInt256>> applied =
+            applySeeds(roundWorldStateUpdater, seeds);
+        contextBuilder.seeds(applied);
+        final StorageLoadSeeder predicted =
+            previousInChain == null ? predictedValues(transactionLocation) : null;
+        if (predicted != null) {
+          // a slot the refreshed run reads beyond the seeds starts from what the block is expected
+          // to leave there too, and is checked like a seed
+          roundWorldStateUpdater.setStorageLoadSeeder(
+              (address, slotKey) -> {
+                final UInt256 value = predicted.seed(address, slotKey);
+                if (value != null) {
+                  applied.computeIfAbsent(address, a -> new HashMap<>()).put(slotKey, value);
+                }
+                return value;
+              });
+        }
       }
       final WorldUpdater transactionUpdater = roundWorldStateUpdater.updater();
       final Optional<AccessLocationTracker> transactionLocationTracker =
@@ -1290,6 +1318,8 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       // commit the accumulator in order to apply all the modifications
       transactionUpdater.commit();
       roundWorldStateUpdater.commit();
+      // later reads of the result, such as a chained run on top of it, see what it loaded only
+      roundWorldStateUpdater.setStorageLoadSeeder(null);
 
       contextBuilder
           .transactionAccumulator(ws.getAccumulator())

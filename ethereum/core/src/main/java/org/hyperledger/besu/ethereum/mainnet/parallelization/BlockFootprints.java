@@ -444,6 +444,21 @@ final class BlockFootprints {
     }
   }
 
+  /**
+   * The value the footprints and writes before the position leave in the slot, or null if none
+   * writes it or it is not tracked.
+   */
+  @Nullable UInt256 predicted(
+      final int position, final Address address, final StorageSlotKey slotKey) {
+    synchronized (lock) {
+      if (untrackedAccounts.contains(address)) {
+        return null;
+      }
+      final Slot slot = slots.get(new Cell(address, slotKey));
+      return slot == null || slot.untracked ? null : valueBefore(slot, position);
+    }
+  }
+
   // Called under the lock. Whether the latest writer before the position of each slot its
   // footprint read holds its value: a refresh seeded with the value of a writer that is refreshed
   // itself would read a value that does not hold.

@@ -368,4 +368,25 @@ class BlockFootprintsTest {
     assertThat(footprints.takeInvalidated(-1)).isEqualTo(-1);
     assertThat(footprints.refreshesCapped).isEqualTo(1);
   }
+
+  @Test
+  void aSlotIsPredictedAtTheValueTheWritersBeforeLeave() {
+    final BlockFootprints footprints = new BlockFootprints(4);
+    footprints.store(0, readWrite(10, 10, 11), true);
+    footprints.store(2, readWrite(10, 11, 13), true);
+
+    assertThat(footprints.predicted(0, CONTRACT, SLOT.slot())).isNull();
+    assertThat(footprints.predicted(1, CONTRACT, SLOT.slot())).isEqualTo(v(11));
+    assertThat(footprints.predicted(3, CONTRACT, SLOT.slot())).isEqualTo(v(13));
+    assertThat(footprints.predicted(3, CONTRACT, OTHER_SLOT.slot())).isNull();
+  }
+
+  @Test
+  void aSlotOfAClearedAccountIsNotPredicted() {
+    final BlockFootprints footprints = new BlockFootprints(3);
+    footprints.store(0, readWrite(10, 10, 11), true);
+    footprints.store(1, footprint(new Read[0], new Write[0], Set.of(CONTRACT), false), true);
+
+    assertThat(footprints.predicted(2, CONTRACT, SLOT.slot())).isNull();
+  }
 }

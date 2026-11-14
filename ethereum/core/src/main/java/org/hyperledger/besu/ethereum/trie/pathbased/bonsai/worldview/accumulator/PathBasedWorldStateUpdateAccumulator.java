@@ -748,7 +748,13 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
                       : wrappedWorldView()
                           .getStorageValueByStorageSlotKey(address, storageSlotKey)
                           .orElse(null));
-      final BonsaiValue<UInt256> storageValue = BonsaiValue.withLazy(loader, loader);
+      final StorageLoadSeeder seeder = storageLoadSeeder;
+      final UInt256 seed = seeder == null ? null : seeder.seed(address, storageSlotKey);
+      // a seeded slot starts from the seed, over the parent's value it keeps as its prior
+      final BonsaiValue<UInt256> storageValue =
+          seed == null
+              ? BonsaiValue.withLazy(loader, loader)
+              : BonsaiValue.withLazy(loader, () -> seed);
       onStorageValueLoaded(address, storageSlotKey, storageValue);
 
       storageToUpdate
@@ -761,6 +767,31 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
       throw new MerkleTrieException(
           e.getMessage(), Optional.of(address), e.getHash(), e.getLocation());
     }
+  }
+
+  /** Gives the value a slot read from the parent state starts from instead, or null. */
+  @FunctionalInterface
+  public interface StorageLoadSeeder {
+    /**
+     * The value the slot starts from in place of the parent's, or null for the parent's.
+     *
+     * @param address the account
+     * @param slotKey the slot
+     * @return the value, or null
+     */
+    @Nullable UInt256 seed(Address address, StorageSlotKey slotKey);
+  }
+
+  private @Nullable StorageLoadSeeder storageLoadSeeder;
+
+  /**
+   * Sets what the slots this accumulator loads from the parent state start from, for a speculative
+   * run on values earlier transactions of the block are expected to leave.
+   *
+   * @param seeder the seeder, or null for the parent's values
+   */
+  public void setStorageLoadSeeder(final @Nullable StorageLoadSeeder seeder) {
+    this.storageLoadSeeder = seeder;
   }
 
   @Override
