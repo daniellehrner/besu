@@ -315,4 +315,32 @@ class BlockFootprintsTest {
     footprints.mainThreadAt(1);
     assertThat(footprints.takeInvalidated(1)).isEqualTo(2);
   }
+
+  @Test
+  void settledFirstSkipsAChainMemberWhilePredecessorIsRefreshed() {
+    final BlockFootprints footprints = new BlockFootprints(3, true);
+    footprints.store(
+        0,
+        footprint(
+            new Read[0],
+            new Write[] {new Write(SLOT, v(11)), new Write(OTHER_SLOT, v(5))},
+            Set.of(),
+            false),
+        true);
+    // read the parent's 10 where 0 leaves 11
+    footprints.store(1, readWrite(10, 10, 12), true);
+    // read the parent's 0 where 0 leaves 5, and ran on top of 1
+    footprints.store(
+        2,
+        footprint(new Read[] {new Read(OTHER_SLOT, v(0), v(0))}, new Write[0], Set.of(), false),
+        true);
+    footprints.chainedOn(2, 1);
+
+    assertThat(footprints.takeInvalidated(-1)).isEqualTo(1);
+    final CompletableFuture<Void> done = footprints.refreshStarts(1);
+    assertThat(footprints.takeInvalidated(-1)).as("its predecessor is refreshed").isEqualTo(-1);
+
+    footprints.refreshEnds(1, done);
+    assertThat(footprints.takeInvalidated(-1)).isEqualTo(2);
+  }
 }

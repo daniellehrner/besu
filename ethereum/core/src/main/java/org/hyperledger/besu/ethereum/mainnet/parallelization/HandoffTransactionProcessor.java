@@ -126,6 +126,7 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   // the latest result of each transaction by its sender's nonce, and the transactions whose own run
   // failed its nonce check waiting for the result of their sender's previous one
   private final Map<SenderNonce, Footprint> resultsBySenderNonce = new ConcurrentHashMap<>();
+  private final Map<SenderNonce, Integer> positionsBySenderNonce = new ConcurrentHashMap<>();
   private final Map<SenderNonce, Integer> waitingForPrevious = new ConcurrentHashMap<>();
 
   private volatile @Nullable BlockFootprints footprints;
@@ -231,7 +232,7 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
     final Footprint footprint = Footprint.of(context, run.miningBeneficiary(), onDemand);
     // a run on top of its sender's previous transaction replaces the transaction's failed one
     if (blockFootprints.store(transactionLocation, footprint, !onDemand)) {
-      registerResult(blockFootprints, run, transaction, footprint);
+      registerResult(blockFootprints, run, transactionLocation, transaction, footprint);
     }
   }
 
@@ -242,13 +243,23 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   private void registerResult(
       final BlockFootprints blockFootprints,
       final BlockRun run,
+      final int transactionLocation,
       final Transaction transaction,
       final Footprint footprint) {
     final Optional<Address> sender = transaction.getSenderIfKnown();
     if (sender.isEmpty()) {
       return;
     }
-    resultsBySenderNonce.put(new SenderNonce(sender.get(), transaction.getNonce()), footprint);
+    final SenderNonce own = new SenderNonce(sender.get(), transaction.getNonce());
+    resultsBySenderNonce.put(own, footprint);
+    positionsBySenderNonce.put(own, transactionLocation);
+    if (footprint.context.chainPredecessorAccumulator() != null && transaction.getNonce() > 0) {
+      final Integer predecessor =
+          positionsBySenderNonce.get(new SenderNonce(sender.get(), transaction.getNonce() - 1));
+      if (predecessor != null) {
+        blockFootprints.chainedOn(transactionLocation, predecessor);
+      }
+    }
     final Integer next =
         waitingForPrevious.remove(new SenderNonce(sender.get(), transaction.getNonce() + 1));
     if (next != null) {
@@ -569,7 +580,7 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
       }
       final Footprint refreshed = Footprint.of(context, run.miningBeneficiary());
       if (blockFootprints.store(position, refreshed, false)) {
-        registerResult(blockFootprints, run, transaction, refreshed);
+        registerResult(blockFootprints, run, position, transaction, refreshed);
       }
     } catch (final RuntimeException e) {
       LOG.debug("Error refreshing the footprint of transaction {}", position, e);

@@ -20,6 +20,7 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.BitSet;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -188,6 +189,8 @@ final class BlockFootprints {
   // guarded by lock
   private final Footprint[] indexed;
   private final Write[][] executedWrites;
+  // the position of the transaction a chained footprint ran on top of, or -1
+  private final int[] chainPredecessor;
   private final boolean[] executed;
   private final Map<Cell, Slot> slots = new HashMap<>();
   private final Set<Address> untrackedAccounts = new HashSet<>();
@@ -218,6 +221,8 @@ final class BlockFootprints {
     this.latest = new AtomicReferenceArray<>(size);
     this.indexed = new Footprint[size];
     this.executedWrites = new Write[size][];
+    this.chainPredecessor = new int[size];
+    Arrays.fill(chainPredecessor, -1);
     this.executed = new boolean[size];
     this.invalidated = new BitSet(size);
   }
@@ -326,6 +331,16 @@ final class BlockFootprints {
     return true;
   }
 
+  /**
+   * Records that the footprint stored for the position ran on top of the result of the transaction
+   * at {@code predecessor}, its sender's previous one.
+   */
+  void chainedOn(final int position, final int predecessor) {
+    synchronized (lock) {
+      chainPredecessor[position] = predecessor;
+    }
+  }
+
   /** Queues that block processing took the footprint stored for the position. */
   void reportTaken(final int position) {
     reported.add(new Report(position, null, null));
@@ -418,6 +433,11 @@ final class BlockFootprints {
     final Footprint footprint = latest.get(position);
     if (footprint == null) {
       return true;
+    }
+    final int predecessor = chainPredecessor[position];
+    if (predecessor > mainThreadAt
+        && (invalidated.get(predecessor) || refreshing.containsKey(predecessor))) {
+      return false;
     }
     for (final Read read : footprint.reads) {
       final Slot slot = slots.get(read.cell());
