@@ -1580,7 +1580,7 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
             transaction.getTo().map(a -> a.toHexString()).orElse("create"),
             transaction.getGasLimit() - transactionProcessingResult.getGasRemaining(),
             transactionProcessingResult.isInvalid()
-                ? "invalid"
+                ? "invalid " + transactionProcessingResult.getValidationResult().getInvalidReason()
                 : transactionCollisionDetector.collisionReason(
                     transaction,
                     miningBeneficiary,
