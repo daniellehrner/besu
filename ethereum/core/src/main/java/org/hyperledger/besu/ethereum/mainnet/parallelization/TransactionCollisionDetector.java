@@ -482,10 +482,22 @@ public class TransactionCollisionDetector {
           ? "chained " + transaction.getSender()
           : null;
     }
+    final Map<Address, Map<StorageSlotKey, UInt256>> seeds = parallelizedTransactionContext.seeds();
+    if (seeds != null && !transactionAccumulator.getStorageToClear().isEmpty()) {
+      return "seeded-clear";
+    }
     for (final Address address : transactionAccumulator.getAccountsToUpdate().keySet()) {
       final BonsaiValue<? extends BonsaiAccount> inBlock =
           blockAccumulator.getAccountsToUpdate().get(address);
+      final Map<StorageSlotKey, UInt256> seeded = seeds == null ? null : seeds.get(address);
       if (inBlock == null) {
+        if (seeded != null) {
+          final String reason =
+              seededReason(seeded, null, transactionAccumulator.getStorageToUpdate().get(address));
+          if (reason != null) {
+            return reason + " " + address;
+          }
+        }
         continue;
       }
       if (!areAccountDetailsEqualExcludingStorage(inBlock.getPrior(), inBlock.getUpdated())) {
@@ -505,6 +517,13 @@ public class TransactionCollisionDetector {
       }
       final Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> blockSlots =
           blockAccumulator.getStorageToUpdate().get(address);
+      if (seeded != null) {
+        final String reason = seededReason(seeded, blockSlots, slots);
+        if (reason != null) {
+          return reason + " " + address;
+        }
+        continue;
+      }
       if (blockSlots == null) {
         continue;
       }
@@ -512,6 +531,42 @@ public class TransactionCollisionDetector {
         final BonsaiValue<UInt256> inBlockSlot = blockSlots.get(slot);
         if (inBlockSlot != null && inBlockSlot.isChanged()) {
           return "slot " + address;
+        }
+      }
+    }
+    return null;
+  }
+
+  // for the bench log: why a refreshed run's slots do not hold
+  private static @Nullable String seededReason(
+      final Map<StorageSlotKey, UInt256> seeded,
+      final @Nullable Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> blockSlots,
+      final @Nullable Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> runSlots) {
+    for (final Map.Entry<StorageSlotKey, UInt256> seed : seeded.entrySet()) {
+      final BonsaiValue<UInt256> inBlock =
+          blockSlots == null ? null : blockSlots.get(seed.getKey());
+      final UInt256 current;
+      if (inBlock != null) {
+        current = inBlock.getUpdated();
+      } else {
+        final BonsaiValue<UInt256> inRun = runSlots == null ? null : runSlots.get(seed.getKey());
+        if (inRun == null) {
+          return "seed-missing";
+        }
+        current = inRun.getPrior();
+      }
+      if (!areSlotValuesEqual(current, seed.getValue())) {
+        return "seed-moved";
+      }
+    }
+    if (blockSlots != null && runSlots != null) {
+      for (final StorageSlotKey slot : runSlots.keySet()) {
+        if (seeded.containsKey(slot)) {
+          continue;
+        }
+        final BonsaiValue<UInt256> inBlockSlot = blockSlots.get(slot);
+        if (inBlockSlot != null && inBlockSlot.isChanged()) {
+          return "unseeded-slot";
         }
       }
     }
