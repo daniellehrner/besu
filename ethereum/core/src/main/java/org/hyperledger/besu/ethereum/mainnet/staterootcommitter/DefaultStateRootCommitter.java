@@ -244,7 +244,7 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
       final PrecomputedStorageTries.Precomputed precomputed =
           accountDeleted || storageCleared || precomputedStorageTries == null
               ? null
-              : usable(precomputedStorageTries.take(updatedAddress), startRoot, storageUpdates);
+              : usable(precomputedStorageTries, updatedAddress, startRoot, storageUpdates);
       final MerkleTrie<Bytes, Bytes> storageTrie =
           precomputed != null
               ? precomputed.trie()
@@ -296,14 +296,21 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
      * value read back, so such a trie is computed from the start instead.
      */
     private static PrecomputedStorageTries.@Nullable Precomputed usable(
-        final PrecomputedStorageTries.@Nullable Precomputed precomputed,
+        final PrecomputedStorageTries tries,
+        final Address address,
         final Hash startRoot,
         final Map<StorageSlotKey, BonsaiValue<UInt256>> storageUpdates) {
-      if (precomputed == null || !precomputed.startRoot().equals(startRoot)) {
+      final PrecomputedStorageTries.Precomputed precomputed = tries.take(address);
+      if (precomputed == null) {
+        return null;
+      }
+      if (!precomputed.startRoot().equals(startRoot)) {
+        tries.fellBack();
         return null;
       }
       for (final StorageSlotKey slot : precomputed.predicted().keySet()) {
         if (!storageUpdates.containsKey(slot)) {
+          tries.fellBack();
           return null;
         }
       }

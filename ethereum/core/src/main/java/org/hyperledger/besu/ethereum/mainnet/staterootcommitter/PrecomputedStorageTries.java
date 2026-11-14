@@ -63,6 +63,7 @@ public final class PrecomputedStorageTries {
   private final AtomicInteger started = new AtomicInteger();
   private final AtomicInteger taken = new AtomicInteger();
   private final AtomicInteger notDone = new AtomicInteger();
+  private final AtomicInteger fellBack = new AtomicInteger();
 
   /**
    * Creates the tries of a block processed on the world state.
@@ -155,6 +156,11 @@ public final class PrecomputedStorageTries {
     return (int) tries.values().stream().filter(CompletableFuture::isDone).count();
   }
 
+  /** Counts a taken trie the block computed from the start instead, for the bench log. */
+  void fellBack() {
+    fellBack.incrementAndGet();
+  }
+
   /** Drops the tries not taken. */
   public void cancel() {
     tries.values().forEach(future -> future.cancel(false));
@@ -162,11 +168,11 @@ public final class PrecomputedStorageTries {
   }
 
   /**
-   * The number of tries started, taken and not done in time, for the bench log.
+   * The number of tries started, taken, not done in time and taken but not used, for the bench log.
    *
-   * @return started, taken and not done
+   * @return started, taken, not done and fallen back
    */
   public int[] counters() {
-    return new int[] {started.get(), taken.get(), notDone.get()};
+    return new int[] {started.get(), taken.get(), notDone.get(), fellBack.get()};
   }
 }

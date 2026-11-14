@@ -176,6 +176,8 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   private volatile @Nullable BlockFootprints footprints;
   private volatile @Nullable BlockRun blockRun;
   private volatile @Nullable PrecomputedStorageTries precomputedStorageTries;
+  private static final java.util.concurrent.atomic.AtomicBoolean ROOTS_EXPLAINED =
+      new java.util.concurrent.atomic.AtomicBoolean();
   // block processing only
   private boolean precomputeStarted;
 
@@ -263,8 +265,14 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
     if (PREDICTED_ROOTS_AT <= 0
         || footprints == null
         || !(committer instanceof DefaultStateRootCommitter)
-        || !(worldState instanceof BonsaiWorldState bonsai)
-        || bonsai.isStorageFrozen()) {
+        || !(worldState instanceof BonsaiWorldState bonsai)) {
+      if (PREDICTED_ROOTS_AT > 0 && LOG_HANDOFF && !ROOTS_EXPLAINED.getAndSet(true)) {
+        LOG.info(
+            "Bench predicted roots off: footprints {} committer {} world state {}",
+            footprints != null,
+            committer.getClass().getName(),
+            worldState.getClass().getName());
+      }
       return committer;
     }
     final PrecomputedStorageTries tries = new PrecomputedStorageTries(bonsai);
@@ -554,13 +562,13 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
       blockFootprints.finish();
       if (LOG_HANDOFF && run != null) {
         final PrecomputedStorageTries tries = precomputedStorageTries;
-        final int[] rootCounters = tries == null ? new int[3] : tries.counters();
+        final int[] rootCounters = tries == null ? new int[4] : tries.counters();
         LOG.info(
             "Bench handoff block {} txs {} stored {} invalidations {} refreshes stored {} skipped {}"
                 + " taken refreshed {} rejected refreshed {} taken other {} executed {}"
                 + " on demand runs {} taken on demand {} missed refreshing {} missed pending {}"
                 + " missed not invalidated {} waited for refresh {} taken after wait {}"
-                + " refreshes capped {} roots precomputed {} taken {} not done {}",
+                + " refreshes capped {} roots precomputed {} taken {} not done {} fell back {}",
             run.blockHeader().getNumber(),
             blockFootprints.size(),
             blockFootprints.stored,
@@ -581,7 +589,8 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
             blockFootprints.refreshesCapped,
             rootCounters[0],
             rootCounters[1],
-            rootCounters[2]);
+            rootCounters[2],
+            rootCounters[3]);
       }
     }
     footprints = null;
