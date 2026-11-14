@@ -27,6 +27,8 @@ import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorld
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -55,6 +57,22 @@ public final class PrecomputedStorageTries {
    */
   public record Precomputed(
       Hash startRoot, MerkleTrie<Bytes, Bytes> trie, Map<StorageSlotKey, UInt256> predicted) {}
+
+  // the tries are built while the block executes, so they get threads of their own rather than the
+  // storage trie pool's, which would take cores from the block's execution; 0 uses that pool
+  private static final int THREADS = Integer.getInteger("besu.t20.predictedRootsThreads", 0);
+  private static final AtomicInteger THREAD_IDS = new AtomicInteger();
+  private static final ExecutorService EXECUTOR =
+      THREADS <= 0
+          ? null
+          : Executors.newFixedThreadPool(
+              THREADS,
+              runnable -> {
+                final Thread thread =
+                    new Thread(runnable, "besu-predicted-roots-" + THREAD_IDS.getAndIncrement());
+                thread.setDaemon(true);
+                return thread;
+              });
 
   private final BonsaiWorldState worldState;
   private final Map<Address, CompletableFuture<Precomputed>> tries = new ConcurrentHashMap<>();
@@ -90,7 +108,7 @@ public final class PrecomputedStorageTries {
           account.getKey(),
           CompletableFuture.supplyAsync(
               () -> precompute(account.getKey(), account.getValue()),
-              BlockProcessingExecutors.storageTrieExecutor()));
+              EXECUTOR != null ? EXECUTOR : BlockProcessingExecutors.storageTrieExecutor()));
     }
   }
 
