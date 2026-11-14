@@ -90,6 +90,19 @@ public class Util {
    * @return the root hash of the MPT
    */
   public static Hash getRootFromListOfBytes(final List<Bytes> bytes) {
+    return getRootFromListOfBytes(bytes, MIN_ENTRIES_TO_HASH_IN_PARALLEL);
+  }
+
+  /**
+   * The root of the list trie, hashing its subtries in parallel once the list has the given number
+   * of entries.
+   *
+   * @param bytes the entries
+   * @param minEntriesToHashInParallel the length from which the subtries are hashed in parallel
+   * @return the root
+   */
+  public static Hash getRootFromListOfBytes(
+      final List<Bytes> bytes, final int minEntriesToHashInParallel) {
     if (bytes.isEmpty()) {
       return Hash.EMPTY_TRIE_HASH;
     }
@@ -100,7 +113,7 @@ public class Util {
               trie.put(indexKey(i), bytes.get(i));
             });
     return Hash.wrap(
-        bytes.size() >= MIN_ENTRIES_TO_HASH_IN_PARALLEL
+        bytes.size() >= minEntriesToHashInParallel
             ? trie.getRootHashInParallel(PARALLEL_HASH_DEPTH)
             : trie.getRootHash());
   }

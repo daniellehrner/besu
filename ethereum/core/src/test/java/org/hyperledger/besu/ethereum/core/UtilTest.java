@@ -58,4 +58,19 @@ public class UtilTest {
           .isEqualTo(trie.getRootHash());
     }
   }
+
+  @Test
+  public void rootFromListOfBytesHashedInParallelFromAnyLengthIsTheSame() {
+    for (final int size : new int[] {1, 2, 16, 17, 31, 32, 128, 129, 250, 600}) {
+      final Random random = new Random(size);
+      final List<Bytes> entries = new ArrayList<>(size);
+      for (int i = 0; i < size; i++) {
+        entries.add(Bytes.random(1 + random.nextInt(200), random));
+      }
+
+      assertThat(Util.getRootFromListOfBytes(entries, 1))
+          .as("size %d", size)
+          .isEqualTo(Util.getRootFromListOfBytes(entries, Integer.MAX_VALUE));
+    }
+  }
 }

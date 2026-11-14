@@ -41,6 +41,17 @@ import org.apache.tuweni.bytes.Bytes;
 /** A utility class for body validation tasks. */
 public final class BodyValidation {
 
+  private static final boolean PARALLEL_RECEIPTS_ROOT =
+      Boolean.getBoolean("besu.t20.parallelReceiptsRoot");
+  private static final int MIN_RECEIPTS_IN_PARALLEL = 32;
+
+  private static Bytes encodeForReceiptsRoot(final TransactionReceipt receipt) {
+    return RLP.encode(
+        rlpOutput ->
+            TransactionReceiptEncoder.writeTo(
+                receipt, rlpOutput, TransactionReceiptEncodingConfiguration.TRIE_ROOT));
+  }
+
   private BodyValidation() {
     // Utility Class
   }
@@ -98,6 +109,13 @@ public final class BodyValidation {
    * @return the receipt root
    */
   public static Hash receiptsRoot(final List<TransactionReceipt> receipts) {
+    if (PARALLEL_RECEIPTS_ROOT && receipts.size() >= MIN_RECEIPTS_IN_PARALLEL) {
+      // block processing waits for this root: the receipts are encoded and hashed on the idle
+      // workers
+      return Util.getRootFromListOfBytes(
+          receipts.parallelStream().map(BodyValidation::encodeForReceiptsRoot).toList(),
+          MIN_RECEIPTS_IN_PARALLEL);
+    }
     final ArrayList<Bytes> bytesList = new ArrayList<>(receipts.size());
     receipts.forEach(
         receipt ->
