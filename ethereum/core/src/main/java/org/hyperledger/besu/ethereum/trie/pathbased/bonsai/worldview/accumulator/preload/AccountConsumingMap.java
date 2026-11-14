@@ -57,6 +57,27 @@ public class AccountConsumingMap<T extends BonsaiValue<? extends BonsaiAccount>>
    *
    * @param address the account
    */
+  /**
+   * Puts the account without preloading it; the caller preloads it with {@link #preload} later.
+   *
+   * @param address the account's address
+   * @param value the account's value
+   * @return the previous value
+   */
+  public T putWithoutPreload(final Address address, final T value) {
+    return accounts.put(address, value);
+  }
+
+  /**
+   * Whether the account's trie value differs from its prior.
+   *
+   * @param value the account's value
+   * @return whether it changed
+   */
+  public boolean changed(final T value) {
+    return isChanged(value);
+  }
+
   public void preloadIfChanged(final Address address) {
     final T value = accounts.get(address);
     if (value != null && isChanged(value)) {

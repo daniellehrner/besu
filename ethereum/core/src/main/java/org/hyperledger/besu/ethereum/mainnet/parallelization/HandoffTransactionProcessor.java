@@ -108,6 +108,17 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   // leave there, rather than from the parent's
   private static final boolean SEED_ON_LOAD = Boolean.getBoolean("besu.t20.seedOnLoad");
 
+  // block processing imports a taken result without the trie preloads of what it changed and the
+  // merge of its slot hashes, which a thread of their own runs; both only warm caches
+  private static final boolean CHEAP_TAKES = Boolean.getBoolean("besu.t20.cheapTakes");
+  private static final ExecutorService TAKE_SIDE_WORK =
+      Executors.newSingleThreadExecutor(
+          runnable -> {
+            final Thread thread = new Thread(runnable, "besu-take-preloads");
+            thread.setDaemon(true);
+            return thread;
+          });
+
   // once block processing passes this share of the block, the storage tries are brought to the
   // slot values the footprints predict, while the rest of the block executes; 0 leaves the state
   // root to the end of the block
@@ -287,6 +298,18 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
       return null;
     }
     return (address, slotKey) -> blockFootprints.predicted(transactionLocation, address, slotKey);
+  }
+
+  @Override
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  protected void importTaken(
+      final PathBasedWorldStateUpdateAccumulator blockAccumulator,
+      final PathBasedWorldStateUpdateAccumulator<?> transactionAccumulator) {
+    if (CHEAP_TAKES) {
+      blockAccumulator.importStateChangesFromSource(transactionAccumulator, TAKE_SIDE_WORK);
+    } else {
+      super.importTaken(blockAccumulator, transactionAccumulator);
+    }
   }
 
   @Override

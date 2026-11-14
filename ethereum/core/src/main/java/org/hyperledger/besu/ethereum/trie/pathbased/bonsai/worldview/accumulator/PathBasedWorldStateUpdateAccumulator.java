@@ -38,16 +38,19 @@ import org.hyperledger.besu.evm.worldstate.UpdateTrackingAccount;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLog;
 import org.hyperledger.besu.plugin.services.trielogs.TrieLogAccumulator;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -178,6 +181,85 @@ public abstract class PathBasedWorldStateUpdateAccumulator<ACCOUNT extends Bonsa
     // the slots of cleared storage preload from the empty root only once the clear is known
     storageToClear.addAll(source.storageToClear);
     importFrom(source, ImportMode.UPSERT);
+  }
+
+  /**
+   * Like {@link #importStateChangesFromSource(PathBasedWorldStateUpdateAccumulator)}, but leaves
+   * the trie preloads of the accounts and slots it changes, and the merge of the source's slot
+   * hashes, to the executor rather than the calling thread. Both only warm caches.
+   *
+   * @param source The source accumulator whose changes take priority
+   * @param deferTo where the preloads and the slot hash merge run
+   */
+  public void importStateChangesFromSource(
+      final PathBasedWorldStateUpdateAccumulator<ACCOUNT> source, final Executor deferTo) {
+    storageToClear.addAll(source.storageToClear);
+    final List<Address> changedAccounts = new ArrayList<>();
+    final List<Address> changedSlotAccounts = new ArrayList<>();
+    final List<StorageSlotKey> changedSlots = new ArrayList<>();
+    source
+        .getAccountsToUpdate()
+        .forEach(
+            (address, srcValue) -> {
+              final ACCOUNT copyPrior =
+                  srcValue.getPrior() != null
+                      ? copyAccount(srcValue.getPrior(), this, false)
+                      : null;
+              final ACCOUNT copyUpdated =
+                  srcValue.getUpdated() != null
+                      ? copyAccount(srcValue.getUpdated(), this, true)
+                      : null;
+              final BonsaiValue<ACCOUNT> newValue =
+                  new BonsaiValue<>(copyPrior, copyUpdated, srcValue.isLastStepCleared());
+              accountsToUpdate.putWithoutPreload(address, newValue);
+              if (accountsToUpdate.changed(newValue)) {
+                changedAccounts.add(address);
+              }
+            });
+    source
+        .getCodeToUpdate()
+        .forEach(
+            (address, srcValue) ->
+                codeToUpdate.put(
+                    address,
+                    new BonsaiValue<>(
+                        srcValue.getPrior(), srcValue.getUpdated(), srcValue.isLastStepCleared())));
+    source
+        .getStorageToUpdate()
+        .forEach(
+            (address, slots) -> {
+              final StorageConsumingMap<StorageSlotKey, BonsaiValue<UInt256>> targetSlots =
+                  storageToUpdate.computeIfAbsent(address, this::newStorageMap);
+              slots.forEach(
+                  (slotKey, srcSlot) -> {
+                    final BonsaiValue<UInt256> newSlotValue =
+                        new BonsaiValue<>(
+                            srcSlot.getPrior(), srcSlot.getUpdated(), srcSlot.isLastStepCleared());
+                    final BonsaiValue<UInt256> previous =
+                        targetSlots.putLoaded(slotKey, newSlotValue);
+                    // as the consuming map preloads a slot: once, when the block first changes it
+                    if (newSlotValue.isChanged() && (previous == null || !previous.isChanged())) {
+                      changedSlotAccounts.add(address);
+                      changedSlots.add(slotKey);
+                    }
+                  });
+            });
+    this.isAccumulatorStateChanged = true;
+    final Map<UInt256, Hash> sourceSlotHashes = source.storageKeyHashLookup;
+    deferTo.execute(
+        () -> {
+          for (final Address address : changedAccounts) {
+            accountsToUpdate.preload(address);
+          }
+          for (int i = 0; i < changedSlots.size(); i++) {
+            final StorageConsumingMap<StorageSlotKey, BonsaiValue<UInt256>> slots =
+                storageToUpdate.get(changedSlotAccounts.get(i));
+            if (slots != null) {
+              slots.getConsumer().process(changedSlotAccounts.get(i), changedSlots.get(i));
+            }
+          }
+          storageKeyHashLookup.putAll(sourceSlotHashes);
+        });
   }
 
   /**

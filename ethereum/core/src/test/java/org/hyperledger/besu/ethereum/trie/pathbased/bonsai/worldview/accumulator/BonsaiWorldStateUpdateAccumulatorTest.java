@@ -387,6 +387,46 @@ class BonsaiWorldStateUpdateAccumulatorTest {
   }
 
   @Test
+  void deferredImport_preloadsTheSlotAndItsAccountOnceOnTheExecutor() {
+    final BonsaiCachedMerkleTrieLoader loader = spy(new NoOpBonsaiCachedMerkleTrieLoader());
+    try (BonsaiWorldState worldState = newEmptyWorldState(loader)) {
+      final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
+      final Hash storageRoot = storageRoot(worldState);
+      clearInvocations(loader);
+      final java.util.List<Runnable> deferred = new java.util.ArrayList<>();
+
+      accumulator.importStateChangesFromSource(
+          transactionWritingSlot(worldState, V1), deferred::add);
+      accumulator.importStateChangesFromSource(
+          transactionWritingSlot(worldState, V2), deferred::add);
+
+      verify(loader, never()).preLoadStorageSlot(any(), any(), any(), any());
+      verify(loader, never()).preLoadAccount(any(), any(), any());
+      deferred.forEach(Runnable::run);
+      verify(loader).preLoadStorageSlot(any(), any(), any(), any());
+      verify(loader).preLoadStorageSlot(any(), eq(ACCOUNT), eq(storageRoot), eq(SLOT));
+      verify(loader).preLoadAccount(any(), any(), eq(ACCOUNT));
+    }
+  }
+
+  @Test
+  void deferredImport_leavesTheValuesTheImportLeaves() {
+    try (BonsaiWorldState worldState = newEmptyWorldState()) {
+      final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);
+
+      accumulator.importStateChangesFromSource(transactionWritingSlot(worldState, V1), r -> {});
+      accumulator.importStateChangesFromSource(transactionWritingSlot(worldState, V2), r -> {});
+
+      final BonsaiValue<UInt256> slot = accumulator.getStorageToUpdate().get(ACCOUNT).get(SLOT);
+      assertThat(slot.getPrior()).isEqualTo(V0);
+      assertThat(slot.getUpdated()).isEqualTo(V2);
+      assertThat(accumulator.getStorageValueByStorageSlotKey(ACCOUNT, SLOT)).contains(V2);
+      assertThat(accumulator.getAccountsToUpdate().get(ACCOUNT).getUpdated().getNonce())
+          .isEqualTo(accumulator.getAccountsToUpdate().get(ACCOUNT).getPrior().getNonce());
+    }
+  }
+
+  @Test
   void importPriorStateFromSource_addsOnlyPriorsAndKeepsTheBlockValues() {
     try (BonsaiWorldState worldState = newEmptyWorldState()) {
       final BonsaiWorldStateUpdateAccumulator accumulator = persistAccountWithSlot(worldState);

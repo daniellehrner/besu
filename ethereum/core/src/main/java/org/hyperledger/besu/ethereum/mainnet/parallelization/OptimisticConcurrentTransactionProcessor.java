@@ -1596,7 +1596,7 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
       }
 
       if (balancesCarried == null || balancesCarried.isEmpty()) {
-        blockAccumulator.importStateChangesFromSource(transactionAccumulator);
+        importTaken(blockAccumulator, transactionAccumulator);
       } else {
         importCarryingBalances(
             blockAccumulator, transactionAccumulator, balancesCarried, transactionProcessingResult);
@@ -1637,8 +1637,21 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
    * changed too, without depending on them: each such balance ends at the block's balance plus the
    * transaction's own change, in the state and in the block access list.
    */
+  /**
+   * Imports the state changes of a result block processing takes into the block's accumulator.
+   *
+   * @param blockAccumulator the block's accumulator
+   * @param transactionAccumulator the result's accumulator
+   */
   @SuppressWarnings({"unchecked", "rawtypes"})
-  private static void importCarryingBalances(
+  protected void importTaken(
+      final PathBasedWorldStateUpdateAccumulator blockAccumulator,
+      final PathBasedWorldStateUpdateAccumulator<?> transactionAccumulator) {
+    blockAccumulator.importStateChangesFromSource(transactionAccumulator);
+  }
+
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  private void importCarryingBalances(
       final PathBasedWorldStateUpdateAccumulator blockAccumulator,
       final PathBasedWorldStateUpdateAccumulator<?> transactionAccumulator,
       final List<Address> balancesCarried,
@@ -1665,7 +1678,7 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
               ? inBlock.add(after.subtract(before))
               : inBlock.subtract(before.subtract(after));
     }
-    blockAccumulator.importStateChangesFromSource(transactionAccumulator);
+    importTaken(blockAccumulator, transactionAccumulator);
     for (int i = 0; i < carried.length; i++) {
       final Address address = balancesCarried.get(i);
       final Wei postBalance = carried[i];

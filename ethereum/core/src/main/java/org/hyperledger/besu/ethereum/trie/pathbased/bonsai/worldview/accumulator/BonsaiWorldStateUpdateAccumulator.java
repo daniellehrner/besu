@@ -31,6 +31,7 @@ import org.hyperledger.besu.evm.worldstate.UpdateTrackingAccount;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.Executor;
 
 public class BonsaiWorldStateUpdateAccumulator
     extends PathBasedWorldStateUpdateAccumulator<BonsaiAccount> {
@@ -161,6 +162,16 @@ public class BonsaiWorldStateUpdateAccumulator
     super.importStateChangesFromSource(source);
     // Parallel tx processing imports state changes here instead of via commit(); emit the same
     // snapshot from this path so listeners observe both code paths uniformly.
+    final Set<Address> changed = new HashSet<>(source.getAccountsToUpdate().keySet());
+    if (!changed.isEmpty()) {
+      committedTransactionListener.onTransactionCommitted(new CommittedTransactionChanges(changed));
+    }
+  }
+
+  @Override
+  public void importStateChangesFromSource(
+      final PathBasedWorldStateUpdateAccumulator<BonsaiAccount> source, final Executor deferTo) {
+    super.importStateChangesFromSource(source, deferTo);
     final Set<Address> changed = new HashSet<>(source.getAccountsToUpdate().keySet());
     if (!changed.isEmpty()) {
       committedTransactionListener.onTransactionCommitted(new CommittedTransactionChanges(changed));
