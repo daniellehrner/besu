@@ -325,7 +325,7 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
                       null,
                       null);
                 },
-                executor);
+                runExecutor(transaction, executor));
       } else if (chain.get(0) == i) {
         final List<CompletableFuture<ParallelizedTransactionContext>> chainFutures =
             new ArrayList<>(chain.size());
@@ -417,6 +417,17 @@ public class OptimisticConcurrentTransactionProcessor extends ParallelBlockTrans
         context == null || context.transactionProcessingResult() == null
             ? -1
             : transaction.getGasLimit() - context.transactionProcessingResult().getGasRemaining());
+  }
+
+  /**
+   * The executor of a transaction's run alone, the block's by default.
+   *
+   * @param transaction the transaction
+   * @param executor the executor of the block's runs
+   * @return the executor to run it on
+   */
+  protected Executor runExecutor(final Transaction transaction, final Executor executor) {
+    return executor;
   }
 
   private boolean shouldWaitFor(final int transactionLocation) {

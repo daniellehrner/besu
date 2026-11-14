@@ -95,6 +95,22 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
     refreshSynchronously = synchronously;
   }
 
+  // heavy transactions run alone on threads of their own, so that they start at once without
+  // holding back the light ones behind them; 0 runs them with the others
+  private static final int HEAVY_THREADS = Integer.getInteger("besu.t20.heavyThreads", 0);
+  private static final AtomicInteger HEAVY_THREAD_IDS = new AtomicInteger();
+  private static final ExecutorService HEAVY_EXECUTOR =
+      HEAVY_THREADS <= 0
+          ? null
+          : Executors.newFixedThreadPool(
+              HEAVY_THREADS,
+              runnable -> {
+                final Thread thread =
+                    new Thread(runnable, "besu-heavy-run-" + HEAVY_THREAD_IDS.getAndIncrement());
+                thread.setDaemon(true);
+                return thread;
+              });
+
   private static final AtomicInteger REFRESH_THREAD_IDS = new AtomicInteger();
   private static final ExecutorService REFRESH_EXECUTOR =
       Executors.newCachedThreadPool(
@@ -207,6 +223,11 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
         LOG.debug("Could not start refreshing footprints", e);
       }
     }
+  }
+
+  @Override
+  protected Executor runExecutor(final Transaction transaction, final Executor executor) {
+    return HEAVY_EXECUTOR != null && isHeavy(transaction) ? HEAVY_EXECUTOR : executor;
   }
 
   @Override
