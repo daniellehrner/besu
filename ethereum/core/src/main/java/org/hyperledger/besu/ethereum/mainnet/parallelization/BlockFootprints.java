@@ -445,6 +445,34 @@ final class BlockFootprints {
   }
 
   /**
+   * The value each tracked slot is expected to end the block at: the last write the footprints and
+   * the executed transactions leave there, by account. Accounts with a slot that is not tracked, or
+   * with storage a transaction cleared, are left out.
+   */
+  Map<Address, Map<StorageSlotKey, UInt256>> predictedFinalWrites() {
+    synchronized (lock) {
+      final Map<Address, Map<StorageSlotKey, UInt256>> byAccount = new HashMap<>();
+      final Set<Address> partial = new HashSet<>(untrackedAccounts);
+      for (final Map.Entry<Cell, Slot> entry : slots.entrySet()) {
+        final Address address = entry.getKey().address();
+        final Slot slot = entry.getValue();
+        if (slot.untracked) {
+          partial.add(address);
+          continue;
+        }
+        if (slot.writers.isEmpty()) {
+          continue;
+        }
+        byAccount
+            .computeIfAbsent(address, a -> new HashMap<>())
+            .put(entry.getKey().slot(), slot.writers.lastEntry().getValue());
+      }
+      byAccount.keySet().removeAll(partial);
+      return byAccount;
+    }
+  }
+
+  /**
    * The value the footprints and writes before the position leave in the slot, or null if none
    * writes it or it is not tracked.
    */

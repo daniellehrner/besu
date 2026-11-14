@@ -197,15 +197,16 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
     LOG.trace("traceStartBlock for {}", blockHeader.getNumber());
     blockTracer.traceStartBlock(worldState, blockHeader, miningBeneficiary);
 
-    final StateRootCommitter stateRootCommitter =
+    final StateRootCommitter blockStateRootCommitter =
         protocolSpec
             .getStateRootCommitterFactory()
             .forBlock(
                 protocolContext,
                 blockHeader,
                 blockAccessListAccountLookup,
-                worldState.isStorageFrozen())
-            .timed(blockProcessingMetrics.stateRootCalculationTimer());
+                worldState.isStorageFrozen());
+    StateRootCommitter stateRootCommitter =
+        blockStateRootCommitter.timed(blockProcessingMetrics.stateRootCalculationTimer());
 
     final Optional<BlockAccessListBuilder> blockAccessListBuilder =
         context
@@ -254,6 +255,15 @@ public abstract class AbstractBlockProcessor implements BlockProcessor {
                 blockAccessListBuilder,
                 blockAccessListAccountLookup,
                 maybeParentHeader);
+        // a parallel processor may compute part of the state root while the block executes
+        final StateRootCommitter parallelCommitter =
+            parallelProcessor
+                .map(processor -> processor.stateRootCommitter(blockStateRootCommitter, worldState))
+                .orElse(blockStateRootCommitter);
+        if (parallelCommitter != blockStateRootCommitter) {
+          stateRootCommitter =
+              parallelCommitter.timed(blockProcessingMetrics.stateRootCalculationTimer());
+        }
       }
 
       boolean parallelizedTxFound = false;

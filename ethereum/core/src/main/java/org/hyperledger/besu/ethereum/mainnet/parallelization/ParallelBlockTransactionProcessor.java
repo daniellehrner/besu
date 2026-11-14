@@ -28,6 +28,7 @@ import org.hyperledger.besu.evm.blockhash.BlockHashLookup;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
+import org.hyperledger.besu.plugin.services.worldstate.StateRootCommitter;
 
 import java.util.Arrays;
 import java.util.List;
@@ -149,6 +150,18 @@ public abstract class ParallelBlockTransactionProcessor {
       context.transactionProcessingResult().getLogsBloom();
     }
     return context;
+  }
+
+  /**
+   * The committer of the block's state root, in place of the one the block would use.
+   *
+   * @param committer the committer the block would use
+   * @param worldState the world state the block is processed on
+   * @return the committer to use, the given one by default
+   */
+  public StateRootCommitter stateRootCommitter(
+      final StateRootCommitter committer, final MutableWorldState worldState) {
+    return committer;
   }
 
   /**

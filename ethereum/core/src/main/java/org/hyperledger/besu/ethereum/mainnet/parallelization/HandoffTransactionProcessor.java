@@ -25,8 +25,11 @@ import org.hyperledger.besu.ethereum.mainnet.block.access.list.BlockAccessList.B
 import org.hyperledger.besu.ethereum.mainnet.parallelization.BlockFootprints.Footprint;
 import org.hyperledger.besu.ethereum.mainnet.parallelization.BlockFootprints.RawWrite;
 import org.hyperledger.besu.ethereum.mainnet.parallelization.BlockFootprints.Seeding;
+import org.hyperledger.besu.ethereum.mainnet.staterootcommitter.DefaultStateRootCommitter;
+import org.hyperledger.besu.ethereum.mainnet.staterootcommitter.PrecomputedStorageTries;
 import org.hyperledger.besu.ethereum.processing.TransactionProcessingResult;
 import org.hyperledger.besu.ethereum.transaction.TransactionInvalidReason;
+import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldState;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator;
 import org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.accumulator.PathBasedWorldStateUpdateAccumulator.StorageLoadSeeder;
 import org.hyperledger.besu.evm.account.Account;
@@ -35,6 +38,7 @@ import org.hyperledger.besu.evm.worldstate.UpdateTrackingAccount;
 import org.hyperledger.besu.evm.worldstate.WorldUpdater;
 import org.hyperledger.besu.plugin.services.metrics.Counter;
 import org.hyperledger.besu.plugin.services.worldstate.MutableWorldState;
+import org.hyperledger.besu.plugin.services.worldstate.StateRootCommitter;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -104,6 +108,12 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
   // leave there, rather than from the parent's
   private static final boolean SEED_ON_LOAD = Boolean.getBoolean("besu.t20.seedOnLoad");
 
+  // once block processing passes this share of the block, the storage tries are brought to the
+  // slot values the footprints predict, while the rest of the block executes; 0 leaves the state
+  // root to the end of the block
+  private static final double PREDICTED_ROOTS_AT =
+      Double.parseDouble(System.getProperty("besu.t20.predictedRootsAt", "0"));
+
   // tests: block processing runs the refreshes itself before each transaction, so that they happen
   // on the writes of the transactions before it rather than whenever a worker gets to them
   private static volatile boolean refreshSynchronously = false;
@@ -165,6 +175,9 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
 
   private volatile @Nullable BlockFootprints footprints;
   private volatile @Nullable BlockRun blockRun;
+  private volatile @Nullable PrecomputedStorageTries precomputedStorageTries;
+  // block processing only
+  private boolean precomputeStarted;
 
   // counters for the bench log, written by block processing only
   private int takenRefreshed;
@@ -242,6 +255,21 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
         LOG.debug("Could not start refreshing footprints", e);
       }
     }
+  }
+
+  @Override
+  public StateRootCommitter stateRootCommitter(
+      final StateRootCommitter committer, final MutableWorldState worldState) {
+    if (PREDICTED_ROOTS_AT <= 0
+        || footprints == null
+        || !(committer instanceof DefaultStateRootCommitter)
+        || !(worldState instanceof BonsaiWorldState bonsai)
+        || bonsai.isStorageFrozen()) {
+      return committer;
+    }
+    final PrecomputedStorageTries tries = new PrecomputedStorageTries(bonsai);
+    precomputedStorageTries = tries;
+    return new DefaultStateRootCommitter(tries);
   }
 
   @Override
@@ -418,6 +446,17 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
       }
     }
     blockFootprints.mainThreadAt(transactionLocation);
+    final PrecomputedStorageTries tries = precomputedStorageTries;
+    if (tries != null
+        && !precomputeStarted
+        && transactionLocation >= PREDICTED_ROOTS_AT * blockFootprints.size()) {
+      precomputeStarted = true;
+      try {
+        REFRESH_EXECUTOR.execute(() -> tries.start(blockFootprints.predictedFinalWrites()));
+      } catch (final RejectedExecutionException e) {
+        LOG.debug("Could not start precomputing storage tries", e);
+      }
+    }
     final boolean waited =
         WAIT_REFRESH_MS > 0 && blockFootprints.awaitRefresh(transactionLocation, WAIT_REFRESH_MS);
     if (waited) {
@@ -514,12 +553,14 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
     if (blockFootprints != null) {
       blockFootprints.finish();
       if (LOG_HANDOFF && run != null) {
+        final PrecomputedStorageTries tries = precomputedStorageTries;
+        final int[] rootCounters = tries == null ? new int[3] : tries.counters();
         LOG.info(
             "Bench handoff block {} txs {} stored {} invalidations {} refreshes stored {} skipped {}"
                 + " taken refreshed {} rejected refreshed {} taken other {} executed {}"
                 + " on demand runs {} taken on demand {} missed refreshing {} missed pending {}"
                 + " missed not invalidated {} waited for refresh {} taken after wait {}"
-                + " refreshes capped {}",
+                + " refreshes capped {} roots precomputed {} taken {} not done {}",
             run.blockHeader().getNumber(),
             blockFootprints.size(),
             blockFootprints.stored,
@@ -537,7 +578,10 @@ public class HandoffTransactionProcessor extends OptimisticConcurrentTransaction
             missedNotInvalidated,
             waitedForRefresh,
             takenAfterWait,
-            blockFootprints.refreshesCapped);
+            blockFootprints.refreshesCapped,
+            rootCounters[0],
+            rootCounters[1],
+            rootCounters[2]);
       }
     }
     footprints = null;

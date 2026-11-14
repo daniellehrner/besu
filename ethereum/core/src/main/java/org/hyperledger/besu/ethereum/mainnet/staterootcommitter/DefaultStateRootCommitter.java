@@ -14,8 +14,6 @@
  */
 package org.hyperledger.besu.ethereum.mainnet.staterootcommitter;
 
-import static org.hyperledger.besu.ethereum.trie.pathbased.bonsai.worldview.BonsaiWorldView.encodeTrieValue;
-
 import org.hyperledger.besu.datatypes.Address;
 import org.hyperledger.besu.datatypes.Hash;
 import org.hyperledger.besu.datatypes.StorageSlotKey;
@@ -50,11 +48,13 @@ import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.rlp.RLP;
 import org.apache.tuweni.units.bigints.UInt256;
+import org.jspecify.annotations.Nullable;
 
 /** Bonsai path-based root from accumulated block updates (no BAL background). */
 public class DefaultStateRootCommitter implements StateRootCommitter {
 
   private final BiFunction<BonsaiWorldState, Address, Hash> addressHasher;
+  private final @Nullable PrecomputedStorageTries precomputedStorageTries;
 
   public DefaultStateRootCommitter() {
     this((bonsai, address) -> address.addressHash());
@@ -62,7 +62,31 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
 
   public DefaultStateRootCommitter(
       final BiFunction<BonsaiWorldState, Address, Hash> addressHasher) {
+    this(addressHasher, null);
+  }
+
+  /**
+   * A committer that takes over the storage tries precomputed while the block executed, correcting
+   * the slots that ended otherwise than predicted.
+   *
+   * @param precomputedStorageTries the precomputed tries
+   */
+  public DefaultStateRootCommitter(final PrecomputedStorageTries precomputedStorageTries) {
+    this((bonsai, address) -> address.addressHash(), precomputedStorageTries);
+  }
+
+  private DefaultStateRootCommitter(
+      final BiFunction<BonsaiWorldState, Address, Hash> addressHasher,
+      final @Nullable PrecomputedStorageTries precomputedStorageTries) {
     this.addressHasher = addressHasher;
+    this.precomputedStorageTries = precomputedStorageTries;
+  }
+
+  @Override
+  public void cancel() {
+    if (precomputedStorageTries != null) {
+      precomputedStorageTries.cancel();
+    }
   }
 
   @Override
@@ -78,7 +102,10 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
     final List<StateRootComputations.UpdaterWrite> writes = new ArrayList<>();
     final Hash root =
         new DefaultComputation(
-                bonsai, (BonsaiWorldStateUpdateAccumulator) accumulator, addressHasher)
+                bonsai,
+                (BonsaiWorldStateUpdateAccumulator) accumulator,
+                addressHasher,
+                precomputedStorageTries)
             .executeInto(writes);
     return StateRootComputations.pathBased(root, writes);
   }
@@ -102,13 +129,17 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
     /** Strategy that persists deferred writes, or drops them when storage is frozen. */
     private final WriteSink sink;
 
+    private final @Nullable PrecomputedStorageTries precomputedStorageTries;
+
     DefaultComputation(
         final BonsaiWorldState bonsai,
         final BonsaiWorldStateUpdateAccumulator worldStateUpdater,
-        final BiFunction<BonsaiWorldState, Address, Hash> addressHasher) {
+        final BiFunction<BonsaiWorldState, Address, Hash> addressHasher,
+        final @Nullable PrecomputedStorageTries precomputedStorageTries) {
       this.bonsai = bonsai;
       this.worldStateUpdater = worldStateUpdater;
       this.addressHasher = addressHasher;
+      this.precomputedStorageTries = precomputedStorageTries;
       this.sink = bonsai.isStorageFrozen() ? new FrozenSink() : new PersistingSink(writes);
     }
 
@@ -209,23 +240,40 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
       final BonsaiAccount accountOriginal =
           worldStateUpdater.getAccountsToUpdate().get(updatedAddress).getPrior();
       final boolean storageCleared = worldStateUpdater.getStorageToClear().contains(updatedAddress);
+      final Hash startRoot = startingStorageRoot(updatedAddress, accountOriginal);
+      final PrecomputedStorageTries.Precomputed precomputed =
+          accountDeleted || storageCleared || precomputedStorageTries == null
+              ? null
+              : usable(precomputedStorageTries.take(updatedAddress), startRoot, storageUpdates);
       final MerkleTrie<Bytes, Bytes> storageTrie =
-          bonsai.createStorageTrie(
-              updatedAddressHash, startingStorageRoot(updatedAddress, accountOriginal));
+          precomputed != null
+              ? precomputed.trie()
+              : bonsai.createStorageTrie(updatedAddressHash, startRoot);
 
       for (final Map.Entry<StorageSlotKey, BonsaiValue<UInt256>> storageUpdate :
           storageUpdates.entrySet()) {
         final Hash slotHash = storageUpdate.getKey().getSlotHash();
         final UInt256 updatedStorage = storageUpdate.getValue().getUpdated();
         try {
-          if (storageCleared || !storageUpdate.getValue().isUnchanged()) {
+          final boolean changed = storageCleared || !storageUpdate.getValue().isUnchanged();
+          if (changed) {
             if (updatedStorage == null || updatedStorage.equals(UInt256.ZERO)) {
               sink.removeStorageValueBySlotHash(updatedAddressHash, slotHash);
-              storageTrie.remove(slotHash.getBytes());
             } else {
               sink.putStorageValueBySlotHash(updatedAddressHash, slotHash, updatedStorage);
-              storageTrie.put(slotHash.getBytes(), encodeTrieValue(updatedStorage));
             }
+          }
+          if (precomputed == null) {
+            if (changed) {
+              PrecomputedStorageTries.apply(storageTrie, storageUpdate.getKey(), updatedStorage);
+            }
+          } else if (precomputed.predicted().containsKey(storageUpdate.getKey())) {
+            // a predicted slot ends at the block's value, the parent's if the block left it
+            if (!sameValue(precomputed.predicted().get(storageUpdate.getKey()), updatedStorage)) {
+              PrecomputedStorageTries.apply(storageTrie, storageUpdate.getKey(), updatedStorage);
+            }
+          } else if (changed) {
+            PrecomputedStorageTries.apply(storageTrie, storageUpdate.getKey(), updatedStorage);
           }
         } catch (MerkleTrieException e) {
           throw new MerkleTrieException(
@@ -240,6 +288,30 @@ public class DefaultStateRootCommitter implements StateRootCommitter {
                 u -> u.putTrieNode(TrieNodeKey.of(updatedAddressHash, location), nodeHash, value));
       }
       return accountDeleted ? Hash.EMPTY_TRIE_HASH : Hash.wrap(storageTrie.getRootHash());
+    }
+
+    /**
+     * The precomputed trie if it started from the block's starting root and predicted only slots
+     * the block has an entry for: a predicted slot the block never touched would need its parent
+     * value read back, so such a trie is computed from the start instead.
+     */
+    private static PrecomputedStorageTries.@Nullable Precomputed usable(
+        final PrecomputedStorageTries.@Nullable Precomputed precomputed,
+        final Hash startRoot,
+        final Map<StorageSlotKey, BonsaiValue<UInt256>> storageUpdates) {
+      if (precomputed == null || !precomputed.startRoot().equals(startRoot)) {
+        return null;
+      }
+      for (final StorageSlotKey slot : precomputed.predicted().keySet()) {
+        if (!storageUpdates.containsKey(slot)) {
+          return null;
+        }
+      }
+      return precomputed;
+    }
+
+    private static boolean sameValue(final @Nullable UInt256 a, final @Nullable UInt256 b) {
+      return (a == null ? UInt256.ZERO : a).equals(b == null ? UInt256.ZERO : b);
     }
 
     /** The root of the account's storage trie before the block's slot changes. */

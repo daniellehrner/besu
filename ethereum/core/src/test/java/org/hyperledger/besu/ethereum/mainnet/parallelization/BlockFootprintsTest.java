@@ -389,4 +389,29 @@ class BlockFootprintsTest {
 
     assertThat(footprints.predicted(2, CONTRACT, SLOT.slot())).isNull();
   }
+
+  @Test
+  void theFinalWritesAreTheLastWriteOfEachSlot() {
+    final BlockFootprints footprints = new BlockFootprints(4);
+    footprints.store(0, readWrite(10, 10, 11), true);
+    footprints.store(2, readWrite(10, 11, 13), true);
+    footprints.store(
+        1,
+        footprint(new Read[0], new Write[] {new Write(OTHER_SLOT, v(5))}, Set.of(), false),
+        true);
+
+    assertThat(footprints.predictedFinalWrites())
+        .containsOnlyKeys(CONTRACT)
+        .extractingByKey(CONTRACT)
+        .isEqualTo(java.util.Map.of(SLOT.slot(), v(13), OTHER_SLOT.slot(), v(5)));
+  }
+
+  @Test
+  void theFinalWritesLeaveOutAnAccountWithStorageAClearedOrUntrackedSlot() {
+    final BlockFootprints footprints = new BlockFootprints(3);
+    footprints.store(0, readWrite(10, 10, 11), true);
+    footprints.store(1, footprint(new Read[0], new Write[0], Set.of(CONTRACT), false), true);
+
+    assertThat(footprints.predictedFinalWrites()).isEmpty();
+  }
 }
