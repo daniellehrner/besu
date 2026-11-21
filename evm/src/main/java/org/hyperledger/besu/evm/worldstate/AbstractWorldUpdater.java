@@ -47,7 +47,7 @@ public abstract class AbstractWorldUpdater<W extends WorldView, A extends Accoun
   protected Map<Address, UpdateTrackingAccount<A>> updatedAccounts = new ConcurrentHashMap<>();
 
   /** The Deleted accounts. */
-  protected Set<Address> deletedAccounts = Collections.synchronizedSet(new HashSet<>(Address.SIZE));
+  protected Set<Address> deletedAccounts;
 
   /**
    * Instantiates a new Abstract world updater.
@@ -56,8 +56,21 @@ public abstract class AbstractWorldUpdater<W extends WorldView, A extends Accoun
    * @param evmConfiguration the EVM Configuration parameters
    */
   protected AbstractWorldUpdater(final W world, final EvmConfiguration evmConfiguration) {
+    this(world, evmConfiguration, Collections.synchronizedSet(new HashSet<>(Address.SIZE)));
+  }
+
+  /**
+   * Instantiates a new Abstract world updater.
+   *
+   * @param world the world
+   * @param evmConfiguration the EVM Configuration parameters
+   * @param deletedAccounts the set that records deleted accounts
+   */
+  protected AbstractWorldUpdater(
+      final W world, final EvmConfiguration evmConfiguration, final Set<Address> deletedAccounts) {
     this.world = world;
     this.evmConfiguration = evmConfiguration;
+    this.deletedAccounts = deletedAccounts;
   }
 
   /**
