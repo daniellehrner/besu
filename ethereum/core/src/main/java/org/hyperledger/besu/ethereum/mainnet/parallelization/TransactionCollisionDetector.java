@@ -30,6 +30,7 @@ import java.util.Optional;
 import java.util.function.BiPredicate;
 
 import org.apache.tuweni.units.bigints.UInt256;
+import org.jspecify.annotations.Nullable;
 
 public class TransactionCollisionDetector {
 
@@ -50,7 +51,9 @@ public class TransactionCollisionDetector {
    * cleared. A change the transaction did not depend on is carried over instead, as {@code
    * isAccountChangeCarried} describes. A transaction chained on its sender's previous one executed
    * on the state that one left instead, and collides when it touched the mining beneficiary or when
-   * the block does not hold that state for something it touched.
+   * the block does not hold that state for something it touched. A refreshed transaction started
+   * from seeded slot values instead of the parent's, and collides when the block does not hold a
+   * seed.
    *
    * @param transaction the transaction that executed speculatively, with a result that is not
    *     invalid
@@ -87,12 +90,23 @@ public class TransactionCollisionDetector {
           ? Optional.empty()
           : Optional.of(Map.of());
     }
+    final Map<Address, Map<StorageSlotKey, UInt256>> seeds = parallelizedTransactionContext.seeds();
+    // a cleared storage is not visible slot by slot, so a refreshed run that cleared one is not
+    // taken
+    if (seeds != null && !transactionAccumulator.getStorageToClear().isEmpty()) {
+      return Optional.empty();
+    }
     final Map<Address, CarriedAccount> carriedAccounts = new HashMap<>();
     // an executed transaction loaded its sender and recipient, and the commit added the accounts
     // it deleted
     for (final Address address : transactionAccumulator.getAccountsToUpdate().keySet()) {
       if (hasCollision(
-          transaction, address, transactionAccumulator, blockAccumulator, carriedAccounts)) {
+          transaction,
+          address,
+          transactionAccumulator,
+          blockAccumulator,
+          carriedAccounts,
+          seeds == null ? null : seeds.get(address))) {
         return Optional.empty();
       }
     }
@@ -208,11 +222,15 @@ public class TransactionCollisionDetector {
       final Address address,
       final PathBasedWorldStateUpdateAccumulator<?> transactionAccumulator,
       final PathBasedWorldStateUpdateAccumulator<? extends BonsaiAccount> blockAccumulator,
-      final Map<Address, CarriedAccount> carriedAccounts) {
+      final Map<Address, CarriedAccount> carriedAccounts,
+      final @Nullable Map<StorageSlotKey, UInt256> seeded) {
     final BonsaiValue<? extends BonsaiAccount> inBlock =
         blockAccumulator.getAccountsToUpdate().get(address);
     if (inBlock == null) {
-      return false;
+      // the block left the account as the parent has it, so each seed must be the parent's value
+      return seeded != null
+          && seededSlotMoved(
+              seeded, null, transactionAccumulator.getStorageToUpdate().get(address));
     }
     if (!areAccountDetailsEqualExcludingStorage(inBlock.getPrior(), inBlock.getUpdated())) {
       if (!isAccountChangeCarried(transaction, transactionAccumulator, address, inBlock)) {
@@ -225,7 +243,8 @@ public class TransactionCollisionDetector {
     final Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> slots =
         transactionAccumulator.getStorageToUpdate().get(address);
     if (slots == null || slots.isEmpty()) {
-      return false;
+      // seeding leaves an entry for each seed, so seeds without one were not what the run read
+      return seeded != null;
     }
     // re-creating an account drops the block's entries of the slots it cleared, so the
     // transaction's slots can't be compared with them
@@ -234,6 +253,10 @@ public class TransactionCollisionDetector {
     }
     final Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> blockSlots =
         blockAccumulator.getStorageToUpdate().get(address);
+    if (seeded != null) {
+      return seededSlotMoved(seeded, blockSlots, slots)
+          || unseededSlotChanged(seeded, blockSlots, slots);
+    }
     if (blockSlots == null) {
       return false;
     }
@@ -244,6 +267,62 @@ public class TransactionCollisionDetector {
         return true;
       }
     }
+    return false;
+  }
+
+  /**
+   * Whether the block now holds a value other than its seed in a slot a refreshed run started from
+   * the seed. A slot the block has no entry for is at the parent's value, which is the prior of the
+   * run's entry: seeding wrote the seed over the value the run loaded from the parent.
+   */
+  private static boolean seededSlotMoved(
+      final Map<StorageSlotKey, UInt256> seeded,
+      final @Nullable Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> blockSlots,
+      final @Nullable Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> runSlots) {
+    for (final Map.Entry<StorageSlotKey, UInt256> seed : seeded.entrySet()) {
+      final BonsaiValue<UInt256> inBlock =
+          blockSlots == null ? null : blockSlots.get(seed.getKey());
+      final UInt256 current;
+      if (inBlock != null) {
+        current = inBlock.getUpdated();
+      } else {
+        final BonsaiValue<UInt256> inRun = runSlots == null ? null : runSlots.get(seed.getKey());
+        // a seed the run has no entry for was not applied
+        if (inRun == null) {
+          return true;
+        }
+
+        current = inRun.getPrior();
+      }
+
+      if (!areSlotValuesEqual(current, seed.getValue())) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /** Whether the block changed a slot that a refreshed run read at the parent's value. */
+  private static boolean unseededSlotChanged(
+      final Map<StorageSlotKey, UInt256> seeded,
+      final @Nullable Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> blockSlots,
+      final Map<StorageSlotKey, ? extends BonsaiValue<UInt256>> runSlots) {
+    if (blockSlots == null) {
+      return false;
+    }
+
+    for (final StorageSlotKey slot : runSlots.keySet()) {
+      if (seeded.containsKey(slot)) {
+        continue;
+      }
+
+      final BonsaiValue<UInt256> inBlockSlot = blockSlots.get(slot);
+      if (inBlockSlot != null && inBlockSlot.isChanged()) {
+        return true;
+      }
+    }
+
     return false;
   }
 
